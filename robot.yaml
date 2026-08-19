@@ -1,0 +1,24 @@
+# For more details on the format and content:
+# https://github.com/joshyorko/rcc/blob/master/docs/recipes.md#what-is-in-robotyaml
+
+tasks:
+  JoshAllTheThings:
+    shell: bash joshs-all-the-things.sh
+
+environmentConfigs:
+  - environment_windows_amd64_freeze.yaml
+  - environment_linux_amd64_freeze.yaml
+  - environment_darwin_amd64_freeze.yaml
+  - conda.yaml
+
+artifactsDir: output
+
+preRunScripts:
+  - bash scripts/install_dependencies.sh 1
+
+PATH:
+  - .
+PYTHONPATH:
+  - .
+ignoreFiles:
+  - .gitignore

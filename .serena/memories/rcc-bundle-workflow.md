@@ -1,0 +1,3 @@
+# RCC bundle workflow
+
+This repository intentionally tracks only `josh-all-the-things-bundle.py`. Before inspecting or changing the automation, unpack the current bundle into a temporary directory with `rcc robot unpack --bundle ./josh-all-the-things-bundle.py --output <temp-dir> --force`. Make source changes in the unpacked directory, then rebuild the bundle before committing. Do not commit unpacked contents.
