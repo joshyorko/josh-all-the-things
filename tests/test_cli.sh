@@ -123,4 +123,54 @@ if [[ ! -f $collision_destination/homebrew-recovery/Brewfile ]]; then
   exit 1
 fi
 
+tmp_install=$(mktemp -d)
+trap 'rm -rf -- "$tmp_install"' EXIT
+fake_homebrew_bin="$tmp_install/bin"
+mkdir -p "$fake_homebrew_bin" "$tmp_install/prefix/bin"
+cat >"$fake_homebrew_bin/brew" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_BREW_LOG"
+case "$1" in
+  config)
+    exit 0
+    ;;
+  trust)
+    [[ $* == 'trust hauler-dev/tap' ]] || {
+      printf '%s\n' "unexpected trust args: $*" >&2
+      exit 1
+    }
+    exit 0
+    ;;
+  bundle)
+    exit 0
+    ;;
+  --version)
+    printf '%s\n' 'Homebrew 6.0.15'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+chmod +x "$fake_homebrew_bin/brew"
+cat >"$fake_homebrew_bin/hauler" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$fake_homebrew_bin/hauler"
+export FAKE_BREW_LOG="$tmp_install/brew.log"
+PATH="$fake_homebrew_bin:$PATH" CONDA_PREFIX="$tmp_install/prefix" \
+  bash "$robot_root/scripts/install_dependencies.sh" 1 >/tmp/install-deps.log 2>&1
+if ! grep -Fq 'trust hauler-dev/tap' "$FAKE_BREW_LOG"; then
+  printf '%s\n' 'FAIL: install script did not explicitly trust hauler-dev/tap' >&2
+  exit 1
+fi
+if ! grep -Fq 'bundle --file=' "$FAKE_BREW_LOG"; then
+  printf '%s\n' 'FAIL: install script did not run brew bundle after trusting tap' >&2
+  exit 1
+fi
+printf '%s\n' 'PASS: install script explicitly trusts hauler-dev/tap before bundle'
+
 printf '%s\n' 'PASS: Homebrew recovery export validation and isolated restore layout'

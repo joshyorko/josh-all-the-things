@@ -18,6 +18,7 @@ if existing_brew=$(command -v brew 2>/dev/null) && "$existing_brew" config >/dev
   printf 'Using existing Homebrew: %s\n' "$existing_brew"
   "$existing_brew" --version
   export PATH="$(dirname -- "$existing_brew"):$PATH"
+  "$existing_brew" trust hauler-dev/tap
   "$existing_brew" bundle --file="$SCRIPT_DIRECTORY/Brewfile" --no-upgrade
   command -v hauler >/dev/null 2>&1 || {
     printf 'Hauler installation completed but hauler was not found on PATH.\n' >&2
@@ -56,6 +57,7 @@ export HOMEBREW_NO_INSTALL_CLEANUP=1
 "$brew_executable" --version
 
 export PATH="$CONDA_PREFIX/bin:$PATH"
+"$brew_executable" trust hauler-dev/tap
 "$brew_executable" bundle --file="$SCRIPT_DIRECTORY/Brewfile" --no-upgrade
 command -v hauler >/dev/null 2>&1 || {
   printf 'Hauler installation completed but hauler was not found on PATH.\n' >&2
