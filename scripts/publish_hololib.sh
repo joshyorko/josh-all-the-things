@@ -53,14 +53,25 @@ environment_hash=$(jq -r '.environment_hash' "$receipt")
 jat_sha=$(jq -r '.jat_git_sha' "$receipt")
 tag="rcc-${rcc_version}-${platform}-${environment_hash}-shared-${actual_sha:0:12}"
 reference="${repository}:${tag}"
+archive_dir=$(dirname "$archive")
+receipt_dir=$(dirname "$receipt")
+[[ $archive_dir == "$receipt_dir" ]] || {
+  printf 'Hololib ZIP and receipt must be in the same directory.\n' >&2
+  exit 2
+}
+archive_name=$(basename "$archive")
+receipt_name=$(basename "$receipt")
 
 printf '%s' "$GITHUB_TOKEN" | oras login ghcr.io --username "$username" --password-stdin
-oras push "$reference" \
-  --artifact-type application/vnd.joshyorko.rcc-hololib.v1 \
-  --annotation org.opencontainers.image.source=https://github.com/joshyorko/josh-all-the-things \
-  --annotation "org.opencontainers.image.revision=$jat_sha" \
-  "$archive:application/vnd.joshyorko.rcc-hololib.v1+zip" \
-  "$receipt:application/vnd.joshyorko.rcc-hololib.receipt.v1+json"
+(
+  cd "$archive_dir"
+  oras push "$reference" \
+    --artifact-type application/vnd.joshyorko.rcc-hololib.v1 \
+    --annotation org.opencontainers.image.source=https://github.com/joshyorko/josh-all-the-things \
+    --annotation "org.opencontainers.image.revision=$jat_sha" \
+    "$archive_name:application/vnd.joshyorko.rcc-hololib.v1+zip" \
+    "$receipt_name:application/vnd.joshyorko.rcc-hololib.receipt.v1+json"
+)
 
 manifest_digest=$(oras manifest fetch --descriptor "$reference" | jq -r '.digest')
 [[ $manifest_digest =~ ^sha256:[0-9a-f]{64}$ ]] || {
