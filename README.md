@@ -36,7 +36,7 @@ Run the interactive wizard:
 
 ```bash
 rcc robot run-from-bundle ../josh-all-the-things-bundle.py \
-  --task JoshAllTheThings \
+  --task 3tc \
   --interactive \
   --silent
 ```
@@ -49,7 +49,7 @@ To inject environment variables from an RCC environment file:
 
 ```bash
 rcc robot run-from-bundle ../josh-all-the-things-bundle.py \
-  --task JoshAllTheThings \
+  --task 3tc \
   --environment "$PWD/env.json" \
   --interactive \
   --silent
@@ -90,7 +90,7 @@ Run the interactive task:
 ```bash
 ROBOCORP_HOME="$PWD/.rcc_home" rcc run \
   -r robot.yaml \
-  -t JoshAllTheThings \
+  -t 3tc \
   --interactive
 ```
 
@@ -99,7 +99,7 @@ With an environment file:
 ```bash
 ROBOCORP_HOME="$PWD/.rcc_home" rcc run \
   -r robot.yaml \
-  -t JoshAllTheThings \
+  -t 3tc \
   -e env.json \
   --interactive
 ```

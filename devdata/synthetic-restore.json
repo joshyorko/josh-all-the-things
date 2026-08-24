@@ -1,0 +1,4 @@
+{
+  "haul": ".tmp/synthetic-haul.tar.zst",
+  "destination": ".tmp/synthetic-restored"
+}

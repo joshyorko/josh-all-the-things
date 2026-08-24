@@ -2,8 +2,18 @@
 # https://github.com/joshyorko/rcc/blob/master/docs/recipes.md#what-is-in-robotyaml
 
 tasks:
-  JoshAllTheThings:
+  Build:
+    shell: python -m jat.task_runner run tasks.py -t Build --
+  Restore:
+    shell: python -m jat.task_runner run tasks.py -t Restore --
+  Serve:
+    shell: python -m jat.task_runner run tasks.py -t Serve --
+  3tc:
     shell: bash joshs-all-the-things.sh
+
+devTasks:
+  Doctor:
+    shell: python -m jat.task_runner run tasks.py -t Doctor --
 
 environmentConfigs:
   - environment_windows_amd64_freeze.yaml

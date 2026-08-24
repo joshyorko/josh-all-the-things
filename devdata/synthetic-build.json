@@ -1,0 +1,5 @@
+{
+  "folder": "devdata/synthetic-source",
+  "output": ".tmp/synthetic-haul.tar.zst",
+  "all_images": false
+}
