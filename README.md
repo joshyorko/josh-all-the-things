@@ -41,6 +41,17 @@ ephemeral container. The runner launches through `hololib.robot.yaml`, a
 build-only RCC descriptor that intentionally omits JAT's Homebrew/Hauler
 workload pre-run.
 
+Publish the verified outputs with the token exported by your shell:
+
+```bash
+scripts/publish_hololib.sh
+```
+
+The publisher validates the receipt and ZIP, derives a content-specific tag,
+logs into GHCR through stdin, publishes both layers, reads the manifest back,
+and prints the immutable `repository@sha256:...` reference. Override paths or
+the target with `--zip`, `--receipt`, `--repository`, and `--username`.
+
 ## Build the RCC Bundle
 
 Run this from the `josh-all-the-things` robot directory:
