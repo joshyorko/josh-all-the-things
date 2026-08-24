@@ -10,7 +10,7 @@ from .services import JATService
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="3tc", description="Build, restore, and serve portable workspace hauls.")
+    root = argparse.ArgumentParser(prog="jat", description="Build, restore, and serve portable workspace hauls.")
     subcommands = root.add_subparsers(dest="command")
 
     build = subcommands.add_parser("build", help="Build a portable workspace haul")

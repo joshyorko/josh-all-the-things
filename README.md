@@ -3,7 +3,7 @@
 Josh's All the Things packages a folder, an optional Homebrew recovery
 directory, and optional local Docker images into one portable Hauler archive.
 It runs as an RCC robot, from a self-contained RCC bundle, or through the
-standalone Python `3tc` command in the RCC-managed environment.
+standalone Python `jat` command in the RCC-managed environment.
 
 ## What It Does
 
@@ -36,7 +36,7 @@ Run the interactive wizard:
 
 ```bash
 rcc robot run-from-bundle ../josh-all-the-things-bundle.py \
-  --task 3tc \
+  --task JAT \
   --interactive \
   --silent
 ```
@@ -49,7 +49,7 @@ To inject environment variables from an RCC environment file:
 
 ```bash
 rcc robot run-from-bundle ../josh-all-the-things-bundle.py \
-  --task 3tc \
+  --task JAT \
   --environment "$PWD/env.json" \
   --interactive \
   --silent
@@ -90,7 +90,7 @@ Run the interactive task:
 ```bash
 ROBOCORP_HOME="$PWD/.rcc_home" rcc run \
   -r robot.yaml \
-  -t 3tc \
+  -t JAT \
   --interactive
 ```
 
@@ -99,7 +99,7 @@ With an environment file:
 ```bash
 ROBOCORP_HOME="$PWD/.rcc_home" rcc run \
   -r robot.yaml \
-  -t 3tc \
+  -t JAT \
   -e env.json \
   --interactive
 ```
@@ -109,23 +109,23 @@ ROBOCORP_HOME="$PWD/.rcc_home" rcc run \
 From the source tree or an unpacked bundle:
 
 ```bash
-rcc task script -r robot.yaml -- ./3tc
+rcc task script -r robot.yaml -- ./jat
 ```
 
 RCC provides the pinned Python runtime and runs the dependency bootstrap before
 the command. The legacy Bash filename is retained only as a thin compatibility
-shim that delegates to `3tc`; it owns no orchestration.
+shim that delegates to `jat`; it owns no orchestration.
 
 Show the command summary:
 
 ```bash
-rcc task script -r robot.yaml -- ./3tc --help
+rcc task script -r robot.yaml -- ./jat --help
 ```
 
 ### Build a Folder-Only Haul
 
 ```bash
-rcc task script -r robot.yaml -- ./3tc build \
+rcc task script -r robot.yaml -- ./jat build \
   --folder /path/to/folder \
   --brew /path/to/homebrew-recovery \
   --output ./folder-haul.tar.zst
@@ -138,7 +138,7 @@ The output file must not already exist.
 Each image must already exist in the local Docker daemon:
 
 ```bash
-rcc task script -r robot.yaml -- ./3tc build \
+rcc task script -r robot.yaml -- ./jat build \
   --folder /path/to/folder \
   --image ghcr.io/example/api:latest \
   --image docker.io/library/postgres:17 \
@@ -148,7 +148,7 @@ rcc task script -r robot.yaml -- ./3tc build \
 ### Build with All Tagged Local Images
 
 ```bash
-rcc task script -r robot.yaml -- ./3tc build \
+rcc task script -r robot.yaml -- ./jat build \
   --folder /path/to/folder \
   --all-images \
   --output ./everything-haul.tar.zst
@@ -161,7 +161,7 @@ fail instead of silently omitting an image.
 ### Build with a Homebrew Recovery Directory
 
 ```bash
-rcc task script -r robot.yaml -- ./3tc build \
+rcc task script -r robot.yaml -- ./jat build \
   --folder /path/to/folder \
   --brew /path/to/homebrew-recovery \
   --output ./folder-and-brew-haul.tar.zst
@@ -182,7 +182,7 @@ The haul stores that export as a top-level `homebrew-recovery.tar.zst` artifact.
 The destination must either not exist or be an empty directory:
 
 ```bash
-rcc task script -r robot.yaml -- ./3tc restore \
+rcc task script -r robot.yaml -- ./jat restore \
   --haul ./everything-haul.tar.zst \
   --destination ./restored
 ```
@@ -195,7 +195,7 @@ Restore uses separate reserved directories: workspace contents go below
 ### Serve Included Images
 
 ```bash
-rcc task script -r robot.yaml -- ./3tc serve \
+rcc task script -r robot.yaml -- ./jat serve \
   --haul ./everything-haul.tar.zst
 ```
 
@@ -322,7 +322,7 @@ requires them and you understand the transport tradeoff.
 
 - `src/jat/` is the shared Python service implementation.
 - `tasks.py` contains thin typed `robocorp.tasks` entrypoints.
-- `robot.yaml` exposes `Build`, `Restore`, `Serve`, `3tc`, and devTask `Doctor`.
+- `robot.yaml` exposes `Build`, `Restore`, `Serve`, `JAT`, and devTask `Doctor`.
 - `conda.yaml` defines the contained runtime and only bootstraps Homebrew during
   environment creation. The main tool runs as the RCC task, not as a
   `rccPostInstall` hook.

@@ -121,16 +121,16 @@ def test_cli_rejects_conflicting_image_modes():
     assert raised.value.code == 2
 
 
-def test_robot_3tc_task_invokes_python_cli():
+def test_robot_jat_task_invokes_python_cli():
     body = Path("robot.yaml").read_text()
-    task = body.split("  3tc:", 1)[1].split("\ndevTasks:", 1)[0]
+    task = body.split("  JAT:", 1)[1].split("\ndevTasks:", 1)[0]
     assert "python -m jat.cli" in task
     assert "joshs-all-the-things.sh" not in task
 
 
-def test_legacy_bash_entrypoint_is_only_an_rcc_3tc_shim():
+def test_legacy_bash_entrypoint_is_only_an_rcc_jat_shim():
     body = Path("joshs-all-the-things.sh").read_text()
     assert "rcc task script" in body
-    assert '"$robot_root/3tc"' in body
+    assert '"$robot_root/jat"' in body
     assert "build_haul()" not in body
     assert "restore_haul()" not in body

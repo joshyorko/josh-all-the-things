@@ -8,7 +8,7 @@ tasks:
     shell: python -m jat.task_runner run tasks.py -t Restore --
   Serve:
     shell: python -m jat.task_runner run tasks.py -t Serve --
-  3tc:
+  JAT:
     shell: python -m jat.cli
 
 devTasks:

@@ -35,7 +35,7 @@ def test_robot_declares_typed_task_surface():
         assert f"-t {task}" in body
     assert "devTasks:" in body
     assert "  Doctor:" in body
-    assert "  3tc:" in body
+    assert "  JAT:" in body
     assert "  JaTT:" not in body
     assert "  JoshAllTheThings:" not in body
 
