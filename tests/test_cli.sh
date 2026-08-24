@@ -169,6 +169,51 @@ if ! grep -Fq -- '--zstd -tf' "$GNU_TAR_LOG" || ! grep -Fq -- '--zstd -xpf' "$GN
 fi
 printf '%s\n' 'PASS: standalone archive path selects GNU tar when tar lacks --zstd'
 
+keg_tmp=$(mktemp -d)
+keg_bin="$keg_tmp/bin"
+keg_prefix="$keg_tmp/gnu-tar"
+mkdir -p "$keg_bin" "$keg_prefix/bin"
+cat >"$keg_bin/brew" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $1 == --prefix && ${2-} == gnu-tar ]]; then
+  printf '%s\n' "$FAKE_GNU_TAR_PREFIX"
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$keg_bin/brew"
+cat >"$keg_bin/tar" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $* == *'--zstd'* ]]; then
+  printf '%s\n' "tar: unrecognized option '--zstd'" >&2
+  exit 1
+fi
+exec /usr/bin/tar "$@"
+EOF
+chmod +x "$keg_bin/tar"
+cat >"$keg_prefix/bin/tar" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$GNU_TAR_LOG"
+exec /usr/bin/tar "$@"
+EOF
+chmod +x "$keg_prefix/bin/tar"
+if ! PATH="$keg_bin:$fake_bin:$PATH" \
+  FAKE_GNU_TAR_PREFIX="$keg_prefix" GNU_TAR_LOG="$keg_tmp/gnu-tar.log" \
+  bash "$robot_root/joshs-all-the-things.sh" build \
+  --folder "$archive_source" \
+  --output "$keg_tmp/archive.tar.zst" >/dev/null 2>&1; then
+  printf '%s\n' 'FAIL: Linuxbrew keg-only GNU tar was not selected' >&2
+  exit 1
+fi
+if ! grep -Fq -- '--zstd -cpf' "$keg_tmp/gnu-tar.log"; then
+  printf '%s\n' 'FAIL: Linuxbrew keg-only GNU tar path was not used' >&2
+  exit 1
+fi
+printf '%s\n' 'PASS: Linuxbrew keg-only GNU tar path is selected'
+
 tmp_install=$(mktemp -d)
 trap 'rm -rf -- "$tmp_install"' EXIT
 fake_homebrew_bin="$tmp_install/bin"

@@ -152,6 +152,9 @@ select_archive_command() {
     ARCHIVE_COMMAND=gtar
   elif command -v tar >/dev/null 2>&1 && tar --zstd --version >/dev/null 2>&1; then
     ARCHIVE_COMMAND=tar
+  elif brew_prefix=$(brew --prefix gnu-tar 2>/dev/null) && [[ $brew_prefix == /* ]] &&
+    [[ -x $brew_prefix/bin/tar ]] && "$brew_prefix/bin/tar" --zstd --version >/dev/null 2>&1; then
+    ARCHIVE_COMMAND="$brew_prefix/bin/tar"
   else
     die 1 'Required GNU tar implementation with --zstd is unavailable (gtar or tar)'
   fi
