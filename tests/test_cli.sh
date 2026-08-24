@@ -161,7 +161,7 @@ exit 0
 EOF
 chmod +x "$fake_homebrew_bin/hauler"
 export FAKE_BREW_LOG="$tmp_install/brew.log"
-PATH="$fake_homebrew_bin:$PATH" CONDA_PREFIX="$tmp_install/prefix" \
+PATH="$fake_homebrew_bin:$PATH" env -u CONDA_PREFIX \
   bash "$robot_root/scripts/install_dependencies.sh" 1 >/tmp/install-deps.log 2>&1
 if ! grep -Fq 'trust hauler-dev/tap' "$FAKE_BREW_LOG"; then
   printf '%s\n' 'FAIL: install script did not explicitly trust hauler-dev/tap' >&2

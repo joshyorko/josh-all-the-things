@@ -9,11 +9,6 @@ readonly SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd
   printf 'Expected Homebrew install revision 1.\n' >&2
   exit 2
 }
-[[ -n ${CONDA_PREFIX:-} ]] || {
-  printf 'CONDA_PREFIX is required.\n' >&2
-  exit 2
-}
-
 if existing_brew=$(command -v brew 2>/dev/null) && "$existing_brew" config >/dev/null 2>&1; then
   printf 'Using existing Homebrew: %s\n' "$existing_brew"
   "$existing_brew" --version
@@ -26,6 +21,11 @@ if existing_brew=$(command -v brew 2>/dev/null) && "$existing_brew" config >/dev
   }
   exit 0
 fi
+
+[[ -n ${CONDA_PREFIX:-} ]] || {
+  printf 'CONDA_PREFIX is required.\n' >&2
+  exit 2
+}
 
 brew_repository="$CONDA_PREFIX/Homebrew"
 brew_executable="$CONDA_PREFIX/bin/brew"
