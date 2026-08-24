@@ -1,15 +1,16 @@
 # Agent Instructions
 
-This repository intentionally tracks only the self-contained RCC bundle. Do not
-commit its unpacked contents.
+Josh's All the Things is an RCC-first Python automation project.
 
-Before inspecting or changing the automation, unpack the current bundle with
-RCC into a temporary directory:
+- `src/jat/` owns domain behavior and safety.
+- `tasks.py` contains thin `robocorp.tasks` entrypoints.
+- `robot.yaml` exposes `Build`, `Restore`, `Serve`, `3tc`, and devTask `Doctor`.
+- Hauler remains the capture/restore engine; GNU tar remains the compressed
+  archive boundary.
+- Keep the standalone `3tc` CLI and RCC tasks on the same Python service layer.
+- Do not add Dagger, MCP, Action Server, Work Items, RCC Environment Artifacts,
+  a daemon, a web service, or a provider framework.
 
-```sh
-unpack_dir=$(mktemp -d)
-rcc robot unpack --bundle ./josh-all-the-things-bundle.py --output "$unpack_dir" --force
-```
-
-Make source changes in the unpacked directory, then rebuild the bundle before
-committing the updated `josh-all-the-things-bundle.py`.
+Run Python tests and lint through the declared RCC environment. Keep the Bash
+compatibility program only until its remaining callers have migrated and the
+Python CLI, RCC tasks, and real Hauler vertical all pass.

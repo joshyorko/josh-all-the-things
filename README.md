@@ -2,8 +2,8 @@
 
 Josh's All the Things packages a folder, an optional Homebrew recovery
 directory, and optional local Docker images into one portable Hauler archive.
-It can run as an RCC robot, from a self-contained RCC bundle, or directly as a
-standalone Bash tool.
+It runs as an RCC robot, from a self-contained RCC bundle, or through the
+standalone Python `3tc` command in the RCC-managed environment.
 
 ## What It Does
 
@@ -109,23 +109,23 @@ ROBOCORP_HOME="$PWD/.rcc_home" rcc run \
 From the source tree or an unpacked bundle:
 
 ```bash
-chmod +x joshs-all-the-things.sh
-./joshs-all-the-things.sh
+rcc task script -r robot.yaml -- ./3tc
 ```
 
-The script reuses a working Homebrew installation when available. Otherwise it
-bootstraps Linuxbrew, then installs Hauler and `zstd` if they are missing.
+RCC provides the pinned Python runtime and runs the dependency bootstrap before
+the command. The legacy Bash program remains only as a temporary compatibility
+oracle during migration.
 
 Show the command summary:
 
 ```bash
-./joshs-all-the-things.sh --help
+rcc task script -r robot.yaml -- ./3tc --help
 ```
 
 ### Build a Folder-Only Haul
 
 ```bash
-./joshs-all-the-things.sh build \
+rcc task script -r robot.yaml -- ./3tc build \
   --folder /path/to/folder \
   --brew /path/to/homebrew-recovery \
   --output ./folder-haul.tar.zst
@@ -138,7 +138,7 @@ The output file must not already exist.
 Each image must already exist in the local Docker daemon:
 
 ```bash
-./joshs-all-the-things.sh build \
+rcc task script -r robot.yaml -- ./3tc build \
   --folder /path/to/folder \
   --image ghcr.io/example/api:latest \
   --image docker.io/library/postgres:17 \
@@ -148,7 +148,7 @@ Each image must already exist in the local Docker daemon:
 ### Build with All Tagged Local Images
 
 ```bash
-./joshs-all-the-things.sh build \
+rcc task script -r robot.yaml -- ./3tc build \
   --folder /path/to/folder \
   --all-images \
   --output ./everything-haul.tar.zst
@@ -161,7 +161,7 @@ fail instead of silently omitting an image.
 ### Build with a Homebrew Recovery Directory
 
 ```bash
-./joshs-all-the-things.sh build \
+rcc task script -r robot.yaml -- ./3tc build \
   --folder /path/to/folder \
   --brew /path/to/homebrew-recovery \
   --output ./folder-and-brew-haul.tar.zst
@@ -182,7 +182,7 @@ The haul stores that export as a top-level `homebrew-recovery.tar.zst` artifact.
 The destination must either not exist or be an empty directory:
 
 ```bash
-./joshs-all-the-things.sh restore \
+rcc task script -r robot.yaml -- ./3tc restore \
   --haul ./everything-haul.tar.zst \
   --destination ./restored
 ```
@@ -195,7 +195,7 @@ Restore uses separate reserved directories: workspace contents go below
 ### Serve Included Images
 
 ```bash
-./joshs-all-the-things.sh serve \
+rcc task script -r robot.yaml -- ./3tc serve \
   --haul ./everything-haul.tar.zst
 ```
 
@@ -310,8 +310,8 @@ requires them and you understand the transport tradeoff.
 
 ## Working Directory and Temporary Data
 
-- Temporary work is created under `.tmp` in the invocation directory, not the
-  host `/tmp` filesystem.
+- Temporary work is staged adjacent to the final output or restore destination
+  so promotion remains on one filesystem.
 - Temporary data is removed after a successful or failed command.
 - Set `JAT_RUN_DIR=/path/to/workdir` when an RCC launcher cannot preserve the
   directory from which you invoked the task.
@@ -320,9 +320,9 @@ requires them and you understand the transport tradeoff.
 
 ## Development Notes
 
-- `joshs-all-the-things.sh` is the current implementation.
-- `tasks.py` is reserved for gradual migration from Bash to Python.
-- `robot.yaml` keeps the RCC task as a direct shell entry point.
+- `src/jat/` is the shared Python service implementation.
+- `tasks.py` contains thin typed `robocorp.tasks` entrypoints.
+- `robot.yaml` exposes `Build`, `Restore`, `Serve`, `3tc`, and devTask `Doctor`.
 - `conda.yaml` defines the contained runtime and only bootstraps Homebrew during
   environment creation. The main tool runs as the RCC task, not as a
   `rccPostInstall` hook.

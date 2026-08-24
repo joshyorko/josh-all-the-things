@@ -9,7 +9,7 @@ tasks:
   Serve:
     shell: python -m jat.task_runner run tasks.py -t Serve --
   3tc:
-    shell: bash joshs-all-the-things.sh
+    shell: python -m jat.cli
 
 devTasks:
   Doctor:
