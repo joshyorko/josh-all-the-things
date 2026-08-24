@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["format_version", "operation", "success", "environment_hash", "jat_git_sha", "rcc_version", "platform", "verified_no_build", "zip"],
+  "properties": {
+    "format_version": { "const": 1 },
+    "operation": { "const": "build-hololib" },
+    "success": { "const": true },
+    "environment_hash": { "type": "string", "minLength": 1 },
+    "jat_git_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "rcc_version": { "type": "string", "minLength": 1 },
+    "platform": { "type": "string", "minLength": 1 },
+    "verified_no_build": { "const": true },
+    "zip": {
+      "type": "object",
+      "required": ["filename", "sha256", "size"],
+      "properties": {
+        "filename": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

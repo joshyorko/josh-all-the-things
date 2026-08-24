@@ -3,3 +3,5 @@ output/
 .pytest_cache/
 __pycache__/
 .tmp/
+dist/
+hololib.zip

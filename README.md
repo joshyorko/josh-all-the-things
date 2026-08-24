@@ -17,6 +17,30 @@ standalone Python `jat` command in the RCC-managed environment.
 The generated haul is the portable payload. The RCC bundle contains the tool and
 its RCC-managed runtime; it is not the haul itself.
 
+## Build a verified RCC hololib
+
+Build from a fresh RCC home, export the resolved environment, import it into a
+second fresh RCC home, and prove `--no-build` resolution before publication:
+
+```bash
+scripts/build_hololib.sh \
+  --output dist/hololib.zip \
+  --receipt dist/hololib.json
+```
+
+Both outputs are create-only. The receipt records the JAT commit, RCC version,
+platform, environment hash, archive digest and size, and isolated import proof.
+Publish the ZIP and receipt as OCI artifact layers; do not commit either file to
+Git.
+
+The wrapper uses the RCC Automation plugin's Dagger module. It discovers the
+installed Codex plugin automatically or accepts an explicit
+`RCC_DAGGER_MODULE=/path/to/dagger`. The internal shared-root mode is guarded by
+`JAT_HOLOLIB_DAGGER=1`; it builds and verifies `/opt/robocorp` only inside the
+ephemeral container. The runner launches through `hololib.robot.yaml`, a
+build-only RCC descriptor that intentionally omits JAT's Homebrew/Hauler
+workload pre-run.
+
 ## Build the RCC Bundle
 
 Run this from the `josh-all-the-things` robot directory:

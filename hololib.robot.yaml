@@ -1,0 +1,16 @@
+tasks:
+  BuildHololib:
+    shell: python scripts/build_hololib.py
+
+environmentConfigs:
+  - conda.yaml
+
+artifactsDir: dist
+
+PATH:
+  - .
+PYTHONPATH:
+  - .
+
+ignoreFiles:
+  - .gitignore
