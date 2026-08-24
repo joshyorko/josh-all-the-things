@@ -1,1 +1,4 @@
 .codex
+output/
+.pytest_cache/
+__pycache__/

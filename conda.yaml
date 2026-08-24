@@ -18,3 +18,6 @@ dependencies:
   - zstd
   - pip:
       - robocorp==3.1.1            # https://pypi.org/project/robocorp/3.1.1/
+      - pydantic==2.12.5
+      - pytest==9.1.1
+      - ruff==0.16.4
