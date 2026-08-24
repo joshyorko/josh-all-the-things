@@ -113,8 +113,8 @@ rcc task script -r robot.yaml -- ./3tc
 ```
 
 RCC provides the pinned Python runtime and runs the dependency bootstrap before
-the command. The legacy Bash program remains only as a temporary compatibility
-oracle during migration.
+the command. The legacy Bash filename is retained only as a thin compatibility
+shim that delegates to `3tc`; it owns no orchestration.
 
 Show the command summary:
 

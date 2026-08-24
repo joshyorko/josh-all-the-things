@@ -126,3 +126,11 @@ def test_robot_3tc_task_invokes_python_cli():
     task = body.split("  3tc:", 1)[1].split("\ndevTasks:", 1)[0]
     assert "python -m jat.cli" in task
     assert "joshs-all-the-things.sh" not in task
+
+
+def test_legacy_bash_entrypoint_is_only_an_rcc_3tc_shim():
+    body = Path("joshs-all-the-things.sh").read_text()
+    assert "rcc task script" in body
+    assert '"$robot_root/3tc"' in body
+    assert "build_haul()" not in body
+    assert "restore_haul()" not in body

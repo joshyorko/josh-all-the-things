@@ -11,6 +11,6 @@ Josh's All the Things is an RCC-first Python automation project.
 - Do not add Dagger, MCP, Action Server, Work Items, RCC Environment Artifacts,
   a daemon, a web service, or a provider framework.
 
-Run Python tests and lint through the declared RCC environment. Keep the Bash
-compatibility program only until its remaining callers have migrated and the
-Python CLI, RCC tasks, and real Hauler vertical all pass.
+Run Python tests and lint through the declared RCC environment. The Bash
+compatibility filename is a thin RCC-to-`3tc` shim and must not regain domain
+or orchestration behavior.
