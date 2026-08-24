@@ -46,6 +46,7 @@ def test_process_runner_reports_timeout():
 def test_process_runner_terminates_child_on_ctrl_c(monkeypatch):
     class InterruptedProcess:
         returncode = -15
+        pid = 4242
 
         def __init__(self):
             self.communications = 0
@@ -64,10 +65,19 @@ def test_process_runner_terminates_child_on_ctrl_c(monkeypatch):
             return self.returncode
 
     process = InterruptedProcess()
-    monkeypatch.setattr("jat.process.subprocess.Popen", lambda *args, **kwargs: process)
+    popen_options = {}
+
+    def fake_popen(*args, **kwargs):
+        popen_options.update(kwargs)
+        return process
+
+    signals = []
+    monkeypatch.setattr("jat.process.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("jat.process.os.killpg", lambda pid, signum: signals.append((pid, signum)))
     with pytest.raises(KeyboardInterrupt):
         ProcessRunner().run(["hauler", "store", "serve"], foreground=True)
-    assert process.terminated is True
+    assert popen_options["start_new_session"] is True
+    assert signals == [(process.pid, __import__("signal").SIGTERM)]
 
 
 def test_archive_resolves_gtar_then_capable_path_tar():

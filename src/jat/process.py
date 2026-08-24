@@ -1,5 +1,7 @@
 """Bounded, redacted subprocess execution with cancellation cleanup."""
 
+import os
+import signal
 import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -48,6 +50,7 @@ class ProcessRunner:
             stdout=None if foreground else subprocess.PIPE,
             stderr=None if foreground else subprocess.PIPE,
             text=True,
+            start_new_session=os.name != "nt",
         )
         try:
             stdout, stderr = process.communicate(timeout=timeout)
@@ -82,9 +85,21 @@ class ProcessRunner:
 
     @staticmethod
     def _stop(process: subprocess.Popen) -> None:
-        process.terminate()
+        if os.name == "nt":
+            process.terminate()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            process.kill()
+            if os.name == "nt":
+                process.kill()
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             process.wait()
