@@ -40,6 +40,12 @@ def test_robot_declares_typed_task_surface():
     assert "  JoshAllTheThings:" not in body
 
 
+def test_rcc_tasks_use_python_service_not_legacy_bash():
+    body = Path("tasks.py").read_text()
+    assert "JATService" in body
+    assert "LegacyBashService" not in body
+
+
 def test_task_runner_translates_only_public_json_input_spelling():
     assert translate_args(["run", "tasks.py", "--", "--json-input", "request.json"]) == [
         "run",

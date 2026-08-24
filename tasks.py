@@ -3,12 +3,12 @@
 from robocorp.tasks import task
 
 from jat.io import load_request, write_result
-from jat.legacy import LegacyBashService
 from jat.models import BuildRequest, RestoreRequest, ServeRequest
+from jat.services import JATService
 
 
-def _service() -> LegacyBashService:
-    return LegacyBashService()
+def _service() -> JATService:
+    return JATService()
 
 
 def _finish(result) -> None:

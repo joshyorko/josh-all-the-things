@@ -1,5 +1,6 @@
 """Exact Hauler subprocess contract."""
 
+import json
 from pathlib import Path
 
 from .process import ProcessRunner
@@ -22,6 +23,17 @@ class HaulerAdapter:
 
     def info(self, store: Path, temp: Path):
         return self._run(["store", "info", "--store", str(store), "--tempdir", str(temp)])
+
+    def inventory(self, store: Path, temp: Path) -> list[dict]:
+        completed = self._run(
+            ["store", "info", "--store", str(store), "--tempdir", str(temp), "--output", "json"]
+        )
+        inventory = json.loads(completed.stdout)
+        if not isinstance(inventory, list) or any(
+            not isinstance(item, dict) or not isinstance(item.get("Reference"), str) for item in inventory
+        ):
+            raise ValueError("Hauler returned an invalid JSON inventory contract")
+        return inventory
 
     def extract(self, reference: str, store: Path, temp: Path, output: Path):
         return self._run(

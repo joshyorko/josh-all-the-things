@@ -172,6 +172,8 @@ def test_hauler_adapter_owns_exact_argv(tmp_path):
     adapter.save(store, temp, haul)
     adapter.load(store, temp, haul)
     adapter.info(store, temp)
+    runner.responses.append(result(stdout="[]"))
+    adapter.inventory(store, temp)
     adapter.extract("hauler/workspace:latest", store, temp, output)
     adapter.serve(store, temp, tmp_path / "registry", tmp_path / "registry.yaml")
 
@@ -180,6 +182,17 @@ def test_hauler_adapter_owns_exact_argv(tmp_path):
         ["/tools/hauler", "store", "save", "--store", str(store), "--tempdir", str(temp), "--filename", str(haul)],
         ["/tools/hauler", "store", "load", "--store", str(store), "--tempdir", str(temp), "--filename", str(haul)],
         ["/tools/hauler", "store", "info", "--store", str(store), "--tempdir", str(temp)],
+        [
+            "/tools/hauler",
+            "store",
+            "info",
+            "--store",
+            str(store),
+            "--tempdir",
+            str(temp),
+            "--output",
+            "json",
+        ],
         [
             "/tools/hauler",
             "store",
