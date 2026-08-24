@@ -123,6 +123,52 @@ if [[ ! -f $collision_destination/homebrew-recovery/Brewfile ]]; then
   exit 1
 fi
 
+archive_bin="$tmp/archive-bin"
+mkdir -p "$archive_bin"
+cat >"$archive_bin/tar" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $* == *'--zstd'* ]]; then
+  printf '%s\n' "tar: unrecognized option '--zstd'" >&2
+  exit 1
+fi
+exec /usr/bin/tar "$@"
+EOF
+chmod +x "$archive_bin/tar"
+cat >"$archive_bin/gtar" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$GNU_TAR_LOG"
+exec /usr/bin/tar "$@"
+EOF
+chmod +x "$archive_bin/gtar"
+export GNU_TAR_LOG="$tmp/gnu-tar.log"
+archive_source="$tmp/archive-source"
+mkdir -p "$archive_source"
+printf '%s\n' archive >"$archive_source/file.txt"
+if ! PATH="$archive_bin:$fake_bin:$PATH" bash "$robot_root/joshs-all-the-things.sh" build \
+  --folder "$archive_source" \
+  --output "$tmp/archive.tar.zst" >/dev/null 2>&1; then
+  printf '%s\n' 'FAIL: standalone build did not select a GNU tar implementation' >&2
+  exit 1
+fi
+if ! grep -Fq -- '--zstd -cpf' "$GNU_TAR_LOG"; then
+  printf '%s\n' 'FAIL: standalone build did not use gtar for zstd archives' >&2
+  exit 1
+fi
+if ! PATH="$archive_bin:$fake_bin:$PATH" FAKE_HAUL_EXTRACT="$fixture_artifacts" \
+  bash "$robot_root/joshs-all-the-things.sh" restore \
+  --haul "$tmp/restore-haul.tar.zst" \
+  --destination "$tmp/archive-restored" >/dev/null 2>&1; then
+  printf '%s\n' 'FAIL: standalone restore did not select a GNU tar implementation' >&2
+  exit 1
+fi
+if ! grep -Fq -- '--zstd -tf' "$GNU_TAR_LOG" || ! grep -Fq -- '--zstd -xpf' "$GNU_TAR_LOG"; then
+  printf '%s\n' 'FAIL: standalone restore did not use gtar for zstd archives' >&2
+  exit 1
+fi
+printf '%s\n' 'PASS: standalone archive path selects GNU tar when tar lacks --zstd'
+
 tmp_install=$(mktemp -d)
 trap 'rm -rf -- "$tmp_install"' EXIT
 fake_homebrew_bin="$tmp_install/bin"

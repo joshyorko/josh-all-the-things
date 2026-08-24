@@ -16,6 +16,7 @@ RESTORE_CREATED_DESTINATION=
 RESTORE_COMPLETE=0
 BREW=
 CHECKSUM_COMMAND=
+ARCHIVE_COMMAND=
 
 color_enabled() {
   local output_fd=$1
@@ -142,8 +143,18 @@ select_checksum_command() {
 bootstrap_dependencies() {
   require_command hauler
   require_command zstd
-  require_command tar
+  select_archive_command
   select_checksum_command
+}
+
+select_archive_command() {
+  if command -v gtar >/dev/null 2>&1 && gtar --zstd --version >/dev/null 2>&1; then
+    ARCHIVE_COMMAND=gtar
+  elif command -v tar >/dev/null 2>&1 && tar --zstd --version >/dev/null 2>&1; then
+    ARCHIVE_COMMAND=tar
+  else
+    die 1 'Required GNU tar implementation with --zstd is unavailable (gtar or tar)'
+  fi
 }
 
 absolute_existing_directory() {
@@ -499,7 +510,7 @@ build_haul() {
 
   phase 'Creating compressed workspace archive (this may take a while)'
   info "Folder: $folder"
-  tar --zstd -cpf "$archive" -C "$folder_parent" -- "$folder_name"
+  "$ARCHIVE_COMMAND" --zstd -cpf "$archive" -C "$folder_parent" -- "$folder_name"
   success 'Workspace archive created.'
   if [[ -n $BUILD_BREW ]]; then
     brew_folder=$(absolute_existing_directory "$BUILD_BREW")
@@ -508,7 +519,7 @@ build_haul() {
     brew_archive="$work/homebrew-recovery.tar.zst"
     phase 'Creating compressed Homebrew recovery archive'
     info "Recovery directory: $brew_folder"
-    tar --zstd -cpf "$brew_archive" -C "$brew_parent" -- "$brew_name"
+    "$ARCHIVE_COMMAND" --zstd -cpf "$brew_archive" -C "$brew_parent" -- "$brew_name"
     success 'Homebrew recovery archive created.'
   fi
   write_manifest "$manifest" "$archive" "$brew_archive"
@@ -575,7 +586,7 @@ validate_archive_members() {
       die 1 'Workspace artifact contains more than one top-level entry'
     fi
     count=$((count + 1))
-  done < <(tar --zstd -tf "$archive")
+  done < <("$ARCHIVE_COMMAND" --zstd -tf "$archive")
   ((count > 0)) || die 1 'Workspace artifact is empty'
 }
 
@@ -619,10 +630,10 @@ restore_haul() {
     mkdir -- "$brew_destination"
   fi
   phase 'Restoring folder contents to the destination'
-  tar --zstd -xpf "$artifact" -C "$workspace_destination"
+  "$ARCHIVE_COMMAND" --zstd -xpf "$artifact" -C "$workspace_destination"
   if [[ -n ${brew_artifact:-} ]]; then
     phase 'Restoring Homebrew recovery contents to the destination'
-    tar --zstd -xpf "$brew_artifact" -C "$brew_destination" --strip-components=1
+    "$ARCHIVE_COMMAND" --zstd -xpf "$brew_artifact" -C "$brew_destination" --strip-components=1
     validate_brew_recovery_export "$brew_destination"
   fi
   RESTORE_COMPLETE=1
