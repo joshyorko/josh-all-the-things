@@ -1,5 +1,9 @@
 import hashlib
 import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,6 +31,22 @@ def write_fake_rcc(path: Path, log: Path) -> None:
         "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': 0}))\n"
         "elif args == ['version']:\n"
         "    print('v18.19.1')\n"
+    )
+    path.chmod(0o755)
+
+
+def write_fake_oras(path: Path, log: Path) -> None:
+    path.write_text(
+        f"#!{sys.executable}\n"
+        "import json, pathlib, sys\n"
+        f"log = pathlib.Path({str(log)!r})\n"
+        "args = sys.argv[1:]\n"
+        "log.open('a').write(json.dumps(args) + '\\n')\n"
+        "if args[:1] == ['login']:\n"
+        "    if sys.stdin.read() != 'fake-token':\n"
+        "        raise SystemExit(3)\n"
+        "elif args[:2] == ['manifest', 'fetch']:\n"
+        "    print(json.dumps({'digest': 'sha256:' + 'd' * 64}))\n"
     )
     path.chmod(0o755)
 
@@ -111,6 +131,91 @@ def test_builder_rejects_existing_outputs(tmp_path):
         pass
     else:
         raise AssertionError("existing output was accepted")
+
+
+def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tmp_path):
+    root = Path(__file__).parents[1]
+    if shutil.which("jq") is None:
+        pytest.fail("jq is required to exercise the publication wrapper")
+
+    archive = tmp_path / "jat-runtime.rcca"
+    archive_bytes = b"schema-valid RCCA archive"
+    archive.write_bytes(archive_bytes)
+    receipt = tmp_path / "jat-runtime.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "format_version": 2,
+                "operation": "build",
+                "success": True,
+                "jat_git_sha": "0" * 40,
+                "rcc_executable": "/synthetic/rcc",
+                "rcc_version": "v18.19.1",
+                "platform": "linux_amd64",
+                "artifact_digest": "sha256:" + "a" * 64,
+                "specification_digest": "sha256:" + "b" * 64,
+                "legacy_blueprint_key": "c" * 16,
+                "archive": {
+                    "filename": archive.name,
+                    "sha256": hashlib.sha256(archive_bytes).hexdigest(),
+                    "size": len(archive_bytes),
+                },
+                "verified_acquire": {"fresh_home": True, "no_build": True},
+                "verified_no_build": {"fresh_home": True, "no_build": True},
+                "verified_exec": {"fresh_home": True},
+            }
+        )
+        + "\n"
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    oras_log = tmp_path / "oras.log"
+    write_fake_oras(fake_bin / "oras", oras_log)
+    environment = os.environ.copy()
+    environment.update(
+        PATH=f"{fake_bin}{os.pathsep}{environment['PATH']}",
+        GITHUB_TOKEN="fake-token",
+        GITHUB_ACTOR="fake-user",
+    )
+    reference = "ghcr.io/example/jat-runtime:linux_amd64-" + "a" * 64
+
+    result = subprocess.run(
+        [
+            str(root / "scripts/publish_environment_artifact.sh"),
+            "--archive",
+            str(archive),
+            "--receipt",
+            str(receipt),
+            "--repository",
+            "ghcr.io/example/jat-runtime",
+            "--username",
+            "fake-user",
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "wrapper rejected a schema-valid structured receipt before ORAS: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert result.stdout.strip() == "ghcr.io/example/jat-runtime@sha256:" + "d" * 64
+    assert [json.loads(line) for line in oras_log.read_text().splitlines()] == [
+        ["login", "ghcr.io", "--username", "fake-user", "--password-stdin"],
+        [
+            "push",
+            reference,
+            "--artifact-type",
+            "application/vnd.joshyorko.rcc-environment-artifact.v2",
+            "jat-runtime.rcca:application/vnd.joshyorko.rcc-environment-artifact.v2+rcca",
+            "jat-runtime.json:application/vnd.joshyorko.rcc-environment-artifact-receipt.v2+json",
+        ],
+        ["manifest", "fetch", "--descriptor", reference],
+    ]
 
 
 def test_publish_script_has_canonical_media_types_and_receipt_validation():
