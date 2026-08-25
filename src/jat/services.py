@@ -68,6 +68,7 @@ class JATService:
         log.info("Starting JAT build service")
         try:
             folder = existing_directory(request.folder)
+            _validate_robocorp_home(folder)
             output = new_output_path(request.output)
             brew = existing_directory(request.brew) if request.brew else None
             if brew:
@@ -190,6 +191,9 @@ class JATService:
                     if environment_metadata.artifact != expected.artifact:
                         raise ValueError("acquired RCC environment artifact digest did not match metadata")
                     self._rcc_adapter().verify(robot_file)
+                    environment_metadata = environment_metadata.model_copy(
+                        update={"archive": Path(RCC_ARTIFACT), "robot": expected.robot}
+                    )
                 _promote_restore(assembled, destination)
             return OperationResult(
                 operation="restore",
@@ -377,6 +381,18 @@ def _write_manifest(
             lines.extend((f"    - name: {json.dumps(image)}", "      local: true"))
         documents.append("\n".join(lines))
     path.write_text("\n---\n".join(documents) + "\n")
+
+
+def _validate_robocorp_home(source: Path) -> None:
+    configured = os.environ.get("ROBOCORP_HOME")
+    if not configured:
+        return
+    active_home = Path(configured).expanduser().resolve(strict=False)
+    try:
+        active_home.relative_to(source)
+    except ValueError:
+        return
+    raise ValueError("ROBOCORP_HOME must not be equal to or beneath the workspace source")
 
 
 def _find_regular_files(root: Path, name: str) -> list[Path]:

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest
 from jat.safety import ArchiveMember
@@ -171,6 +172,25 @@ def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):
     assert result.environment_artifact.artifact == "sha256:" + "b" * 64
 
 
+def test_build_rejects_resolved_robocorp_home_beneath_source_before_archive_creation(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    embedded_home = source / "embedded-home"
+    embedded_home.mkdir()
+    home_link = tmp_path / "active-home"
+    home_link.symlink_to(embedded_home, target_is_directory=True)
+    monkeypatch.setenv("ROBOCORP_HOME", str(home_link / "nonexistent-tail"))
+    archive = FakeArchive()
+
+    result = service(tmp_path, archive=archive).build(
+        BuildRequest(folder=source, output=tmp_path / "haul.tar.zst")
+    )
+
+    assert result.success is False
+    assert "ROBOCORP_HOME" in result.diagnostics
+    assert archive.calls == []
+
+
 def test_auto_rcc_without_descriptor_keeps_legacy_build(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -211,6 +231,18 @@ def test_restore_acquires_and_verifies_rcc_before_promotion(tmp_path):
     assert result.success, result.diagnostics
     assert [call[0] for call in rcc.calls] == ["acquire", "verify"]
     assert destination.exists()
+
+
+def test_restore_returns_only_stable_environment_artifact_paths(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    result = service(tmp_path, hauler=RccHauler(extracted_workspace=True), rcc=FakeRcc()).restore(
+        RestoreRequest(haul=haul, destination=tmp_path / "restored")
+    )
+
+    assert result.success, result.diagnostics
+    assert result.environment_artifact.archive == Path("rcc-environment.rcca")
+    assert result.environment_artifact.robot == Path("robot.yaml")
 
 
 def test_restore_rejects_when_metadata_robot_path_does_not_match_restored_workspace(tmp_path):

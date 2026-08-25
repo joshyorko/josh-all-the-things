@@ -19,6 +19,7 @@
 - Explicit robot descriptors must be regular non-symlink files resolving below the source root.
 - An embedded RCC archive must be exactly one validated file artifact and must acquire to its expected digest.
 - Restore must verify the exact saved robot-relative path with ordinary `rcc --no-build ht vars --json`; it must never rebuild silently.
+- JAT must never archive an active `ROBOCORP_HOME` or Holotree beneath the selected source; fail before archive creation if the resolved active home is at or below the source root.
 - Runtime artifact build uses isolated producer/verifier homes, makes the producer home unavailable for verification, and promotes create-only outputs only after verification.
 - No public push or downstream Josh Room mutation until JAT unit and real portable/legacy verticals pass.
 
@@ -102,4 +103,3 @@
 - [ ] **Step 1: Build with isolated producer/verifier homes and create-only outputs**
 - [ ] **Step 2: Verify archive acquire, producer-unavailable ordinary no-build resolution, and a real JAT Doctor or Build**
 - [ ] **Step 3: Publish through the existing GHCR transport and record immutable manifest digest, archive SHA-256, size, RCC artifact digest, specification digest, platform, and RCC version**
-
