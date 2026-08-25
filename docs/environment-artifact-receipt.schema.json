@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["format_version", "jat_git_sha", "rcc_version", "platform", "artifact_digest", "specification_digest", "legacy_blueprint_key", "archive", "verified_acquire", "verified_no_build", "verified_exec"],
+  "properties": {
+    "format_version": {"const": 2},
+    "jat_git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "rcc_version": {"type": "string", "minLength": 1},
+    "platform": {"type": "string", "minLength": 1},
+    "artifact_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "specification_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "legacy_blueprint_key": {"type": "string", "minLength": 1},
+    "archive": {"type": "object", "required": ["filename", "sha256", "size"], "properties": {"filename": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "size": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+    "verified_acquire": {"const": true},
+    "verified_no_build": {"const": true},
+    "verified_exec": {"const": true}
+  },
+  "additionalProperties": false
+}
