@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -36,6 +37,21 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _stage_copy(source: Path, destination: Path) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+    staged = Path(name)
+    try:
+        with source.open("rb") as reader, os.fdopen(descriptor, "wb") as writer:
+            shutil.copyfileobj(reader, writer, length=1024 * 1024)
+            writer.flush()
+            os.fsync(writer.fileno())
+        return staged
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
 
 
 def _platform_name() -> str:
@@ -122,12 +138,22 @@ def main(argv: list[str] | None = None) -> int:
             "verified_no_build": {"fresh_home": True, "no_build": True},
             "verified_exec": {"fresh_home": True},
         }
-        output.parent.mkdir(parents=True, exist_ok=True)
-        os.link(archive, output)
-        receipt_path.parent.mkdir(parents=True, exist_ok=True)
         staged_receipt = work / "jat-runtime.json"
         staged_receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-        os.link(staged_receipt, receipt_path)
+        staged_archive_output = _stage_copy(archive, output)
+        staged_receipt_output = _stage_copy(staged_receipt, receipt_path)
+        archive_promoted = False
+        try:
+            os.link(staged_archive_output, output)
+            archive_promoted = True
+            os.link(staged_receipt_output, receipt_path)
+        except BaseException:
+            if archive_promoted:
+                output.unlink(missing_ok=True)
+            raise
+        finally:
+            staged_archive_output.unlink(missing_ok=True)
+            staged_receipt_output.unlink(missing_ok=True)
     print(json.dumps(receipt, sort_keys=True))
     return 0
 

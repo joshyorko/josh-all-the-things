@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.build_environment_artifact import build_parser, main
+from scripts.build_environment_artifact import _stage_copy, build_parser, main
 
 
 def write_fake_rcc(path: Path, log: Path) -> None:
@@ -102,6 +102,27 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
 
 def test_builder_defaults_to_rcc_and_does_not_export_to_final_output(tmp_path, monkeypatch):
     assert build_parser().parse_args([]).rcc == "rcc"
+
+
+def test_create_only_promotion_stages_on_destination_filesystem(tmp_path, monkeypatch):
+    source = tmp_path / "source" / "artifact.rcca"
+    source.parent.mkdir()
+    source.write_bytes(b"artifact")
+    destination = tmp_path / "output" / "artifact.rcca"
+    real_link = os.link
+
+    def same_parent_link(first, second):
+        assert Path(first).parent == Path(second).parent
+        return real_link(first, second)
+
+    monkeypatch.setattr(os, "link", same_parent_link)
+    staged = _stage_copy(source, destination)
+    try:
+        os.link(staged, destination)
+    finally:
+        staged.unlink(missing_ok=True)
+
+    assert destination.read_bytes() == b"artifact"
 
 
 def test_builder_rejects_unsupported_rcc_before_publish(tmp_path, monkeypatch):
