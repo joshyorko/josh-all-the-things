@@ -176,22 +176,20 @@ class JATService:
                     metadata_files = _find_regular_files(extracted, RCC_METADATA_ARTIFACT)
                     if len(metadata_files) != 1:
                         raise ValueError(f"haul must contain exactly one RCC metadata artifact named {RCC_METADATA_ARTIFACT}")
-                    robot_files = _find_regular_files(workspace_destination, "robot.yaml")
-                    if len(robot_files) != 1:
-                        raise ValueError("restored workspace must contain exactly one regular robot.yaml")
                     expected = EnvironmentArtifactMetadata.model_validate_json(metadata_files[0].read_text())
                     if expected.archive_size != rcc_archives[0].stat().st_size or expected.archive_sha256 != _sha256(rcc_archives[0]):
                         raise ValueError("RCC environment metadata does not match the embedded archive")
+                    robot_file = _saved_robot_path(workspace_destination, expected.robot)
                     environment_metadata = self._rcc_adapter().acquire(
                         rcc_archives[0],
-                        robot_files[0],
+                        robot_file,
                         expected.rcc_version,
                         expected.specification_digest,
                         expected.legacy_blueprint_key,
                     )
                     if environment_metadata.artifact != expected.artifact:
                         raise ValueError("acquired RCC environment artifact digest did not match metadata")
-                    self._rcc_adapter().verify(robot_files[0])
+                    self._rcc_adapter().verify(robot_file)
                 _promote_restore(assembled, destination)
             return OperationResult(
                 operation="restore",
@@ -391,6 +389,28 @@ def _find_regular_files(root: Path, name: str) -> list[Path]:
                 raise ValueError(f"haul contains an unsafe artifact path: {candidate}")
             matches.append(candidate)
     return matches
+
+
+def _saved_robot_path(workspace: Path, relative: Path) -> Path:
+    if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("saved robot path must be a relative path within the restored workspace")
+    roots = [entry for entry in workspace.iterdir() if entry.is_dir() and not entry.is_symlink()]
+    if len(roots) != 1:
+        raise ValueError("restored workspace must contain exactly one regular root directory")
+    root = roots[0]
+    candidate = root.joinpath(*relative.parts)
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("saved robot path contains a symlink")
+    try:
+        candidate.resolve(strict=True).relative_to(workspace.resolve(strict=True))
+    except (OSError, ValueError):
+        raise ValueError("saved robot path escapes the restored workspace")
+    if not candidate.is_file():
+        raise ValueError("saved robot path is absent or not a regular file")
+    return candidate
 
 
 def _inventory_references(inventory: list[dict]) -> set[str]:

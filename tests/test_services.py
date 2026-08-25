@@ -77,6 +77,10 @@ class FakeHauler:
 
 
 class RccHauler(FakeHauler):
+    def __init__(self, *args, metadata_robot="robot.yaml", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.metadata_robot = metadata_robot
+
     def inventory(self, store, temp):
         references = super().inventory(store, temp)
         references.append({"Reference": "hauler/rcc-environment.rcca:latest", "Type": "file"})
@@ -100,7 +104,7 @@ class RccHauler(FakeHauler):
                 "archive_sha256": hashlib.sha256(b"rcca").hexdigest(),
                 "archive_size": 4,
                 "rcc_version": "18.19.1",
-                "robot": "robot.yaml",
+                "robot": self.metadata_robot,
                 "provider": "local",
                 "acquired": False,
             }))
@@ -207,6 +211,16 @@ def test_restore_acquires_and_verifies_rcc_before_promotion(tmp_path):
     assert result.success, result.diagnostics
     assert [call[0] for call in rcc.calls] == ["acquire", "verify"]
     assert destination.exists()
+
+
+def test_restore_rejects_when_metadata_robot_path_does_not_match_restored_workspace(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    result = service(tmp_path, hauler=RccHauler(extracted_workspace=True, metadata_robot="nested/portable.yaml"), rcc=FakeRcc()).restore(
+        RestoreRequest(haul=haul, destination=tmp_path / "restored")
+    )
+    assert result.success is False
+    assert "saved robot path" in result.diagnostics
 
 
 def test_build_is_create_only_and_validates_before_publication(tmp_path):
