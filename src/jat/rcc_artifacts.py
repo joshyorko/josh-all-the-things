@@ -8,6 +8,8 @@ from pathlib import Path
 from .models import EnvironmentArtifactMetadata
 from .process import ProcessRunner
 
+EXPECTED_RCC_VERSION = "v18.19.2"
+
 
 class RCCArtifactAdapter:
     def __init__(self, runner: ProcessRunner, executable: str = "rcc", timeout: float = 600):
@@ -95,7 +97,10 @@ class RCCArtifactAdapter:
         match = re.search(r"(?:^|\s)v?(\d+\.\d+\.\d+)(?:\s|$)", result.stdout)
         if not match:
             raise RuntimeError("RCC version output did not contain a semantic version")
-        return match.group(0).strip()
+        version = f"v{match.group(1)}"
+        if version != EXPECTED_RCC_VERSION:
+            raise RuntimeError(f"RCC {EXPECTED_RCC_VERSION} is required; found {version}")
+        return version
 
     def _run(self, argv: list[str]):
         result = self.runner.run(argv, timeout=self.timeout)

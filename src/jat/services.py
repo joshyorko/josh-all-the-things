@@ -143,7 +143,7 @@ class JATService:
                 self.hauler.load(store, temp, haul)
                 inventory = self.hauler.inventory(store, temp)
                 references = _inventory_references(inventory)
-                has_rcc = RCC_REFERENCE in references
+                has_rcc = RCC_REFERENCE in references and RCC_METADATA_REFERENCE in references
                 _validate_inventory(inventory, BREW_REFERENCE in references, has_rcc)
                 self.hauler.extract(WORKSPACE_REFERENCE, store, temp, extracted)
                 if BREW_REFERENCE in _inventory_references(inventory):
@@ -171,10 +171,10 @@ class JATService:
                     _validate_brew_recovery(brew_destination)
                 environment_metadata = None
                 rcc_archives = _find_regular_files(extracted, RCC_ARTIFACT)
-                if len(rcc_archives) > 1:
-                    raise ValueError(f"haul must contain at most one RCC environment artifact named {RCC_ARTIFACT}")
-                if rcc_archives:
-                    metadata_files = _find_regular_files(extracted, RCC_METADATA_ARTIFACT)
+                metadata_files = _find_regular_files(extracted, RCC_METADATA_ARTIFACT)
+                if has_rcc:
+                    if len(rcc_archives) != 1:
+                        raise ValueError(f"haul must contain exactly one RCC environment artifact named {RCC_ARTIFACT}")
                     if len(metadata_files) != 1:
                         raise ValueError(f"haul must contain exactly one RCC metadata artifact named {RCC_METADATA_ARTIFACT}")
                     expected = EnvironmentArtifactMetadata.model_validate_json(metadata_files[0].read_text())
@@ -285,16 +285,22 @@ class JATService:
 
     @staticmethod
     def _select_rcc_robot(request: BuildRequest, folder: Path) -> Path | None:
+        source = folder.resolve(strict=True)
         candidate = request.rcc_robot or folder / "robot.yaml"
         if not candidate.is_absolute():
             candidate = folder / candidate
-        try:
-            candidate.relative_to(folder)
-        except ValueError:
-            raise ValueError("RCC robot descriptor must be under the workspace source")
-        if candidate.is_symlink() or not candidate.is_file():
+        if candidate.is_symlink():
             return None
-        return candidate
+        if not candidate.exists():
+            return None
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(source)
+        except (OSError, ValueError):
+            raise ValueError("RCC robot descriptor must be under the workspace source")
+        if not resolved.is_file():
+            return None
+        return resolved
 
     def _failure(self, operation: str, error: Exception) -> OperationResult:
         return OperationResult(
@@ -442,6 +448,8 @@ def _validate_inventory(inventory: list[dict], expect_brew: bool, expect_rcc: bo
     ]
     if unexpected_rcc:
         raise ValueError(f"validated Hauler store contains unexpected RCC artifacts: {', '.join(sorted(unexpected_rcc))}")
+    if (RCC_REFERENCE in references) != (RCC_METADATA_REFERENCE in references):
+        raise ValueError("RCC environment artifact and metadata must appear together")
     if WORKSPACE_REFERENCE not in references:
         raise ValueError("validated Hauler store is missing the workspace artifact")
     if expect_brew and BREW_REFERENCE not in references:

@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 DEFAULT_RCC = "rcc"
+EXPECTED_RCC_VERSION = "v18.19.2"
 
 
 def _environment(source: dict[str, str], home: Path, rcc_home: Path) -> dict[str, str]:
@@ -80,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
         verifier_home.mkdir()
         producer_env = _environment(dict(os.environ), producer_home, producer_rcc)
         verifier_env = _environment(dict(os.environ), verifier_home, verifier_rcc)
+        version = _run([args.rcc, "version"], cwd=root, env=producer_env, timeout=30).stdout.splitlines()[0].strip()
+        if version != EXPECTED_RCC_VERSION:
+            raise RuntimeError(f"RCC {EXPECTED_RCC_VERSION} is required; found {version or 'unknown'}")
         publish = _json(_run([args.rcc, "env", "publish", "--robot", str(robot), "--provider", "local", "--json"], cwd=root, env=producer_env, timeout=args.timeout))
         artifact = publish["artifactDigest"]
         specification = publish["specificationDigest"]
@@ -98,7 +102,6 @@ def main(argv: list[str] | None = None) -> int:
         execution = _json(_run([args.rcc, "env", "exec", "--artifact", artifact, "--permissive-local", "--json", "--", "python", "-c", "print('jat-runtime-proof')"], cwd=root, env=verifier_env, timeout=args.timeout))
         if execution.get("artifactDigest") != artifact or execution.get("exitCode") != 0:
             raise RuntimeError("environment execution proof failed")
-        version = _run([args.rcc, "version"], cwd=root, env=producer_env, timeout=30).stdout.splitlines()[0]
         jat_sha = args.jat_git_sha or _git_sha(root, producer_env, args.timeout)
         if len(jat_sha) != 40 or any(character not in "0123456789abcdef" for character in jat_sha):
             raise ValueError("JAT git SHA must be a full lowercase commit digest")

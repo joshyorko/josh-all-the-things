@@ -78,23 +78,38 @@ class FakeHauler:
 
 
 class RccHauler(FakeHauler):
-    def __init__(self, *args, metadata_robot="robot.yaml", **kwargs):
+    def __init__(
+        self,
+        *args,
+        metadata_robot="robot.yaml",
+        inventory_rcc=True,
+        inventory_metadata=True,
+        extract_rcc=True,
+        extract_metadata=True,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.metadata_robot = metadata_robot
+        self.inventory_rcc = inventory_rcc
+        self.inventory_metadata = inventory_metadata
+        self.extract_rcc = extract_rcc
+        self.extract_metadata = extract_metadata
 
     def inventory(self, store, temp):
         references = super().inventory(store, temp)
-        references.append({"Reference": "hauler/rcc-environment.rcca:latest", "Type": "file"})
-        references.append({"Reference": "hauler/rcc-environment-metadata.json:latest", "Type": "file"})
+        if self.inventory_rcc:
+            references.append({"Reference": "hauler/rcc-environment.rcca:latest", "Type": "file"})
+        if self.inventory_metadata:
+            references.append({"Reference": "hauler/rcc-environment-metadata.json:latest", "Type": "file"})
         return references
 
     def extract(self, reference, store, temp, output):
         super().extract(reference, store, temp, output)
-        if reference.endswith("rcc-environment.rcca:latest"):
+        if self.extract_rcc and reference.endswith("rcc-environment.rcca:latest"):
             target = output / "rcc" / "rcc-environment.rcca"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"rcca")
-        if reference.endswith("rcc-environment-metadata.json:latest"):
+        if self.extract_metadata and reference.endswith("rcc-environment-metadata.json:latest"):
             target = output / "rcc" / "rcc-environment-metadata.json"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps({
@@ -104,7 +119,7 @@ class RccHauler(FakeHauler):
                 "archive": str(target.parent / "rcc-environment.rcca"),
                 "archive_sha256": hashlib.sha256(b"rcca").hexdigest(),
                 "archive_size": 4,
-                "rcc_version": "18.19.1",
+                "rcc_version": "v18.19.2",
                 "robot": self.metadata_robot,
                 "provider": "local",
                 "acquired": False,
@@ -125,7 +140,7 @@ class FakeRcc:
             archive=archive,
             archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
             archive_size=4,
-            rcc_version="18.19.1",
+            rcc_version="v18.19.2",
             robot=robot or source / "robot.yaml",
         )
 
@@ -138,7 +153,7 @@ class FakeRcc:
             archive=archive,
             archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
             archive_size=4,
-            rcc_version=rcc_version or "18.19.1",
+            rcc_version=rcc_version or "v18.19.2",
             robot=robot,
             acquired=True,
         )
@@ -220,6 +235,39 @@ def test_explicit_rcc_robot_under_source_wins_over_default(tmp_path):
     assert rcc.calls[0][3] == nested
 
 
+def test_explicit_rcc_robot_rejects_resolved_escape_and_symlink_parent(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    robot = outside / "robot.yaml"
+    robot.write_text("tasks: {}\n")
+    link = source / "linked"
+    link.symlink_to(outside, target_is_directory=True)
+
+    escaped = service(tmp_path, hauler=RccHauler(), rcc=FakeRcc()).build(
+        BuildRequest(
+            folder=source,
+            output=tmp_path / "escaped.tar.zst",
+            rcc_environment="required",
+            rcc_robot=Path("../outside/robot.yaml"),
+        )
+    )
+    linked = service(tmp_path, hauler=RccHauler(), rcc=FakeRcc()).build(
+        BuildRequest(
+            folder=source,
+            output=tmp_path / "linked.tar.zst",
+            rcc_environment="required",
+            rcc_robot=link / "robot.yaml",
+        )
+    )
+
+    assert escaped.success is False
+    assert linked.success is False
+    assert "under the workspace source" in escaped.diagnostics
+    assert "under the workspace source" in linked.diagnostics
+
+
 def test_restore_acquires_and_verifies_rcc_before_promotion(tmp_path):
     haul = tmp_path / "haul.tar.zst"
     haul.write_bytes(b"haul")
@@ -231,6 +279,34 @@ def test_restore_acquires_and_verifies_rcc_before_promotion(tmp_path):
     assert result.success, result.diagnostics
     assert [call[0] for call in rcc.calls] == ["acquire", "verify"]
     assert destination.exists()
+
+
+def test_restore_rejects_claimed_rcc_artifact_missing_after_extraction(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    destination = tmp_path / "restored"
+    result = service(
+        tmp_path,
+        hauler=RccHauler(extracted_workspace=True, extract_rcc=False),
+        rcc=FakeRcc(),
+    ).restore(RestoreRequest(haul=haul, destination=destination))
+
+    assert result.success is False
+    assert "exactly one RCC environment artifact" in result.diagnostics
+    assert not destination.exists()
+
+
+def test_restore_rejects_metadata_only_rcc_inventory(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    result = service(
+        tmp_path,
+        hauler=RccHauler(extracted_workspace=True, inventory_rcc=False, inventory_metadata=True),
+        rcc=FakeRcc(),
+    ).restore(RestoreRequest(haul=haul, destination=tmp_path / "restored"))
+
+    assert result.success is False
+    assert "RCC environment artifact and metadata must appear together" in result.diagnostics
 
 
 def test_restore_returns_only_stable_environment_artifact_paths(tmp_path):

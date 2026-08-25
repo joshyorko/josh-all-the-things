@@ -30,7 +30,7 @@ def write_fake_rcc(path: Path, log: Path) -> None:
         "elif args[:2] == ['env', 'exec']:\n"
         "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': 0}))\n"
         "elif args == ['version']:\n"
-        "    print('v18.19.1')\n"
+        "    print(os.environ.get('JAT_FAKE_RCC_VERSION', 'v18.19.2'))\n"
     )
     path.chmod(0o755)
 
@@ -64,16 +64,17 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
     assert main(["--robot", str(robot), "--rcc", str(rcc), "--output", str(output), "--receipt", str(receipt)]) == 0
 
     calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert calls[0][:3] == ["env", "publish", "--robot"]
-    assert calls[0][3:7] == [str(robot), "--provider", "local", "--json"]
-    assert calls[1][:2] == ["env", "export"]
-    assert "ht" not in calls[1]
-    assert calls[2][:2] == ["env", "acquire"]
-    assert calls[2][calls[2].index("--archive") + 1] != str(output)
-    assert "--permissive-local" in calls[2] and "--json" in calls[2]
-    assert calls[3][:3] == ["--no-build", "ht", "vars"]
-    assert calls[4][:2] == ["env", "exec"]
-    assert "--artifact" in calls[4]
+    assert calls[0] == ["version"]
+    assert calls[1][:3] == ["env", "publish", "--robot"]
+    assert calls[1][3:7] == [str(robot), "--provider", "local", "--json"]
+    assert calls[2][:2] == ["env", "export"]
+    assert "ht" not in calls[2]
+    assert calls[3][:2] == ["env", "acquire"]
+    assert calls[3][calls[3].index("--archive") + 1] != str(output)
+    assert "--permissive-local" in calls[3] and "--json" in calls[3]
+    assert calls[4][:3] == ["--no-build", "ht", "vars"]
+    assert calls[5][:2] == ["env", "exec"]
+    assert "--artifact" in calls[5]
 
     result = json.loads(receipt.read_text())
     assert result["operation"] == "build"
@@ -88,7 +89,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "jat_git_sha": "d" * 40,
         "legacy_blueprint_key": "c" * 16,
         "platform": result["platform"],
-        "rcc_version": "v18.19.1",
+        "rcc_version": "v18.19.2",
         "specification_digest": "sha256:" + "b" * 64,
         "operation": "build",
         "success": True,
@@ -101,6 +102,28 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
 
 def test_builder_defaults_to_rcc_and_does_not_export_to_final_output(tmp_path, monkeypatch):
     assert build_parser().parse_args([]).rcc == "rcc"
+
+
+def test_builder_rejects_unsupported_rcc_before_publish(tmp_path, monkeypatch):
+    robot = tmp_path / "robot.yaml"
+    robot.write_text("tasks: {}\n")
+    rcc = tmp_path / "rcc"
+    log = tmp_path / "rcc.log"
+    write_fake_rcc(rcc, log)
+    monkeypatch.setenv("JAT_FAKE_RCC_VERSION", "v18.19.1")
+
+    with pytest.raises(RuntimeError, match="v18.19.2"):
+        main([
+            "--robot",
+            str(robot),
+            "--rcc",
+            str(rcc),
+            "--output",
+            str(tmp_path / "runtime.rcca"),
+            "--receipt",
+            str(tmp_path / "runtime.json"),
+        ])
+    assert [json.loads(line) for line in log.read_text().splitlines()] == [["version"]]
 
 
 def test_builder_keeps_final_outputs_absent_when_fresh_verification_fails(tmp_path, monkeypatch):
@@ -119,7 +142,7 @@ def test_builder_keeps_final_outputs_absent_when_fresh_verification_fails(tmp_pa
     assert not output.exists()
     assert not receipt.exists()
     calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert calls[1][calls[1].index("--output") + 1] != str(output)
+    assert calls[2][calls[2].index("--output") + 1] != str(output)
 
 
 def test_builder_rejects_existing_outputs(tmp_path):
@@ -150,7 +173,7 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
                 "success": True,
                 "jat_git_sha": "0" * 40,
                 "rcc_executable": "/synthetic/rcc",
-                "rcc_version": "v18.19.1",
+                "rcc_version": "v18.19.2",
                 "platform": "linux_amd64",
                 "artifact_digest": "sha256:" + "a" * 64,
                 "specification_digest": "sha256:" + "b" * 64,
@@ -217,6 +240,29 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
         ["manifest", "fetch", "--descriptor", reference],
     ]
 
+    invalid = json.loads(receipt.read_text())
+    invalid["rcc_version"] = "v18.19.1"
+    receipt.write_text(json.dumps(invalid) + "\n")
+    oras_log.unlink()
+    rejected = subprocess.run(
+        [
+            str(root / "scripts/publish_environment_artifact.sh"),
+            "--archive",
+            str(archive),
+            "--receipt",
+            str(receipt),
+            "--repository",
+            "ghcr.io/example/jat-runtime",
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert not oras_log.exists(), "invalid receipt reached ORAS"
+
 
 def test_publish_script_has_canonical_media_types_and_receipt_validation():
     root = Path(__file__).parents[1]
@@ -238,4 +284,5 @@ def test_legacy_files_are_removed_and_new_receipt_schema_is_version_two():
     assert not (root / "docs/hololib-receipt.schema.json").exists()
     schema = json.loads((root / "docs/environment-artifact-receipt.schema.json").read_text())
     assert schema["properties"]["format_version"]["const"] == 2
+    assert schema["properties"]["rcc_version"]["const"] == "v18.19.2"
     assert "artifact_digest" in schema["required"]

@@ -17,40 +17,35 @@ standalone Python `jat` command in the RCC-managed environment.
 The generated haul is the portable payload. The RCC bundle contains the tool and
 its RCC-managed runtime; it is not the haul itself.
 
-## Build a verified RCC hololib
+## Build a verified RCC Environment Artifact
 
-Build from a fresh RCC home, export the resolved environment, import it into a
-second fresh RCC home, and prove `--no-build` resolution before publication:
+Build the canonical JAT runtime artifact with RCC v18.19.2. The builder uses
+isolated producer and verifier homes, publishes and exports through RCC's
+official Environment Artifact commands, acquires the archive into the fresh
+verifier, and proves ordinary `--no-build` resolution before promotion:
 
 ```bash
-scripts/build_hololib.sh \
-  --output dist/hololib.zip \
-  --receipt dist/hololib.json
+scripts/build_environment_artifact.sh \
+  --output dist/jat-runtime.rcca \
+  --receipt dist/jat-runtime.json
 ```
 
-Both outputs are create-only. The receipt records the JAT commit, RCC version,
-platform, environment hash, archive digest and size, and isolated import proof.
-Publish the ZIP and receipt as OCI artifact layers; do not commit either file to
-Git.
-
-The wrapper uses the RCC Automation plugin's Dagger module. It discovers the
-installed Codex plugin automatically or accepts an explicit
-`RCC_DAGGER_MODULE=/path/to/dagger`. The internal shared-root mode is guarded by
-`JAT_HOLOLIB_DAGGER=1`; it builds and verifies `/opt/robocorp` only inside the
-ephemeral container. The runner launches through `hololib.robot.yaml`, a
-build-only RCC descriptor that intentionally omits JAT's Homebrew/Hauler
-workload pre-run.
+Both outputs are create-only. The receipt records RCC's artifact,
+specification, and legacy blueprint identities together with the exact JAT
+commit, RCC version, platform, archive SHA-256 and size, and fresh-home proofs.
+RCC owns environment inventory and materialization; JAT does not export or
+import raw Holotree state.
 
 Publish the verified outputs with the token exported by your shell:
 
 ```bash
-scripts/publish_hololib.sh
+scripts/publish_environment_artifact.sh
 ```
 
-The publisher validates the receipt and ZIP, derives a content-specific tag,
+The publisher validates the receipt and `.rcca`, derives a content-specific tag,
 logs into GHCR through stdin, publishes both layers, reads the manifest back,
 and prints the immutable `repository@sha256:...` reference. Override paths or
-the target with `--zip`, `--receipt`, `--repository`, and `--username`.
+the target with `--archive`, `--receipt`, `--repository`, and `--username`.
 
 ## Build the RCC Bundle
 
