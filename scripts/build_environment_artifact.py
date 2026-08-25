@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-DEFAULT_RCC = "/tmp/josh-room-rcc-env-phase0-v18.19.1.SsDRE4/bin/rcc"
+DEFAULT_RCC = "rcc"
 
 
 def _environment(source: dict[str, str], home: Path, rcc_home: Path) -> dict[str, str]:
@@ -84,15 +84,17 @@ def main(argv: list[str] | None = None) -> int:
         artifact = publish["artifactDigest"]
         specification = publish["specificationDigest"]
         legacy = publish["legacyBlueprintKey"]
-        output.parent.mkdir(parents=True, exist_ok=True)
-        archive = output
+        archive = work / "jat-runtime.rcca"
         _run([args.rcc, "env", "export", "--artifact", artifact, "--provider", "local", "--output", str(archive)], cwd=root, env=producer_env, timeout=args.timeout)
+        producer_home.rename(work / "producer-home-unavailable")
+        if producer_rcc.exists():
+            producer_rcc.rename(work / "producer-rcc-unavailable")
         acquired = _json(_run([args.rcc, "env", "acquire", "--archive", str(archive), "--permissive-local", "--json"], cwd=root, env=verifier_env, timeout=args.timeout))
         if acquired.get("artifactDigest") != artifact or acquired.get("verification", {}).get("valid") is not True:
             raise RuntimeError("fresh verifier did not validate the exported artifact")
         variables = _json(_run([args.rcc, "--no-build", "ht", "vars", "--robot", str(robot), "--json"], cwd=root, env=verifier_env, timeout=args.timeout))
         if not isinstance(variables, list):
-            raise RuntimeError("no-build verification did not return RCC variables")
+            raise TypeError("no-build verification did not return RCC variables")
         execution = _json(_run([args.rcc, "env", "exec", "--artifact", artifact, "--permissive-local", "--json", "--", "python", "-c", "print('jat-runtime-proof')"], cwd=root, env=verifier_env, timeout=args.timeout))
         if execution.get("artifactDigest") != artifact or execution.get("exitCode") != 0:
             raise RuntimeError("environment execution proof failed")
@@ -100,21 +102,29 @@ def main(argv: list[str] | None = None) -> int:
         jat_sha = args.jat_git_sha or _git_sha(root, producer_env, args.timeout)
         if len(jat_sha) != 40 or any(character not in "0123456789abcdef" for character in jat_sha):
             raise ValueError("JAT git SHA must be a full lowercase commit digest")
+        archive_info = {"filename": output.name, "sha256": _sha256(archive), "size": archive.stat().st_size}
         receipt = {
             "format_version": 2,
+            "operation": "build",
+            "success": True,
             "jat_git_sha": jat_sha,
+            "rcc_executable": args.rcc,
             "rcc_version": version,
             "platform": _platform_name(),
             "artifact_digest": artifact,
             "specification_digest": specification,
             "legacy_blueprint_key": legacy,
-            "archive": {"filename": output.name, "sha256": _sha256(archive), "size": archive.stat().st_size},
-            "verified_acquire": True,
-            "verified_no_build": True,
-            "verified_exec": True,
+            "archive": archive_info,
+            "verified_acquire": {"fresh_home": True, "no_build": True},
+            "verified_no_build": {"fresh_home": True, "no_build": True},
+            "verified_exec": {"fresh_home": True},
         }
+        output.parent.mkdir(parents=True, exist_ok=True)
+        os.link(archive, output)
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
-        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+        staged_receipt = work / "jat-runtime.json"
+        staged_receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+        os.link(staged_receipt, receipt_path)
     print(json.dumps(receipt, sort_keys=True))
     return 0
 

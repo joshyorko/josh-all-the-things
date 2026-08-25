@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest
 from jat.safety import ArchiveMember
 from jat.services import JATService
@@ -77,6 +80,7 @@ class RccHauler(FakeHauler):
     def inventory(self, store, temp):
         references = super().inventory(store, temp)
         references.append({"Reference": "hauler/rcc-environment.rcca:latest", "Type": "file"})
+        references.append({"Reference": "hauler/rcc-environment-metadata.json:latest", "Type": "file"})
         return references
 
     def extract(self, reference, store, temp, output):
@@ -85,6 +89,21 @@ class RccHauler(FakeHauler):
             target = output / "rcc" / "rcc-environment.rcca"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"rcca")
+        if reference.endswith("rcc-environment-metadata.json:latest"):
+            target = output / "rcc" / "rcc-environment-metadata.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps({
+                "artifact": "sha256:" + "b" * 64,
+                "specification_digest": "sha256:" + "c" * 64,
+                "legacy_blueprint_key": "d" * 16,
+                "archive": str(target.parent / "rcc-environment.rcca"),
+                "archive_sha256": hashlib.sha256(b"rcca").hexdigest(),
+                "archive_size": 4,
+                "rcc_version": "18.19.1",
+                "robot": "robot.yaml",
+                "provider": "local",
+                "acquired": False,
+            }))
 
 
 class FakeRcc:
@@ -96,16 +115,24 @@ class FakeRcc:
         archive.write_bytes(b"rcca")
         return EnvironmentArtifactMetadata(
             artifact="sha256:" + "b" * 64,
+            specification_digest="sha256:" + "c" * 64,
+            legacy_blueprint_key="d" * 16,
             archive=archive,
+            archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
+            archive_size=4,
             rcc_version="18.19.1",
             robot=robot or source / "robot.yaml",
         )
 
-    def acquire(self, archive, robot, rcc_version=None):
-        self.calls.append(("acquire", archive, robot, rcc_version))
+    def acquire(self, archive, robot, rcc_version=None, specification_digest=None, legacy_blueprint_key=None):
+        self.calls.append(("acquire", archive, robot, rcc_version, specification_digest, legacy_blueprint_key))
         return EnvironmentArtifactMetadata(
             artifact="sha256:" + "b" * 64,
+            specification_digest="sha256:" + "c" * 64,
+            legacy_blueprint_key="d" * 16,
             archive=archive,
+            archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
+            archive_size=4,
             rcc_version=rcc_version or "18.19.1",
             robot=robot,
             acquired=True,

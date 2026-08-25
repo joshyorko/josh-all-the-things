@@ -22,14 +22,15 @@ def test_rcc_adapter_uses_released_json_commands_and_returns_metadata(tmp_path):
     source = tmp_path / "robot.yaml"
     source.write_text("tasks: {}\n")
     archive = tmp_path / "environment.rcca"
+    archive.write_bytes(b"RCCA")
     runner = RecordingRunner(
         [
             result(stdout="rcc v18.19.1\n"),
-            result(stdout=json.dumps({"artifact": "sha256:" + "a" * 64})),
+            result(stdout=json.dumps({"artifactDigest": "sha256:" + "a" * 64, "specificationDigest": "sha256:" + "b" * 64, "legacyBlueprintKey": "c" * 16})),
             result(stdout="published\n"),
-            result(stdout=json.dumps({"artifact": "sha256:" + "a" * 64, "archive": str(archive)})),
+            result(stdout=json.dumps({"artifactDigest": "sha256:" + "a" * 64, "specificationDigest": "sha256:" + "b" * 64, "legacyBlueprintKey": "c" * 16, "archive": str(archive)})),
             result(stdout="rcc v18.19.1\n"),
-            result(stdout="variables\n"),
+            result(stdout="[]\n"),
         ]
     )
     adapter = RCCArtifactAdapter(runner, executable="/tools/rcc")
@@ -39,6 +40,9 @@ def test_rcc_adapter_uses_released_json_commands_and_returns_metadata(tmp_path):
     adapter.verify(source)
 
     assert metadata.artifact == "sha256:" + "a" * 64
+    assert metadata.specification_digest == "sha256:" + "b" * 64
+    assert metadata.legacy_blueprint_key == "c" * 16
+    assert metadata.rcc_version == "v18.19.1"
     assert acquired.artifact == metadata.artifact
     assert [call[0] for call in runner.calls] == [
         ["/tools/rcc", "version"],
@@ -46,5 +50,16 @@ def test_rcc_adapter_uses_released_json_commands_and_returns_metadata(tmp_path):
         ["/tools/rcc", "env", "export", "--artifact", metadata.artifact, "--provider", "local", "--output", str(archive)],
         ["/tools/rcc", "env", "acquire", "--archive", str(archive), "--permissive-local", "--json"],
         ["/tools/rcc", "version"],
-        ["/tools/rcc", "--no-build", "ht", "vars", "--robot", str(source)],
+        ["/tools/rcc", "--no-build", "ht", "vars", "--robot", str(source), "--json"],
     ]
+
+
+def test_rcc_adapter_rejects_non_json_verification_output(tmp_path):
+    runner = RecordingRunner([result(stdout="rcc v18.19.2\n"), result(stdout="not-json")])
+    adapter = RCCArtifactAdapter(runner)
+    try:
+        adapter.verify(tmp_path / "robot.yaml")
+    except (ValueError, TypeError, RuntimeError):
+        pass
+    else:
+        raise AssertionError("non-JSON verification output was accepted")

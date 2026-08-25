@@ -1,16 +1,16 @@
-import json
 import hashlib
-import os
-import subprocess
+import json
 from pathlib import Path
 
-from scripts.build_environment_artifact import main
+import pytest
+
+from scripts.build_environment_artifact import build_parser, main
 
 
 def write_fake_rcc(path: Path, log: Path) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, pathlib, sys\n"
+        "import json, os, pathlib, sys\n"
         f"log = pathlib.Path({str(log)!r})\n"
         "log.open('a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
         "args = sys.argv[1:]\n"
@@ -22,7 +22,7 @@ def write_fake_rcc(path: Path, log: Path) -> None:
         "elif args[:3] == ['--no-build', 'ht', 'vars']:\n"
         "    print(json.dumps([{'key': 'RCC_ENVIRONMENT_HASH', 'value': 'sha256:' + 'a' * 64}]))\n"
         "elif args[:2] == ['env', 'acquire']:\n"
-        "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'verification': {'valid': True}}))\n"
+        "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'verification': {'valid': os.environ.get('JAT_FAKE_RCC_FAIL_ACQUIRE') != '1'}}))\n"
         "elif args[:2] == ['env', 'exec']:\n"
         "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': 0}))\n"
         "elif args == ['version']:\n"
@@ -49,13 +49,18 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
     assert calls[1][:2] == ["env", "export"]
     assert "ht" not in calls[1]
     assert calls[2][:2] == ["env", "acquire"]
-    assert calls[2][calls[2].index("--archive") + 1] == str(output)
+    assert calls[2][calls[2].index("--archive") + 1] != str(output)
     assert "--permissive-local" in calls[2] and "--json" in calls[2]
     assert calls[3][:3] == ["--no-build", "ht", "vars"]
     assert calls[4][:2] == ["env", "exec"]
     assert "--artifact" in calls[4]
 
     result = json.loads(receipt.read_text())
+    assert result["operation"] == "build"
+    assert result["success"] is True
+    assert result["rcc_executable"] == str(rcc)
+    assert result["verified_acquire"]["fresh_home"] is True
+    assert result["verified_acquire"]["no_build"] is True
     assert result == {
         "artifact_digest": "sha256:" + "a" * 64,
         "archive": {"filename": "jat-runtime.rcca", "sha256": hashlib.sha256(b"RCCA").hexdigest(), "size": 4},
@@ -65,10 +70,36 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "platform": result["platform"],
         "rcc_version": "v18.19.1",
         "specification_digest": "sha256:" + "b" * 64,
-        "verified_acquire": True,
-        "verified_exec": True,
-        "verified_no_build": True,
+        "operation": "build",
+        "success": True,
+        "rcc_executable": str(rcc),
+        "verified_acquire": {"fresh_home": True, "no_build": True},
+        "verified_exec": {"fresh_home": True},
+        "verified_no_build": {"fresh_home": True, "no_build": True},
     }
+
+
+def test_builder_defaults_to_rcc_and_does_not_export_to_final_output(tmp_path, monkeypatch):
+    assert build_parser().parse_args([]).rcc == "rcc"
+
+
+def test_builder_keeps_final_outputs_absent_when_fresh_verification_fails(tmp_path, monkeypatch):
+    robot = tmp_path / "robot.yaml"
+    robot.write_text("tasks: {}\n")
+    rcc = tmp_path / "rcc"
+    log = tmp_path / "rcc.log"
+    write_fake_rcc(rcc, log)
+    monkeypatch.setenv("JAT_GIT_SHA", "d" * 40)
+    output = tmp_path / "dist" / "jat-runtime.rcca"
+    receipt = tmp_path / "dist" / "jat-runtime.json"
+    monkeypatch.setenv("JAT_FAKE_RCC_FAIL_ACQUIRE", "1")
+
+    with pytest.raises(RuntimeError, match="fresh verifier"):
+        main(["--robot", str(robot), "--rcc", str(rcc), "--output", str(output), "--receipt", str(receipt)])
+    assert not output.exists()
+    assert not receipt.exists()
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert calls[1][calls[1].index("--output") + 1] != str(output)
 
 
 def test_builder_rejects_existing_outputs(tmp_path):

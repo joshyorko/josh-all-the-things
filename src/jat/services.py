@@ -11,7 +11,13 @@ from robocorp import log
 
 from .archive import ArchiveAdapter
 from .hauler import HaulerAdapter
-from .models import BuildRequest, OperationResult, RestoreRequest, ServeRequest
+from .models import (
+    BuildRequest,
+    EnvironmentArtifactMetadata,
+    OperationResult,
+    RestoreRequest,
+    ServeRequest,
+)
 from .process import ProcessRunner
 from .rcc_artifacts import RCCArtifactAdapter
 from .safety import (
@@ -29,6 +35,8 @@ BREW_ARTIFACT = "homebrew-recovery.tar.zst"
 BREW_REFERENCE = "hauler/homebrew-recovery.tar.zst:latest"
 RCC_ARTIFACT = "rcc-environment.rcca"
 RCC_REFERENCE = "hauler/rcc-environment.rcca:latest"
+RCC_METADATA_ARTIFACT = "rcc-environment-metadata.json"
+RCC_METADATA_REFERENCE = "hauler/rcc-environment-metadata.json:latest"
 
 
 class JATService:
@@ -74,6 +82,7 @@ class JATService:
                     self.archive.create(brew, brew_archive)
                 rcc_archive = None
                 rcc_metadata = None
+                rcc_metadata_path = None
                 rcc_robot = self._select_rcc_robot(request, folder) if request.rcc_environment != "off" else None
                 if request.rcc_environment == "required" and rcc_robot is None:
                     raise ValueError("RCC environment is required but no regular robot.yaml was found")
@@ -81,10 +90,15 @@ class JATService:
                     if self.rcc is not None or self.which("rcc"):
                         rcc_archive = stage.path / RCC_ARTIFACT
                         rcc_metadata = self._rcc_adapter().publish_and_export(folder, rcc_archive, rcc_robot)
+                        rcc_metadata = rcc_metadata.model_copy(
+                            update={"archive": Path(RCC_ARTIFACT), "robot": rcc_robot.relative_to(folder)}
+                        )
+                        rcc_metadata_path = stage.path / RCC_METADATA_ARTIFACT
+                        rcc_metadata_path.write_text(json.dumps(rcc_metadata.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
                     elif request.rcc_environment == "required":
                         raise ValueError("RCC environment is required but rcc is unavailable")
                 manifest = stage.path / "manifest.yaml"
-                _write_manifest(manifest, workspace_archive, brew_archive, rcc_archive, images)
+                _write_manifest(manifest, workspace_archive, brew_archive, rcc_archive, rcc_metadata_path, images)
                 build_store = stage.path / "build-store"
                 validation_store = stage.path / "validation-store"
                 temp = stage.path / "hauler-temp"
@@ -135,6 +149,7 @@ class JATService:
                     self.hauler.extract(BREW_REFERENCE, store, temp, extracted)
                 if has_rcc:
                     self.hauler.extract(RCC_REFERENCE, store, temp, extracted)
+                    self.hauler.extract(RCC_METADATA_REFERENCE, store, temp, extracted)
                 workspace_archives = _find_regular_files(extracted, WORKSPACE_ARTIFACT)
                 if len(workspace_archives) != 1:
                     raise ValueError(f"haul must contain exactly one workspace artifact named {WORKSPACE_ARTIFACT}")
@@ -158,10 +173,24 @@ class JATService:
                 if len(rcc_archives) > 1:
                     raise ValueError(f"haul must contain at most one RCC environment artifact named {RCC_ARTIFACT}")
                 if rcc_archives:
+                    metadata_files = _find_regular_files(extracted, RCC_METADATA_ARTIFACT)
+                    if len(metadata_files) != 1:
+                        raise ValueError(f"haul must contain exactly one RCC metadata artifact named {RCC_METADATA_ARTIFACT}")
                     robot_files = _find_regular_files(workspace_destination, "robot.yaml")
                     if len(robot_files) != 1:
                         raise ValueError("restored workspace must contain exactly one regular robot.yaml")
-                    environment_metadata = self._rcc_adapter().acquire(rcc_archives[0], robot_files[0])
+                    expected = EnvironmentArtifactMetadata.model_validate_json(metadata_files[0].read_text())
+                    if expected.archive_size != rcc_archives[0].stat().st_size or expected.archive_sha256 != _sha256(rcc_archives[0]):
+                        raise ValueError("RCC environment metadata does not match the embedded archive")
+                    environment_metadata = self._rcc_adapter().acquire(
+                        rcc_archives[0],
+                        robot_files[0],
+                        expected.rcc_version,
+                        expected.specification_digest,
+                        expected.legacy_blueprint_key,
+                    )
+                    if environment_metadata.artifact != expected.artifact:
+                        raise ValueError("acquired RCC environment artifact digest did not match metadata")
                     self._rcc_adapter().verify(robot_files[0])
                 _promote_restore(assembled, destination)
             return OperationResult(
@@ -276,7 +305,7 @@ class JATService:
 
 
 def _write_manifest(
-    path: Path, workspace: Path, brew: Path | None, rcc_archive: Path | None, images: list[str]
+    path: Path, workspace: Path, brew: Path | None, rcc_archive: Path | None, rcc_metadata: Path | None, images: list[str]
 ) -> None:
     documents = [
         "\n".join(
@@ -322,6 +351,21 @@ def _write_manifest(
                 ]
             )
         )
+    if rcc_metadata:
+        documents.append(
+            "\n".join(
+                [
+                    "apiVersion: content.hauler.cattle.io/v1",
+                    "kind: Files",
+                    "metadata:",
+                    "  name: joshs-all-the-things-rcc-environment-metadata",
+                    "spec:",
+                    "  files:",
+                    f"    - path: {json.dumps(str(rcc_metadata))}",
+                    f"      name: {RCC_METADATA_ARTIFACT}",
+                ]
+            )
+        )
     if images:
         lines = [
             "apiVersion: content.hauler.cattle.io/v1",
@@ -355,12 +399,21 @@ def _inventory_references(inventory: list[dict]) -> set[str]:
 
 def _validate_inventory(inventory: list[dict], expect_brew: bool, expect_rcc: bool = False) -> None:
     references = _inventory_references(inventory)
+    if len(references) != len(inventory):
+        raise ValueError("validated Hauler store contains duplicate artifact references")
+    unexpected_rcc = [
+        reference for reference in references if reference.endswith(".rcca:latest") and reference != RCC_REFERENCE
+    ]
+    if unexpected_rcc:
+        raise ValueError(f"validated Hauler store contains unexpected RCC artifacts: {', '.join(sorted(unexpected_rcc))}")
     if WORKSPACE_REFERENCE not in references:
         raise ValueError("validated Hauler store is missing the workspace artifact")
     if expect_brew and BREW_REFERENCE not in references:
         raise ValueError("validated Hauler store is missing the Homebrew recovery artifact")
     if expect_rcc and RCC_REFERENCE not in references:
         raise ValueError("validated Hauler store is missing the RCC environment artifact")
+    if expect_rcc and RCC_METADATA_REFERENCE not in references:
+        raise ValueError("validated Hauler store is missing the RCC environment metadata artifact")
 
 
 def _promote_restore(assembled: Path, destination: Path) -> None:

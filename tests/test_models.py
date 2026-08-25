@@ -75,7 +75,11 @@ def test_operation_result_is_versioned_bounded_and_stable(tmp_path):
 def test_operation_result_can_carry_environment_artifact_metadata():
     metadata = EnvironmentArtifactMetadata(
         artifact="sha256:" + "a" * 64,
+        specification_digest="sha256:" + "b" * 64,
+        legacy_blueprint_key="c" * 16,
         archive="rcc-environment.rcca",
+        archive_sha256="d" * 64,
+        archive_size=4,
         rcc_version="18.19.1",
         robot="robot.yaml",
     )

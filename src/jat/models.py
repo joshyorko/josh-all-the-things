@@ -40,7 +40,11 @@ class EnvironmentArtifactMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     artifact: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    specification_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    legacy_blueprint_key: str = Field(min_length=1)
     archive: Path
+    archive_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    archive_size: int = Field(ge=1)
     rcc_version: str
     robot: Path
     provider: Literal["local"] = "local"

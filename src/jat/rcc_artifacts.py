@@ -1,5 +1,6 @@
 """RCC portable environment artifact adapter."""
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -22,6 +23,8 @@ class RCCArtifactAdapter:
         )
         payload = _json_object(publish.stdout)
         artifact = _artifact(payload)
+        specification = _required_digest(payload, "specificationDigest")
+        legacy = _required_string(payload, "legacyBlueprintKey")
         self._run(
             [
                 self.executable,
@@ -37,12 +40,23 @@ class RCCArtifactAdapter:
         )
         return EnvironmentArtifactMetadata(
             artifact=artifact,
+            specification_digest=specification,
+            legacy_blueprint_key=legacy,
             archive=archive,
+            archive_sha256=_sha256(archive),
+            archive_size=archive.stat().st_size,
             rcc_version=version,
             robot=robot or source,
         )
 
-    def acquire(self, archive: Path, robot: Path | None = None, rcc_version: str | None = None) -> EnvironmentArtifactMetadata:
+    def acquire(
+        self,
+        archive: Path,
+        robot: Path | None = None,
+        rcc_version: str | None = None,
+        specification_digest: str | None = None,
+        legacy_blueprint_key: str | None = None,
+    ) -> EnvironmentArtifactMetadata:
         acquired = self._run(
             [
                 self.executable,
@@ -54,24 +68,34 @@ class RCCArtifactAdapter:
                 "--json",
             ]
         )
-        artifact = _artifact(_json_object(acquired.stdout))
+        payload = _json_object(acquired.stdout)
+        artifact = _artifact(payload)
+        specification = _optional_digest(payload, "specificationDigest", specification_digest)
+        legacy = _optional_string(payload, "legacyBlueprintKey", legacy_blueprint_key)
         return EnvironmentArtifactMetadata(
             artifact=artifact,
+            specification_digest=specification,
+            legacy_blueprint_key=legacy,
             archive=archive,
+            archive_sha256=_sha256(archive),
+            archive_size=archive.stat().st_size,
             rcc_version=rcc_version or self.version(),
             robot=robot or Path("robot.yaml"),
             acquired=True,
         )
 
     def verify(self, robot: Path) -> None:
-        self._run([self.executable, "--no-build", "ht", "vars", "--robot", str(robot)])
+        result = self._run([self.executable, "--no-build", "ht", "vars", "--robot", str(robot), "--json"])
+        value = json.loads(result.stdout)
+        if not isinstance(value, list):
+            raise TypeError("RCC ht vars JSON output was not an array")
 
     def version(self) -> str:
         result = self._run([self.executable, "version"])
         match = re.search(r"(?:^|\s)v?(\d+\.\d+\.\d+)(?:\s|$)", result.stdout)
         if not match:
             raise RuntimeError("RCC version output did not contain a semantic version")
-        return match.group(1)
+        return match.group(0).strip()
 
     def _run(self, argv: list[str]):
         result = self.runner.run(argv, timeout=self.timeout)
@@ -95,7 +119,43 @@ def _json_object(output: str) -> dict:
 
 
 def _artifact(payload: dict) -> str:
-    value = payload.get("artifact") or payload.get("artifact_digest") or payload.get("digest")
+    value = payload.get("artifactDigest") or payload.get("artifact") or payload.get("artifact_digest") or payload.get("digest")
     if not isinstance(value, str) or not value.startswith("sha256:"):
         raise RuntimeError("RCC JSON output did not contain an artifact digest")
     return value
+
+
+def _required_digest(payload: dict, key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+        raise RuntimeError(f"RCC JSON output did not contain {key}")
+    return value
+
+
+def _required_string(payload: dict, key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"RCC JSON output did not contain {key}")
+    return value
+
+
+def _optional_digest(payload: dict, key: str, fallback: str | None) -> str:
+    value = payload.get(key, fallback)
+    if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+        raise RuntimeError(f"RCC JSON output did not contain {key}")
+    return value
+
+
+def _optional_string(payload: dict, key: str, fallback: str | None) -> str:
+    value = payload.get(key, fallback)
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"RCC JSON output did not contain {key}")
+    return value
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
