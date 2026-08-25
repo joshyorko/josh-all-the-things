@@ -17,6 +17,8 @@ class BuildRequest(RequestModel):
     brew: Path | None = None
     images: list[str] = Field(default_factory=list)
     all_images: bool = False
+    rcc_environment: Literal["off", "auto", "required"] = "off"
+    rcc_robot: Path | None = None
 
     @model_validator(mode="after")
     def image_modes_are_exclusive(self):
@@ -34,6 +36,17 @@ class ServeRequest(RequestModel):
     haul: Path
 
 
+class EnvironmentArtifactMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    archive: Path
+    rcc_version: str
+    robot: Path
+    provider: Literal["local"] = "local"
+    acquired: bool = False
+
+
 class OperationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -46,6 +59,7 @@ class OperationResult(BaseModel):
     sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     producer_version: str
     diagnostics: str = ""
+    environment_artifact: EnvironmentArtifactMetadata | None = None
 
     @field_validator("diagnostics", mode="before")
     @classmethod
@@ -58,7 +72,7 @@ class OperationResult(BaseModel):
         temp = Path(temp_name)
         try:
             with os.fdopen(fd, "w") as handle:
-                json.dump(self.model_dump(mode="json"), handle, sort_keys=True, indent=2)
+                json.dump(self.model_dump(mode="json", exclude_none=True), handle, sort_keys=True, indent=2)
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())

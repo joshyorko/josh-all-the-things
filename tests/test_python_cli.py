@@ -57,6 +57,10 @@ def test_build_cli_calls_shared_service_and_prints_stable_json(capsys):
             "example/two:v1",
             "--output",
             "/tmp/haul.tar.zst",
+            "--rcc-environment",
+            "required",
+            "--rcc-robot",
+            "/workspace/robot.yaml",
             "--json",
         ],
         service=service,
@@ -65,6 +69,8 @@ def test_build_cli_calls_shared_service_and_prints_stable_json(capsys):
     operation, request = service.calls[0]
     assert operation == "build"
     assert request.images == ["example/one:latest", "example/two:v1"]
+    assert request.rcc_environment == "required"
+    assert request.rcc_robot == Path("/workspace/robot.yaml")
     payload = json.loads(capsys.readouterr().out)
     assert payload["format_version"] == 1
     assert payload["operation"] == "build"

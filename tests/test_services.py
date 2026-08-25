@@ -1,4 +1,4 @@
-from jat.models import BuildRequest, RestoreRequest
+from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest
 from jat.safety import ArchiveMember
 from jat.services import JATService
 
@@ -25,6 +25,8 @@ class FakeArchive:
         root.mkdir(parents=True, exist_ok=True)
         name = "Brewfile" if strip_components else "file.txt"
         (root / name).write_text("restored")
+        if not strip_components:
+            (root / "robot.yaml").write_text("tasks: {}\n")
 
 
 class FakeHauler:
@@ -71,13 +73,113 @@ class FakeHauler:
             target.write_bytes(b"brew")
 
 
-def service(tmp_path, archive=None, hauler=None):
+class RccHauler(FakeHauler):
+    def inventory(self, store, temp):
+        references = super().inventory(store, temp)
+        references.append({"Reference": "hauler/rcc-environment.rcca:latest", "Type": "file"})
+        return references
+
+    def extract(self, reference, store, temp, output):
+        super().extract(reference, store, temp, output)
+        if reference.endswith("rcc-environment.rcca:latest"):
+            target = output / "rcc" / "rcc-environment.rcca"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"rcca")
+
+
+class FakeRcc:
+    def __init__(self):
+        self.calls = []
+
+    def publish_and_export(self, source, archive, robot=None):
+        self.calls.append(("publish_and_export", source, archive, robot))
+        archive.write_bytes(b"rcca")
+        return EnvironmentArtifactMetadata(
+            artifact="sha256:" + "b" * 64,
+            archive=archive,
+            rcc_version="18.19.1",
+            robot=robot or source / "robot.yaml",
+        )
+
+    def acquire(self, archive, robot, rcc_version=None):
+        self.calls.append(("acquire", archive, robot, rcc_version))
+        return EnvironmentArtifactMetadata(
+            artifact="sha256:" + "b" * 64,
+            archive=archive,
+            rcc_version=rcc_version or "18.19.1",
+            robot=robot,
+            acquired=True,
+        )
+
+    def verify(self, robot):
+        self.calls.append(("verify", robot))
+
+
+def service(tmp_path, archive=None, hauler=None, rcc=None):
     return JATService(
         archive=archive or FakeArchive(),
         hauler=hauler or FakeHauler(),
+        rcc=rcc,
         producer_version="synthetic-version",
         which=lambda command: f"/tools/{command}",
     )
+
+
+def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "robot.yaml").write_text("tasks: {}\n")
+    output = tmp_path / "haul.tar.zst"
+    rcc = FakeRcc()
+    result = service(tmp_path, hauler=RccHauler(), rcc=rcc).build(
+        BuildRequest(folder=source, output=output, rcc_environment="required")
+    )
+    assert result.success, result.diagnostics
+    assert rcc.calls[0][0] == "publish_and_export"
+    assert rcc.calls[0][3] == source / "robot.yaml"
+    assert result.environment_artifact.artifact == "sha256:" + "b" * 64
+
+
+def test_auto_rcc_without_descriptor_keeps_legacy_build(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "haul.tar.zst"
+    result = JATService(
+        archive=FakeArchive(),
+        hauler=FakeHauler(),
+        producer_version="synthetic-version",
+        which=lambda command: "/tools/rcc" if command == "rcc" else f"/tools/{command}",
+    ).build(BuildRequest(folder=source, output=output, rcc_environment="auto"))
+    assert result.success, result.diagnostics
+    assert result.environment_artifact is None
+
+
+def test_explicit_rcc_robot_under_source_wins_over_default(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "robot.yaml").write_text("default\n")
+    nested = source / "robots" / "portable.yaml"
+    nested.parent.mkdir()
+    nested.write_text("explicit\n")
+    rcc = FakeRcc()
+    result = service(tmp_path, hauler=RccHauler(), rcc=rcc).build(
+        BuildRequest(folder=source, output=tmp_path / "haul.tar.zst", rcc_environment="required", rcc_robot=nested)
+    )
+    assert result.success, result.diagnostics
+    assert rcc.calls[0][3] == nested
+
+
+def test_restore_acquires_and_verifies_rcc_before_promotion(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    destination = tmp_path / "restored"
+    rcc = FakeRcc()
+    result = service(tmp_path, hauler=RccHauler(extracted_workspace=True), rcc=rcc).restore(
+        RestoreRequest(haul=haul, destination=destination)
+    )
+    assert result.success, result.diagnostics
+    assert [call[0] for call in rcc.calls] == ["acquire", "verify"]
+    assert destination.exists()
 
 
 def test_build_is_create_only_and_validates_before_publication(tmp_path):

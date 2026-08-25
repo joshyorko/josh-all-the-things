@@ -20,6 +20,8 @@ def parser() -> argparse.ArgumentParser:
     images = build.add_mutually_exclusive_group()
     images.add_argument("--image", action="append", default=[], dest="images")
     images.add_argument("--all-images", action="store_true")
+    build.add_argument("--rcc-environment", choices=("off", "auto", "required"), default="off")
+    build.add_argument("--rcc-robot")
     build.add_argument("--json", action="store_true")
 
     restore = subcommands.add_parser("restore", help="Restore a portable workspace haul")
@@ -63,6 +65,8 @@ def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:
                 brew=parsed.brew,
                 images=parsed.images,
                 all_images=parsed.all_images,
+                rcc_environment=parsed.rcc_environment,
+                rcc_robot=parsed.rcc_robot,
             )
         )
     if parsed.command == "restore":

@@ -3,7 +3,13 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from jat.models import BuildRequest, OperationResult, RestoreRequest, ServeRequest
+from jat.models import (
+    BuildRequest,
+    EnvironmentArtifactMetadata,
+    OperationResult,
+    RestoreRequest,
+    ServeRequest,
+)
 
 
 def test_build_request_parses_typed_json_and_rejects_conflicting_image_modes(tmp_path):
@@ -20,6 +26,12 @@ def test_build_request_parses_typed_json_and_rejects_conflicting_image_modes(tmp
     assert request.images == ["ghcr.io/example/app:latest"]
     with pytest.raises(ValidationError):
         BuildRequest(folder=tmp_path, output=tmp_path / "out", images=["image"], all_images=True)
+
+
+def test_build_request_defaults_rcc_environment_off_and_accepts_robot(tmp_path):
+    request = BuildRequest(folder=tmp_path, output=tmp_path / "out", rcc_robot=tmp_path / "robot.yaml")
+    assert request.rcc_environment == "off"
+    assert request.rcc_robot == tmp_path / "robot.yaml"
 
 
 def test_restore_and_serve_requests_are_strict(tmp_path):
@@ -58,3 +70,20 @@ def test_operation_result_is_versioned_bounded_and_stable(tmp_path):
         "sha256": "a" * 64,
         "success": True,
     }
+
+
+def test_operation_result_can_carry_environment_artifact_metadata():
+    metadata = EnvironmentArtifactMetadata(
+        artifact="sha256:" + "a" * 64,
+        archive="rcc-environment.rcca",
+        rcc_version="18.19.1",
+        robot="robot.yaml",
+    )
+    result = OperationResult(
+        operation="restore",
+        success=True,
+        exit_status=0,
+        producer_version="synthetic",
+        environment_artifact=metadata,
+    )
+    assert result.environment_artifact == metadata
