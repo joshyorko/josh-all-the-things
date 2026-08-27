@@ -4,7 +4,7 @@
 
 **Goal:** Put the official pinned Hauler binary inside the JAT RCC Holotree before freeze and publish a freshly verified Linux amd64 environment artifact.
 
-**Architecture:** A JAT-owned manifest and installer run as RCC's post-install layer. `robot.yaml` selects a generated Linux freeze file carrying that hook; ordinary JAT task execution consumes only environment-owned Hauler/tar/zstd. The existing optional Homebrew recovery payload remains data-only.
+**Architecture:** A JAT-owned manifest and installer run as RCC's post-install layer. `robot.yaml` selects a generated Linux freeze file carrying that hook; ordinary JAT task execution consumes only environment-owned Hauler/tar/zstd. The artifact proof invokes Hauler through the materialized environment's Python because RCC v18.19.2 resolves bare command names before applying the child PATH. The existing optional Homebrew recovery payload remains data-only.
 
 **Tech Stack:** Bash, Python 3.13, RCC v18.19.2, Hauler v2.0.3, GNU tar/zstd, pytest, Ruff.
 
@@ -65,10 +65,10 @@
 - Modify: `README.md`
 
 **Interfaces:**
-- The builder's fresh verifier sequence is `env acquire`, `--no-build ht vars`, then `env exec --artifact <digest> -- hauler version`.
-- The receipt adds a bounded `verified_hauler` record without exposing temporary paths.
+- The builder's fresh verifier sequence is `env acquire`, `--no-build ht vars`, then a no-build `env exec --artifact <digest>` Python launcher that locates and runs `hauler version` inside the acquired environment.
+- The receipt adds bounded logical-command and launcher fields under `verified_hauler` without exposing temporary paths.
 
-- [ ] **Step 1: Add a fake-RCC test that requires the exact `hauler version` exec call and receipt assertion.**
+- [ ] **Step 1: Add a fake-RCC test that rejects a host-resolved bare command and requires the artifact-Python Hauler launcher and receipt assertion.**
 - [ ] **Step 2: Run the focused builder test and observe the missing proof.**
 - [ ] **Step 3: Add the minimal command and schema/README updates.**
 - [ ] **Step 4: Run builder, model, service, and shell syntax checks through the declared RCC environment.**
@@ -81,6 +81,6 @@
 - Evidence: external evidence directory supplied by the run
 
 - [ ] **Step 1: Run the create-only builder with isolated producer/verifier homes.**
-- [ ] **Step 2: In a second fresh `ROBOCORP_HOME`, acquire the archive and run `rcc env exec --artifact <digest> -- hauler version` with no build.**
+- [ ] **Step 2: In a second fresh `ROBOCORP_HOME`, acquire the archive and run the no-build RCC artifact-Python Hauler launcher with no build or post-acquire mutation.**
 - [ ] **Step 3: Run real JAT Doctor, Build, Restore, and Serve through the acquired artifact.**
 - [ ] **Step 4: Publish the immutable artifact through the existing carrier and a public GitHub Release asset for extension bootstrap, recording both identities and checksums.**

@@ -11,6 +11,12 @@ import pytest
 from scripts.build_environment_artifact import _stage_copy, build_parser, main
 
 
+HAULER_VERSION_CHECK = (
+    "import shutil, subprocess, sys; executable = shutil.which('hauler'); "
+    "sys.exit(127 if executable is None else subprocess.run([executable, 'version'], check=False).returncode)"
+)
+
+
 def write_fake_rcc(path: Path, log: Path) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -27,8 +33,10 @@ def write_fake_rcc(path: Path, log: Path) -> None:
         "    print(json.dumps([{'key': 'RCC_ENVIRONMENT_HASH', 'value': 'sha256:' + 'a' * 64}]))\n"
         "elif args[:2] == ['env', 'acquire']:\n"
         "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'verification': {'valid': os.environ.get('JAT_FAKE_RCC_FAIL_ACQUIRE') != '1'}}))\n"
-        "elif args[:2] == ['env', 'exec']:\n"
-        "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': 0}))\n"
+        "elif args[:2] == ['env', 'exec'] or args[:3] == ['--no-build', 'env', 'exec']:\n"
+        "    command = args[args.index('--') + 1:]\n"
+        "    exit_code = 127 if command == ['hauler', 'version'] else 0\n"
+        "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': exit_code}))\n"
         "elif args == ['version']:\n"
         "    print(os.environ.get('JAT_FAKE_RCC_VERSION', 'v18.19.2'))\n"
     )
@@ -73,9 +81,10 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
     assert calls[3][calls[3].index("--archive") + 1] != str(output)
     assert "--permissive-local" in calls[3] and "--json" in calls[3]
     assert calls[4][:3] == ["--no-build", "ht", "vars"]
-    assert calls[5][:2] == ["env", "exec"]
+    assert calls[5][:3] == ["--no-build", "env", "exec"]
     assert "--artifact" in calls[5]
     assert calls[6] == [
+        "--no-build",
         "env",
         "exec",
         "--artifact",
@@ -83,8 +92,9 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "--permissive-local",
         "--json",
         "--",
-        "hauler",
-        "version",
+        "python",
+        "-c",
+        HAULER_VERSION_CHECK,
     ]
 
     result = json.loads(receipt.read_text())
@@ -107,7 +117,12 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "rcc_executable": str(rcc),
         "verified_acquire": {"fresh_home": True, "no_build": True},
         "verified_exec": {"fresh_home": True},
-        "verified_hauler": {"fresh_home": True, "command": ["hauler", "version"], "exit_code": 0},
+        "verified_hauler": {
+            "fresh_home": True,
+            "command": ["hauler", "version"],
+            "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+            "exit_code": 0,
+        },
         "verified_no_build": {"fresh_home": True, "no_build": True},
     }
 
@@ -219,7 +234,12 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
                 "verified_acquire": {"fresh_home": True, "no_build": True},
                 "verified_no_build": {"fresh_home": True, "no_build": True},
                 "verified_exec": {"fresh_home": True},
-                "verified_hauler": {"fresh_home": True, "command": ["hauler", "version"], "exit_code": 0},
+                "verified_hauler": {
+                    "fresh_home": True,
+                    "command": ["hauler", "version"],
+                    "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+                    "exit_code": 0,
+                },
             }
         )
         + "\n"

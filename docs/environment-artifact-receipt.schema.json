@@ -17,7 +17,7 @@
     "verified_acquire": {"type": "object", "required": ["fresh_home", "no_build"], "properties": {"fresh_home": {"const": true}, "no_build": {"const": true}}, "additionalProperties": false},
     "verified_no_build": {"type": "object", "required": ["fresh_home", "no_build"], "properties": {"fresh_home": {"const": true}, "no_build": {"const": true}}, "additionalProperties": false},
     "verified_exec": {"type": "object", "required": ["fresh_home"], "properties": {"fresh_home": {"const": true}}, "additionalProperties": false},
-    "verified_hauler": {"type": "object", "required": ["fresh_home", "command", "exit_code"], "properties": {"fresh_home": {"const": true}, "command": {"const": ["hauler", "version"]}, "exit_code": {"const": 0}}, "additionalProperties": false}
+    "verified_hauler": {"type": "object", "required": ["fresh_home", "command", "launcher", "exit_code"], "properties": {"fresh_home": {"const": true}, "command": {"const": ["hauler", "version"]}, "launcher": {"type": "array", "const": ["python", "-c", "import shutil, subprocess, sys; executable = shutil.which('hauler'); sys.exit(127 if executable is None else subprocess.run([executable, 'version'], check=False).returncode)"]}, "exit_code": {"const": 0}}, "additionalProperties": false}
   },
   "additionalProperties": false
 }

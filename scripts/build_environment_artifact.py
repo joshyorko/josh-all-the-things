@@ -12,6 +12,12 @@ from pathlib import Path
 
 DEFAULT_RCC = "rcc"
 EXPECTED_RCC_VERSION = "v18.19.2"
+HAULER_VERSION_COMMAND = (
+    "python",
+    "-c",
+    "import shutil, subprocess, sys; executable = shutil.which('hauler'); "
+    "sys.exit(127 if executable is None else subprocess.run([executable, 'version'], check=False).returncode)",
+)
 
 
 def _environment(source: dict[str, str], home: Path, rcc_home: Path) -> dict[str, str]:
@@ -115,13 +121,14 @@ def main(argv: list[str] | None = None) -> int:
         variables = _json(_run([args.rcc, "--no-build", "ht", "vars", "--robot", str(robot), "--json"], cwd=root, env=verifier_env, timeout=args.timeout))
         if not isinstance(variables, list):
             raise TypeError("no-build verification did not return RCC variables")
-        execution = _json(_run([args.rcc, "env", "exec", "--artifact", artifact, "--permissive-local", "--json", "--", "python", "-c", "print('jat-runtime-proof')"], cwd=root, env=verifier_env, timeout=args.timeout))
+        execution = _json(_run([args.rcc, "--no-build", "env", "exec", "--artifact", artifact, "--permissive-local", "--json", "--", "python", "-c", "print('jat-runtime-proof')"], cwd=root, env=verifier_env, timeout=args.timeout))
         if execution.get("artifactDigest") != artifact or execution.get("exitCode") != 0:
             raise RuntimeError("environment execution proof failed")
         hauler_execution = _json(
             _run(
                 [
                     args.rcc,
+                    "--no-build",
                     "env",
                     "exec",
                     "--artifact",
@@ -129,8 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                     "--permissive-local",
                     "--json",
                     "--",
-                    "hauler",
-                    "version",
+                    *HAULER_VERSION_COMMAND,
                 ],
                 cwd=root,
                 env=verifier_env,
@@ -158,7 +164,12 @@ def main(argv: list[str] | None = None) -> int:
             "verified_acquire": {"fresh_home": True, "no_build": True},
             "verified_no_build": {"fresh_home": True, "no_build": True},
             "verified_exec": {"fresh_home": True},
-            "verified_hauler": {"fresh_home": True, "command": ["hauler", "version"], "exit_code": 0},
+            "verified_hauler": {
+                "fresh_home": True,
+                "command": ["hauler", "version"],
+                "launcher": list(HAULER_VERSION_COMMAND),
+                "exit_code": 0,
+            },
         }
         staged_receipt = work / "jat-runtime.json"
         staged_receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
