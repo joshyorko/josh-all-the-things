@@ -490,9 +490,15 @@ def _sha256(path: Path) -> str:
 
 
 def _git_version(root: Path) -> str:
-    completed = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False
-    )
+    pinned = os.environ.get("JAT_GIT_SHA") or os.environ.get("JOSH_ROOM_JAT_SHA")
+    if pinned:
+        return pinned
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return "unknown"
     return completed.stdout.strip() if completed.returncode == 0 else "unknown"
 
 

@@ -91,3 +91,20 @@ def test_runtime_dependencies_are_explicitly_pinned():
     body = Path("conda.yaml").read_text()
     assert "robocorp-log==" in body
     assert "robocorp-truststore==" in body
+
+
+def test_production_runtime_does_not_carry_unused_host_or_test_tools():
+    body = Path("conda.yaml").read_text()
+    assert "robocorp-tasks==4.1.1" in body
+    for dependency in ("      - robocorp==", "  - uv=", "  - git", "  - gzip", "      - pytest==", "      - ruff=="):
+        assert dependency not in body
+
+
+def test_producer_version_fails_soft_when_git_is_unavailable(monkeypatch, tmp_path):
+    from jat.services import _git_version
+
+    def unavailable(*_args, **_kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr("jat.services.subprocess.run", unavailable)
+    assert _git_version(tmp_path) == "unknown"
