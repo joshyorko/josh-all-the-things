@@ -92,15 +92,16 @@ def test_archive_resolves_gtar_then_capable_path_tar():
     assert adapter.executable == "/usr/bin/tar"
 
 
-def test_archive_resolves_linuxbrew_keg_only_tar():
+def test_archive_does_not_resolve_linuxbrew_keg_only_tar():
     runner = RecordingRunner(
         [
             result(["brew", "--prefix", "gnu-tar"], stdout="/home/linuxbrew/.linuxbrew/opt/gnu-tar\n"),
             result(exit_status=0),
         ]
     )
-    adapter = ArchiveAdapter(runner, which=lambda name: "/tools/brew" if name == "brew" else None)
-    assert adapter.executable == "/home/linuxbrew/.linuxbrew/opt/gnu-tar/bin/tar"
+    with pytest.raises(RuntimeError, match="GNU tar with --zstd is unavailable"):
+        ArchiveAdapter(runner, which=lambda name: "/tools/brew" if name == "brew" else None)
+    assert all(call[0][0] != "/tools/brew" for call in runner.calls)
 
 
 def test_archive_uses_exact_create_extract_and_list_argv(tmp_path):

@@ -118,6 +118,27 @@ def main(argv: list[str] | None = None) -> int:
         execution = _json(_run([args.rcc, "env", "exec", "--artifact", artifact, "--permissive-local", "--json", "--", "python", "-c", "print('jat-runtime-proof')"], cwd=root, env=verifier_env, timeout=args.timeout))
         if execution.get("artifactDigest") != artifact or execution.get("exitCode") != 0:
             raise RuntimeError("environment execution proof failed")
+        hauler_execution = _json(
+            _run(
+                [
+                    args.rcc,
+                    "env",
+                    "exec",
+                    "--artifact",
+                    artifact,
+                    "--permissive-local",
+                    "--json",
+                    "--",
+                    "hauler",
+                    "version",
+                ],
+                cwd=root,
+                env=verifier_env,
+                timeout=args.timeout,
+            )
+        )
+        if hauler_execution.get("artifactDigest") != artifact or hauler_execution.get("exitCode") != 0:
+            raise RuntimeError("Hauler version execution proof failed")
         jat_sha = args.jat_git_sha or _git_sha(root, producer_env, args.timeout)
         if len(jat_sha) != 40 or any(character not in "0123456789abcdef" for character in jat_sha):
             raise ValueError("JAT git SHA must be a full lowercase commit digest")
@@ -137,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             "verified_acquire": {"fresh_home": True, "no_build": True},
             "verified_no_build": {"fresh_home": True, "no_build": True},
             "verified_exec": {"fresh_home": True},
+            "verified_hauler": {"fresh_home": True, "command": ["hauler", "version"], "exit_code": 0},
         }
         staged_receipt = work / "jat-runtime.json"
         staged_receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")

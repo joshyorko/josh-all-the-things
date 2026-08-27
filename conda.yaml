@@ -23,3 +23,6 @@ dependencies:
       - pydantic==2.12.5
       - pytest==9.1.1
       - ruff==0.16.4
+
+rccPostInstall:
+  - bash scripts/install_hauler.sh

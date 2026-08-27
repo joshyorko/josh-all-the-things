@@ -75,6 +75,17 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
     assert calls[4][:3] == ["--no-build", "ht", "vars"]
     assert calls[5][:2] == ["env", "exec"]
     assert "--artifact" in calls[5]
+    assert calls[6] == [
+        "env",
+        "exec",
+        "--artifact",
+        "sha256:" + "a" * 64,
+        "--permissive-local",
+        "--json",
+        "--",
+        "hauler",
+        "version",
+    ]
 
     result = json.loads(receipt.read_text())
     assert result["operation"] == "build"
@@ -96,6 +107,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "rcc_executable": str(rcc),
         "verified_acquire": {"fresh_home": True, "no_build": True},
         "verified_exec": {"fresh_home": True},
+        "verified_hauler": {"fresh_home": True, "command": ["hauler", "version"], "exit_code": 0},
         "verified_no_build": {"fresh_home": True, "no_build": True},
     }
 
@@ -207,6 +219,7 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
                 "verified_acquire": {"fresh_home": True, "no_build": True},
                 "verified_no_build": {"fresh_home": True, "no_build": True},
                 "verified_exec": {"fresh_home": True},
+                "verified_hauler": {"fresh_home": True, "command": ["hauler", "version"], "exit_code": 0},
             }
         )
         + "\n"

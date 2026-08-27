@@ -27,6 +27,7 @@ jq -e '.format_version == 2 and .operation == "build" and .success == true and
   .verified_acquire.fresh_home == true and .verified_acquire.no_build == true and
   .verified_no_build.fresh_home == true and .verified_no_build.no_build == true and
   .verified_exec.fresh_home == true and
+  .verified_hauler.fresh_home == true and .verified_hauler.command == ["hauler", "version"] and .verified_hauler.exit_code == 0 and
   (.artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
   (.specification_digest | test("^sha256:[0-9a-f]{64}$")) and
   (.legacy_blueprint_key | type == "string" and length > 0) and

@@ -40,6 +40,27 @@ def test_robot_declares_typed_task_surface():
     assert "  JoshAllTheThings:" not in body
 
 
+def test_linux_environment_contract_installs_hauler_before_freeze():
+    conda = Path("conda.yaml").read_text()
+    robot = Path("robot.yaml").read_text()
+    freeze = Path("environment_linux_amd64_freeze.yaml")
+
+    assert "rccPostInstall:" in conda
+    assert "bash scripts/install_hauler.sh" in conda
+    assert "preRunScripts:" not in robot
+    assert "install_dependencies.sh" not in robot
+    assert freeze.is_file()
+    assert "rccPostInstall:" in freeze.read_text()
+
+
+def test_normal_runtime_contract_has_no_homebrew_install_or_probe():
+    assert "brew" not in Path("robot.yaml").read_text().lower()
+    assert "homebrew" not in Path("robot.yaml").read_text().lower()
+    assert "brew" not in Path("src/jat/archive.py").read_text().lower()
+    assert not Path("scripts/install_dependencies.sh").exists()
+    assert not Path("Brewfile").exists()
+
+
 def test_rcc_tasks_use_python_service_not_legacy_bash():
     body = Path("tasks.py").read_text()
     assert "JATService" in body

@@ -353,6 +353,7 @@ requires them and you understand the transport tradeoff.
 - `src/jat/` is the shared Python service implementation.
 - `tasks.py` contains thin typed `robocorp.tasks` entrypoints.
 - `robot.yaml` exposes `Build`, `Restore`, `Serve`, `JAT`, and devTask `Doctor`.
-- `conda.yaml` defines the contained runtime and only bootstraps Homebrew during
-  environment creation. The main tool runs as the RCC task, not as a
-  `rccPostInstall` hook.
+- `conda.yaml` defines the contained runtime and installs the pinned official
+  Hauler release through RCC's `rccPostInstall` hook before the environment is
+  frozen. Homebrew is not part of normal JAT execution; `--brew` is only a
+  data payload option.
