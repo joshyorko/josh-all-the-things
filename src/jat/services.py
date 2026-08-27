@@ -210,7 +210,9 @@ class JATService:
     def serve(self, request: ServeRequest) -> OperationResult:
         try:
             haul = existing_file(request.haul)
-            with OwnedStage(Path.cwd(), "serve") as stage:
+            runtime_directory = Path(os.environ.get("JAT_RUN_DIR") or Path.cwd())
+            runtime_directory.mkdir(parents=True, exist_ok=True)
+            with OwnedStage(runtime_directory, "serve") as stage:
                 store = stage.path / "store"
                 temp = stage.path / "hauler-temp"
                 registry = stage.path / "registry"
