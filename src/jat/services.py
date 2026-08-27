@@ -210,8 +210,7 @@ class JATService:
     def serve(self, request: ServeRequest) -> OperationResult:
         try:
             haul = existing_file(request.haul)
-            runtime_directory = Path(os.environ.get("JAT_RUN_DIR") or Path.cwd())
-            runtime_directory.mkdir(parents=True, exist_ok=True)
+            runtime_directory = _serve_runtime_directory()
             with OwnedStage(runtime_directory, "serve") as stage:
                 store = stage.path / "store"
                 temp = stage.path / "hauler-temp"
@@ -312,6 +311,21 @@ class JATService:
             producer_version=self.producer_version,
             diagnostics=str(error),
         )
+
+
+def _serve_runtime_directory() -> Path:
+    runtime_directory = Path(os.environ.get("JAT_RUN_DIR") or Path.cwd()).expanduser().resolve()
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        environment_directory = Path(conda_prefix).expanduser().resolve()
+        try:
+            runtime_directory.relative_to(environment_directory)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("JAT Serve runtime directory must be outside the acquired environment")
+    runtime_directory.mkdir(parents=True, exist_ok=True)
+    return runtime_directory
 
 
 def _write_manifest(

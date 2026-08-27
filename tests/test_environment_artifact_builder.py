@@ -8,14 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from scripts.build_environment_artifact import _stage_copy, build_parser, main
+from scripts.build_environment_artifact import HAULER_VERSION_COMMAND, _stage_copy, build_parser, main
 
 
 HAULER_VERSION_CHECK = (
     "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); "
-    "prefix = os.environ.get('CONDA_PREFIX'); resolved = os.path.realpath(executable) if executable else ''; "
-    "inside = bool(prefix and resolved.startswith(os.path.realpath(prefix) + os.sep)); "
-    "sys.exit(127 if not inside else subprocess.run([resolved, 'version'], check=False).returncode)"
+    "prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; "
+    "resolved = os.path.realpath(executable) if executable else ''; "
+    "python_resolved = os.path.realpath(sys.executable); "
+    "inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); "
+    "python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); "
+    "sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
 )
 
 
@@ -128,6 +131,29 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         },
         "verified_no_build": {"fresh_home": True, "no_build": True},
     }
+
+
+def test_hauler_proof_rejects_host_python_even_when_hauler_is_under_prefix(tmp_path):
+    prefix = tmp_path / "holotree"
+    bin_directory = prefix / "bin"
+    bin_directory.mkdir(parents=True)
+    marker = tmp_path / "hauler-invoked"
+    hauler = bin_directory / "hauler"
+    hauler.write_text(f"#!/bin/sh\n/usr/bin/touch {marker}\n")
+    hauler.chmod(0o755)
+
+    environment = dict(os.environ)
+    environment.update(CONDA_PREFIX=str(prefix), PATH=str(bin_directory))
+    result = subprocess.run(
+        [sys.executable, "-c", HAULER_VERSION_COMMAND[2]],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 127
+    assert not marker.exists()
 
 
 def test_builder_defaults_to_rcc_and_does_not_export_to_final_output(tmp_path, monkeypatch):
