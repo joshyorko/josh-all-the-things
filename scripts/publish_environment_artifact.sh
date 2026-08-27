@@ -28,7 +28,8 @@ jq -e '.format_version == 2 and .operation == "build" and .success == true and
   .verified_no_build.fresh_home == true and .verified_no_build.no_build == true and
   .verified_exec.fresh_home == true and
   .verified_hauler.fresh_home == true and .verified_hauler.command == ["hauler", "version"] and
-  .verified_hauler.launcher[0:2] == ["python", "-c"] and (.verified_hauler.launcher[2] | contains("shutil.which")) and .verified_hauler.exit_code == 0 and
+  .verified_hauler.launcher[0:2] == ["python", "-c"] and (.verified_hauler.launcher[2] | contains("shutil.which")) and
+  .verified_hauler.resolved_under_conda_prefix == true and .verified_hauler.exit_code == 0 and
   (.artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
   (.specification_digest | test("^sha256:[0-9a-f]{64}$")) and
   (.legacy_blueprint_key | type == "string" and length > 0) and

@@ -15,8 +15,10 @@ EXPECTED_RCC_VERSION = "v18.19.2"
 HAULER_VERSION_COMMAND = (
     "python",
     "-c",
-    "import shutil, subprocess, sys; executable = shutil.which('hauler'); "
-    "sys.exit(127 if executable is None else subprocess.run([executable, 'version'], check=False).returncode)",
+    "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); "
+    "prefix = os.environ.get('CONDA_PREFIX'); resolved = os.path.realpath(executable) if executable else ''; "
+    "inside = bool(prefix and resolved.startswith(os.path.realpath(prefix) + os.sep)); "
+    "sys.exit(127 if not inside else subprocess.run([resolved, 'version'], check=False).returncode)",
 )
 
 
@@ -168,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
                 "fresh_home": True,
                 "command": ["hauler", "version"],
                 "launcher": list(HAULER_VERSION_COMMAND),
+                "resolved_under_conda_prefix": True,
                 "exit_code": 0,
             },
         }

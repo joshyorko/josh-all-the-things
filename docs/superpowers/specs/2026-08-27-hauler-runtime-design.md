@@ -40,7 +40,8 @@ directories. It runs RCC v18.19.2 publish/export, removes producer access
 before fresh acquire, proves `--no-build ht vars`, and adds a no-build
 `env exec --artifact <digest>` check. Because RCC v18.19.2 resolves a relative
 command before applying the materialized child environment, that check invokes
-the artifact's Python, locates `hauler` with the materialized PATH, and runs
+the artifact's Python, locates `hauler` with the materialized PATH, verifies
+that its resolved path is below the materialized `CONDA_PREFIX`, and runs
 `hauler version`. Only after all proofs pass are the `.rcca` and receipt
 promoted as create-only outputs. The final receipt records the logical Hauler
 operation and its artifact-Python launcher alongside the JAT commit, RCC

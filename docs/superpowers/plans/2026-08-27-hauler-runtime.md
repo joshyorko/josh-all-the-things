@@ -4,7 +4,7 @@
 
 **Goal:** Put the official pinned Hauler binary inside the JAT RCC Holotree before freeze and publish a freshly verified Linux amd64 environment artifact.
 
-**Architecture:** A JAT-owned manifest and installer run as RCC's post-install layer. `robot.yaml` selects a generated Linux freeze file carrying that hook; ordinary JAT task execution consumes only environment-owned Hauler/tar/zstd. The artifact proof invokes Hauler through the materialized environment's Python because RCC v18.19.2 resolves bare command names before applying the child PATH. The existing optional Homebrew recovery payload remains data-only.
+**Architecture:** A JAT-owned manifest and installer run as RCC's post-install layer. `robot.yaml` selects a generated Linux freeze file carrying that hook; ordinary JAT task execution consumes only environment-owned Hauler/tar/zstd. The artifact proof invokes Hauler through the materialized environment's Python because RCC v18.19.2 resolves bare command names before applying the child PATH, and the launcher requires the resolved binary below `CONDA_PREFIX`. The existing optional Homebrew recovery payload remains data-only.
 
 **Tech Stack:** Bash, Python 3.13, RCC v18.19.2, Hauler v2.0.3, GNU tar/zstd, pytest, Ruff.
 
@@ -66,7 +66,7 @@
 
 **Interfaces:**
 - The builder's fresh verifier sequence is `env acquire`, `--no-build ht vars`, then a no-build `env exec --artifact <digest>` Python launcher that locates and runs `hauler version` inside the acquired environment.
-- The receipt adds bounded logical-command and launcher fields under `verified_hauler` without exposing temporary paths.
+- The receipt adds bounded logical-command, launcher, and resolved-under-`CONDA_PREFIX` fields under `verified_hauler` without exposing temporary paths.
 
 - [ ] **Step 1: Add a fake-RCC test that rejects a host-resolved bare command and requires the artifact-Python Hauler launcher and receipt assertion.**
 - [ ] **Step 2: Run the focused builder test and observe the missing proof.**

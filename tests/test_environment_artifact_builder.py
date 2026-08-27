@@ -12,8 +12,10 @@ from scripts.build_environment_artifact import _stage_copy, build_parser, main
 
 
 HAULER_VERSION_CHECK = (
-    "import shutil, subprocess, sys; executable = shutil.which('hauler'); "
-    "sys.exit(127 if executable is None else subprocess.run([executable, 'version'], check=False).returncode)"
+    "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); "
+    "prefix = os.environ.get('CONDA_PREFIX'); resolved = os.path.realpath(executable) if executable else ''; "
+    "inside = bool(prefix and resolved.startswith(os.path.realpath(prefix) + os.sep)); "
+    "sys.exit(127 if not inside else subprocess.run([resolved, 'version'], check=False).returncode)"
 )
 
 
@@ -121,6 +123,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
             "fresh_home": True,
             "command": ["hauler", "version"],
             "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+            "resolved_under_conda_prefix": True,
             "exit_code": 0,
         },
         "verified_no_build": {"fresh_home": True, "no_build": True},
@@ -238,6 +241,7 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
                     "fresh_home": True,
                     "command": ["hauler", "version"],
                     "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+                    "resolved_under_conda_prefix": True,
                     "exit_code": 0,
                 },
             }
