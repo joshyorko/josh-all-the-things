@@ -89,6 +89,9 @@ def test_windows_local_file_probe_uses_artifact_python_argv():
 def test_windows_serve_smoke_downloads_workspace_from_fileserver():
     workflow = Path(".github/workflows/windows-runtime.yml").read_text()
     assert "127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst" in workflow
+    assert "Invoke-WebRequest -Uri $workspaceUrl -OutFile $downloadedWorkspace -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null" in workflow
+    assert "Get-Item -LiteralPath $downloadedWorkspace" in workflow
+    assert "$response.StatusCode" not in workflow
 
 
 def test_normal_runtime_contract_has_no_homebrew_install_or_probe():

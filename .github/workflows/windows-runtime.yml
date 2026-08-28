@@ -167,6 +167,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "JAT Restore failed on Windows" }
           $serveRequest = Join-Path $env:RUNNER_TEMP "windows-serve.json"
           @{ haul = $haul } | ConvertTo-Json | Out-File $serveRequest -Encoding utf8
+          $serveRunDir = Join-Path $env:RUNNER_TEMP "jat-serve-runtime"
+          New-Item -ItemType Directory -Force -Path $serveRunDir | Out-Null
+          $env:JAT_RUN_DIR = $serveRunDir
           $serveOut = Join-Path $env:RUNNER_TEMP "windows-serve.out"
           $serveErr = Join-Path $env:RUNNER_TEMP "windows-serve.err"
           $serveArgs = @("task", "run", "--robot", (Join-Path $PWD "robot.yaml"), "--task", "Serve", "--", "--json-input", $serveRequest)
@@ -178,8 +181,11 @@ jobs:
           for ($attempt = 0; $attempt -lt 30; $attempt++) {
             if ($serve.HasExited) { Get-Content $serveOut, $serveErr; throw "JAT Serve exited before fileserver readiness" }
             try {
-              $response = Invoke-WebRequest -Uri $workspaceUrl -OutFile $downloadedWorkspace -UseBasicParsing -TimeoutSec 2
-              if ($response.StatusCode -eq 200 -and (Get-Item $downloadedWorkspace).Length -gt 0) { $ready = $true; break }
+              Invoke-WebRequest -Uri $workspaceUrl -OutFile $downloadedWorkspace -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null
+              if ((Test-Path -LiteralPath $downloadedWorkspace -PathType Leaf) -and (Get-Item -LiteralPath $downloadedWorkspace).Length -gt 0) {
+                $ready = $true
+                break
+              }
             } catch { }
             Start-Sleep -Seconds 1
           }
