@@ -326,10 +326,40 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
         ["manifest", "fetch", "--descriptor", reference],
     ]
 
+    weak = json.loads(receipt.read_text())
+    weak["verified_hauler"]["launcher"] = [
+        "python",
+        "-c",
+        "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); "
+        "prefix = os.environ.get('CONDA_PREFIX'); resolved = os.path.realpath(executable) if executable else ''; "
+        "inside = bool(prefix and resolved.startswith(os.path.realpath(prefix) + os.sep)); "
+        "sys.exit(127 if not inside else subprocess.run([resolved, 'version'], check=False).returncode)",
+    ]
+    receipt.write_text(json.dumps(weak) + "\n")
+    oras_log.unlink(missing_ok=True)
+    weak_rejected = subprocess.run(
+        [
+            str(root / "scripts/publish_environment_artifact.sh"),
+            "--archive",
+            str(archive),
+            "--receipt",
+            str(receipt),
+            "--repository",
+            "ghcr.io/example/jat-runtime",
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert weak_rejected.returncode != 0
+    assert not oras_log.exists(), "weak Hauler proof reached ORAS"
+
     invalid = json.loads(receipt.read_text())
     invalid["rcc_version"] = "v18.19.1"
     receipt.write_text(json.dumps(invalid) + "\n")
-    oras_log.unlink()
+    oras_log.unlink(missing_ok=True)
     rejected = subprocess.run(
         [
             str(root / "scripts/publish_environment_artifact.sh"),

@@ -20,7 +20,12 @@ command -v jq >/dev/null
 command -v oras >/dev/null
 [[ -f $archive && -f $receipt ]] || { printf 'Verified JAT artifact and receipt are required.\n' >&2; exit 2; }
 [[ -f $schema ]] || { printf 'Receipt schema is required: %s\n' "$schema" >&2; exit 2; }
-jq -e '.format_version == 2 and .operation == "build" and .success == true and
+hauler_launcher=$(jq -er '
+  .properties.verified_hauler.properties.launcher.const
+  | select(type == "array" and length == 3 and .[0] == "python" and .[1] == "-c" and (.[2] | type == "string"))
+  | .[2]
+' "$schema")
+jq -e --arg hauler_launcher "$hauler_launcher" '.format_version == 2 and .operation == "build" and .success == true and
   (.jat_git_sha | test("^[0-9a-f]{40}$")) and
   (.rcc_executable | type == "string" and length > 0) and
   .rcc_version == "v18.19.2" and .platform == "linux_amd64" and
@@ -28,7 +33,7 @@ jq -e '.format_version == 2 and .operation == "build" and .success == true and
   .verified_no_build.fresh_home == true and .verified_no_build.no_build == true and
   .verified_exec.fresh_home == true and
   .verified_hauler.fresh_home == true and .verified_hauler.command == ["hauler", "version"] and
-  .verified_hauler.launcher[0:2] == ["python", "-c"] and (.verified_hauler.launcher[2] | contains("shutil.which")) and
+  .verified_hauler.launcher == ["python", "-c", $hauler_launcher] and
   .verified_hauler.resolved_under_conda_prefix == true and .verified_hauler.exit_code == 0 and
   (.artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
   (.specification_digest | test("^sha256:[0-9a-f]{64}$")) and
