@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 DEFAULT_RCC = "rcc"
-EXPECTED_RCC_VERSION = "v18.19.2"
+EXPECTED_RCC_VERSION = "v18.19.3"
 HAULER_VERSION_COMMAND = (
     "python",
     "-c",

@@ -10,7 +10,7 @@ that can be captured or restored; Homebrew is not an installation mechanism.
 
 - JAT owns the Hauler installer, its exact upstream release manifest, and the
   capture/restore/serve Python service.
-- RCC v18.19.2 owns dependency construction, `rccPostInstall`, freeze files,
+- RCC v18.19.3 owns dependency construction, `rccPostInstall`, freeze files,
   artifact publish/export/acquire, and Holotree materialization.
 - Josh Room consumes the resulting immutable JAT environment artifact and the
   separately versioned JAT source contract; it does not absorb JAT code into
@@ -36,9 +36,9 @@ tar is unavailable and never probes Homebrew.
 ## Artifact proof
 
 The artifact builder uses isolated producer and verifier `ROBOCORP_HOME`
-directories. It runs RCC v18.19.2 publish/export, removes producer access
+directories. It runs RCC v18.19.3 publish/export, removes producer access
 before fresh acquire, proves `--no-build ht vars`, and adds a no-build
-`env exec --artifact <digest>` check. Because RCC v18.19.2 resolves a relative
+`env exec --artifact <digest>` check. Because RCC v18.19.3 resolves a relative
 command before applying the materialized child environment, that check invokes
 the artifact's Python, locates `hauler` with the materialized PATH, verifies
 that its resolved path is below the materialized `CONDA_PREFIX`, and runs

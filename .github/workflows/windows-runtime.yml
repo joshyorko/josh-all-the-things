@@ -261,7 +261,7 @@ jobs:
 
           receipt = json.loads(Path("dist/jat-runtime.json").read_text())
           assert receipt["platform"] == "linux_amd64"
-          assert receipt["rcc_version"] == "v18.19.2"
+          assert receipt["rcc_version"] == "v18.19.3"
           assert receipt["verified_acquire"] == {"fresh_home": True, "no_build": True}
           assert receipt["verified_no_build"] == {"fresh_home": True, "no_build": True}
           assert receipt["verified_hauler"]["resolved_under_conda_prefix"] is True

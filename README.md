@@ -19,11 +19,11 @@ its RCC-managed runtime; it is not the haul itself.
 
 ## Build a verified RCC Environment Artifact
 
-Build the canonical JAT runtime artifact with RCC v18.19.2. The builder uses
+Build the canonical JAT runtime artifact with RCC v18.19.3. The builder uses
 isolated producer and verifier homes, publishes and exports through RCC's
 official Environment Artifact commands, acquires the archive into the fresh
 verifier, and proves ordinary `--no-build` resolution before promotion. RCC
-v18.19.2 resolves a relative `env exec` command before applying the child
+v18.19.3 resolves a relative `env exec` command before applying the child
 environment, so the Hauler check uses the artifact's Python to locate and run
 the `hauler` binary from the acquired Holotree. The launcher also requires the
 resolved executable to be below the acquired `CONDA_PREFIX`, preventing a

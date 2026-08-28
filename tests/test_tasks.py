@@ -100,18 +100,17 @@ def test_rcc_manifest_pins_current_linux_and_windows_assets_without_future_place
     manifest_text = manifest_path.read_text()
     manifest = json.loads(manifest_text)
     assert manifest["schema_version"] == 1
-    assert manifest["version"] == "v18.19.2"
-    assert "v18.19.3" not in manifest_text
+    assert manifest["version"] == "v18.19.3"
     assert manifest["platforms"] == {
         "linux_amd64": {
             "asset": "rcc-linux64",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.2/rcc-linux64",
-            "sha256": "3a90a331325feb5b75b3ebc7492303a964438ce017347f451aeee3ed7d578b3d",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-linux64",
+            "sha256": "7e588c01751ca2ae15ba13ef67f2f4b7567697a5a8389737059a73936f509428",
         },
         "windows_amd64": {
             "asset": "rcc-windows64.exe",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.2/rcc-windows64.exe",
-            "sha256": "43acaf8ba0ab4c22c60832ef7e0ef4556a32843147e5ca33539796da648bb470",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-windows64.exe",
+            "sha256": "523a6be8ad92235fbe0a4e4732699f2cd66f9ef6ad57e045df434257c46112e4",
         },
     }
     for pin in manifest["platforms"].values():
