@@ -53,6 +53,28 @@ def test_linux_environment_contract_installs_hauler_before_freeze():
     assert "rccPostInstall:" in freeze.read_text()
 
 
+def test_windows_source_environment_avoids_linux_only_tools():
+    robot = Path("robot.yaml").read_text()
+    windows = Path("environment_windows_amd64.yaml")
+    assert windows.is_file()
+    assert robot.index("environment_windows_amd64_freeze.yaml") < robot.index("environment_windows_amd64.yaml")
+    assert robot.index("environment_windows_amd64.yaml") < robot.index("environment_linux_amd64_freeze.yaml")
+    source = windows.read_text()
+    assert "python=3.13.11" in source
+    assert "python scripts/install_hauler.py" in source
+    for dependency in ("bash", "coreutils", "curl", "tar", "zstd"):
+        assert f"  - {dependency}" not in source
+
+
+def test_linux_source_contract_keeps_archive_tools():
+    source = Path("conda.yaml").read_text()
+    for dependency in ("coreutils", "curl", "tar", "zstd"):
+        assert f"  - {dependency}" in source
+    freeze = Path("environment_linux_amd64_freeze.yaml").read_text()
+    for dependency in ("coreutils", "tar", "zstd"):
+        assert dependency in freeze
+
+
 def test_normal_runtime_contract_has_no_homebrew_install_or_probe():
     assert "brew" not in Path("robot.yaml").read_text().lower()
     assert "homebrew" not in Path("robot.yaml").read_text().lower()

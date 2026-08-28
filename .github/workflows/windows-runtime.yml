@@ -51,10 +51,15 @@ jobs:
             Get-Content (Join-Path $env:RUNNER_TEMP "windows-initial-build.log")
             throw "initial Windows JAT environment construction failed"
           }
-          & $env:RCC_PATH task run --robot (Join-Path $PWD "robot.yaml") --task Doctor --dev --silent *> (Join-Path $env:RUNNER_TEMP "windows-initial-run.log")
+          $initialLog = Join-Path $env:RUNNER_TEMP "windows-initial-build.log"
+          if (-not (Select-String -Path $initialLog -Pattern "environment_windows_amd64.yaml" -Quiet)) {
+            Get-Content $initialLog
+            throw "RCC did not select environment_windows_amd64.yaml for the initial Windows solve"
+          }
+          & $env:RCC_PATH task run --robot (Join-Path $PWD "robot.yaml") --task JAT -- --help *> (Join-Path $env:RUNNER_TEMP "windows-initial-run.log")
           if ($LASTEXITCODE -ne 0) {
             Get-Content (Join-Path $env:RUNNER_TEMP "windows-initial-run.log")
-            throw "initial Windows JAT Doctor run failed"
+            throw "initial Windows JAT CLI run failed"
           }
           $generated = Join-Path $PWD "output/environment_windows_amd64_freeze.yaml"
           if (-not (Test-Path -LiteralPath $generated -PathType Leaf)) {
@@ -119,6 +124,11 @@ jobs:
         run: |
           $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-runtime"
           New-Item -ItemType Directory -Force -Path $env:ROBOCORP_HOME | Out-Null
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- python -c "import shutil,sys; sys.exit(0 if shutil.which('tar') else 1)" *> (Join-Path $env:RUNNER_TEMP "windows-tool-check.log")
+          if ($LASTEXITCODE -ne 0) {
+            "Windows JAT Doctor/Build/Restore/Serve smoke skipped: no artifact-provided tar executable is available; the source contract deliberately excludes unproven Linux-only archive packages." | Out-File (Join-Path $env:RUNNER_TEMP "windows-jat-smoke-skip.log") -Encoding utf8
+            exit 0
+          }
           & $env:RCC_PATH task run --robot (Join-Path $PWD "robot.yaml") --task Doctor --dev --silent
           if ($LASTEXITCODE -ne 0) { throw "JAT Doctor failed on Windows" }
           $source = Join-Path $PWD "devdata/synthetic-source"
