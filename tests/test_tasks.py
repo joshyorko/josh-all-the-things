@@ -95,6 +95,21 @@ def test_windows_serve_smoke_downloads_workspace_from_fileserver():
     assert "$response.StatusCode" not in workflow
 
 
+def test_windows_runtime_persists_archive_receipt_and_freeze_evidence():
+    workflow = Path(".github/workflows/windows-runtime.yml").read_text()
+    assert "jat-runtime-windows.rcca" in workflow
+    assert "jat-runtime-windows.json" in workflow
+    assert "jat_git_sha" in workflow
+    assert "specification_digest" in workflow
+    assert "legacy_blueprint_key" in workflow
+    assert "verified_tasks" in workflow
+    assert '"archive"' in workflow
+    assert "Get-FileHash" in workflow
+    assert ".Length" in workflow
+    assert "rcc_version" in workflow
+    assert "platform" in workflow
+
+
 def test_rcc_manifest_pins_current_linux_and_windows_assets_without_future_placeholders():
     manifest_path = Path("runtime/rcc.json")
     manifest_text = manifest_path.read_text()
@@ -131,6 +146,25 @@ def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():
     assert "env export" in workflow
     assert "--no-build" in workflow
     assert "jat-linux-runtime-evidence" in workflow
+
+
+def test_publisher_accepts_platform_specific_receipts_and_archive_names():
+    script = Path("scripts/publish_environment_artifact.sh").read_text()
+    assert "windows_amd64" in script
+    assert "archive_filename" in script
+    assert "archive.filename == $archive_filename" in script
+    assert "platform-specific" in script
+
+
+def test_multi_platform_publisher_accepts_linux_and_windows_pairs():
+    script = Path("scripts/publish_environment_artifacts.sh")
+    body = script.read_text()
+    assert script.is_file()
+    assert "--linux-archive" in body
+    assert "--linux-receipt" in body
+    assert "--windows-archive" in body
+    assert "--windows-receipt" in body
+    assert "publish_environment_artifact.sh" in body
 
 
 def test_normal_runtime_contract_has_no_homebrew_install_or_probe():
