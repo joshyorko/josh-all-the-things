@@ -46,7 +46,7 @@ def test_linux_environment_contract_installs_hauler_before_freeze():
     freeze = Path("environment_linux_amd64_freeze.yaml")
 
     assert "rccPostInstall:" in conda
-    assert "bash scripts/install_hauler.sh" in conda
+    assert "python scripts/install_hauler.py" in conda
     assert "preRunScripts:" not in robot
     assert "install_dependencies.sh" not in robot
     assert freeze.is_file()

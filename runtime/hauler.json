@@ -2,9 +2,19 @@
   "schema_version": 1,
   "hauler": {
     "version": "v2.0.3",
-    "platform": "linux-amd64",
-    "asset": "hauler_2.0.3_linux_amd64.tar.gz",
-    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.0.3/hauler_2.0.3_linux_amd64.tar.gz",
-    "sha256": "6685eb1ba86291566f3694d69a8b7e80c928e5a589853691cccf51b26bc61617"
+    "platforms": {
+      "linux-amd64": {
+        "asset": "hauler_2.0.3_linux_amd64.tar.gz",
+        "url": "https://github.com/hauler-dev/hauler/releases/download/v2.0.3/hauler_2.0.3_linux_amd64.tar.gz",
+        "sha256": "6685eb1ba86291566f3694d69a8b7e80c928e5a589853691cccf51b26bc61617",
+        "executable": "hauler"
+      },
+      "windows-amd64": {
+        "asset": "hauler_2.0.3_windows_amd64.tar.gz",
+        "url": "https://github.com/hauler-dev/hauler/releases/download/v2.0.3/hauler_2.0.3_windows_amd64.tar.gz",
+        "sha256": "e272b51f8323e6ca9a017f81821294a3cc55019f5e67cca525fa0efb8536b8c0",
+        "executable": "hauler.exe"
+      }
+    }
   }
 }
