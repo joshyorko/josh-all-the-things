@@ -4,7 +4,7 @@ from pathlib import Path
 
 from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest, ServeRequest
 from jat.safety import ArchiveMember
-from jat.services import JATService
+from jat.services import JATService, _local_file_reference
 
 
 class FakeArchive:
@@ -170,6 +170,10 @@ def service(tmp_path, archive=None, hauler=None, rcc=None):
         producer_version="synthetic-version",
         which=lambda command: f"/tools/{command}",
     )
+
+
+def test_windows_hauler_manifest_file_reference_is_a_file_uri():
+    assert _local_file_reference(Path("D:/work/payload.tar.zst"), windows=True) == "file:///D:/work/payload.tar.zst"
 
 
 def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):

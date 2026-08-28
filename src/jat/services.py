@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 from shutil import which as system_which
+from urllib.parse import quote
 
 from robocorp import log
 
@@ -340,7 +341,7 @@ def _write_manifest(
                 "  name: joshs-all-the-things-workspace",
                 "spec:",
                 "  files:",
-                f"    - path: {json.dumps(str(workspace))}",
+                f"    - path: {json.dumps(_local_file_reference(workspace))}",
                 f"      name: {WORKSPACE_ARTIFACT}",
             ]
         )
@@ -355,7 +356,7 @@ def _write_manifest(
                     "  name: joshs-all-the-things-homebrew-recovery",
                     "spec:",
                     "  files:",
-                    f"    - path: {json.dumps(str(brew))}",
+                    f"    - path: {json.dumps(_local_file_reference(brew))}",
                     f"      name: {BREW_ARTIFACT}",
                 ]
             )
@@ -370,7 +371,7 @@ def _write_manifest(
                     "  name: joshs-all-the-things-rcc-environment",
                     "spec:",
                     "  files:",
-                    f"    - path: {json.dumps(str(rcc_archive))}",
+                    f"    - path: {json.dumps(_local_file_reference(rcc_archive))}",
                     f"      name: {RCC_ARTIFACT}",
                 ]
             )
@@ -385,7 +386,7 @@ def _write_manifest(
                     "  name: joshs-all-the-things-rcc-environment-metadata",
                     "spec:",
                     "  files:",
-                    f"    - path: {json.dumps(str(rcc_metadata))}",
+                    f"    - path: {json.dumps(_local_file_reference(rcc_metadata))}",
                     f"      name: {RCC_METADATA_ARTIFACT}",
                 ]
             )
@@ -403,6 +404,19 @@ def _write_manifest(
             lines.extend((f"    - name: {json.dumps(image)}", "      local: true"))
         documents.append("\n".join(lines))
     path.write_text("\n---\n".join(documents) + "\n")
+
+
+def _local_file_reference(path: Path, windows: bool | None = None) -> str:
+    """Render a local path in the URI form Hauler's file getter accepts."""
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return path.resolve().as_uri()
+    value = path.as_posix()
+    if len(value) >= 3 and value[1:3] == ":/":
+        encoded = quote(value, safe="/:~")
+        return f"file:///{encoded}"
+    return Path(value).resolve().as_uri()
 
 
 def _validate_robocorp_home(source: Path) -> None:
