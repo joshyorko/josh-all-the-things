@@ -100,6 +100,25 @@ class HaulerAdapter:
             foreground=True,
         )
 
+    def serve_files(self, store: Path, temp: Path, directory: Path, port: int = 8080):
+        arguments = [
+            "--store",
+            str(store),
+            "--tempdir",
+            str(temp),
+            "store",
+            "serve",
+            "fileserver",
+            "--directory",
+            str(directory),
+            "--port",
+            str(port),
+        ]
+        log_level = os.environ.get("JAT_HAULER_LOG_LEVEL")
+        if log_level:
+            arguments = ["--log-level", log_level, *arguments]
+        return self._run(arguments, foreground=True)
+
     def _run(self, arguments: list[str], foreground: bool = False, cwd: Path | None = None):
         completed = self.runner.run(
             [self.executable, *arguments], timeout=self.timeout, foreground=foreground, cwd=cwd

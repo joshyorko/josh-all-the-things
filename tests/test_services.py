@@ -454,8 +454,8 @@ def test_serve_uses_explicit_runtime_stage_directory_instead_of_cwd(tmp_path, mo
     observed = {}
 
     class ServingHauler(FakeHauler):
-        def serve(self, store, temp, directory, config):
-            self.calls.append("serve")
+        def serve_files(self, store, temp, directory, port):
+            self.calls.append("serve_files")
             observed["stage_parent"] = Path(store).parent.parent
 
     monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
@@ -463,6 +463,52 @@ def test_serve_uses_explicit_runtime_stage_directory_instead_of_cwd(tmp_path, mo
 
     assert result.success is True, result.diagnostics
     assert observed["stage_parent"] == runtime
+
+
+def test_serve_uses_fileserver_for_files_only_inventory(tmp_path, monkeypatch):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    observed = {}
+
+    class ServingHauler(FakeHauler):
+        def serve(self, *args):
+            raise AssertionError("Files-only Serve must not invoke the OCI registry")
+
+        def serve_files(self, store, temp, directory, port):
+            observed.update(store=store, temp=temp, directory=directory, port=port)
+
+    monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
+    result = service(tmp_path, hauler=ServingHauler()).serve(ServeRequest(haul=haul))
+
+    assert result.success is True, result.diagnostics
+    assert observed["port"] == 8080
+    assert Path(observed["store"]).parent.parent == runtime
+
+
+def test_serve_uses_registry_for_image_inventory(tmp_path, monkeypatch):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    observed = []
+
+    class ImageHauler(FakeHauler):
+        def inventory(self, store, temp):
+            return [
+                {"Reference": "hauler/app:latest", "Type": "image"},
+                {"Reference": "hauler/workspace.tar.zst:latest", "Type": "file"},
+            ]
+
+        def serve(self, *args):
+            observed.append("registry")
+
+        def serve_files(self, *args):
+            observed.append("fileserver")
+
+    result = service(tmp_path, hauler=ImageHauler()).serve(ServeRequest(haul=haul))
+
+    assert result.success is True, result.diagnostics
+    assert observed == ["registry"]
 
 
 def test_serve_rejects_runtime_stage_directory_inside_conda_prefix(tmp_path, monkeypatch):

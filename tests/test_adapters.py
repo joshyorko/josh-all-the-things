@@ -301,6 +301,27 @@ def test_hauler_serve_debug_level_is_forwarded_without_shell_framing(tmp_path, m
     assert runner.calls[-1][2] is True
 
 
+def test_hauler_serve_files_uses_exact_fileserver_argv(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler.exe")
+    adapter.serve_files(tmp_path / "store", tmp_path / "temp", tmp_path / "files", port=8080)
+    assert runner.calls[-1][0] == [
+        "/tools/hauler.exe",
+        "--store",
+        str(tmp_path / "store"),
+        "--tempdir",
+        str(tmp_path / "temp"),
+        "store",
+        "serve",
+        "fileserver",
+        "--directory",
+        str(tmp_path / "files"),
+        "--port",
+        "8080",
+    ]
+    assert runner.calls[-1][2] is True
+
+
 def test_windows_hauler_adapter_adds_local_files_without_files_manifest(tmp_path):
     runner = RecordingRunner()
     adapter = HaulerAdapter(runner, executable="/tools/hauler.exe", platform_name="windows")

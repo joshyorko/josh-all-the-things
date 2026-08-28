@@ -231,8 +231,11 @@ class JATService:
                 registry.mkdir()
                 config.write_text(_registry_config(registry))
                 self.hauler.load(store, temp, haul)
-                self.hauler.info(store, temp)
-                self.hauler.serve(store, temp, registry, config)
+                inventory = self.hauler.inventory(store, temp)
+                if _inventory_is_files_only(inventory):
+                    self.hauler.serve_files(store, temp, registry, port=8080)
+                else:
+                    self.hauler.serve(store, temp, registry, config)
             return OperationResult(
                 operation="serve", success=True, exit_status=0, producer_version=self.producer_version
             )
@@ -480,6 +483,10 @@ def _saved_robot_path(workspace: Path, relative: Path) -> Path:
 
 def _inventory_references(inventory: list[dict]) -> set[str]:
     return {item["Reference"] for item in inventory}
+
+
+def _inventory_is_files_only(inventory: list[dict]) -> bool:
+    return bool(inventory) and all(str(item.get("Type", "")).lower() == "file" for item in inventory)
 
 
 def _validate_inventory(inventory: list[dict], expect_brew: bool, expect_rcc: bool = False) -> None:

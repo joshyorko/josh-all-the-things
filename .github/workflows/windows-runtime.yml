@@ -173,15 +173,17 @@ jobs:
           $env:JAT_HAULER_LOG_LEVEL = "debug"
           $serve = Start-Process -FilePath $env:RCC_PATH -ArgumentList $serveArgs -WorkingDirectory $PWD -RedirectStandardOutput $serveOut -RedirectStandardError $serveErr -PassThru
           $ready = $false
+          $workspaceUrl = "http://127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst"
+          $downloadedWorkspace = Join-Path $env:RUNNER_TEMP "windows-served-workspace.tar.zst"
           for ($attempt = 0; $attempt -lt 30; $attempt++) {
-            if ($serve.HasExited) { Get-Content $serveOut, $serveErr; throw "JAT Serve exited before registry readiness" }
+            if ($serve.HasExited) { Get-Content $serveOut, $serveErr; throw "JAT Serve exited before fileserver readiness" }
             try {
-              $response = Invoke-WebRequest -Uri "http://127.0.0.1:5000/v2/" -UseBasicParsing -TimeoutSec 2
-              if ($response.StatusCode -eq 200) { $ready = $true; break }
+              $response = Invoke-WebRequest -Uri $workspaceUrl -OutFile $downloadedWorkspace -UseBasicParsing -TimeoutSec 2
+              if ($response.StatusCode -eq 200 -and (Get-Item $downloadedWorkspace).Length -gt 0) { $ready = $true; break }
             } catch { }
             Start-Sleep -Seconds 1
           }
-          if (-not $ready) { Get-Content $serveOut, $serveErr; throw "JAT Serve registry did not become ready at http://127.0.0.1:5000/v2/" }
+          if (-not $ready) { Get-Content $serveOut, $serveErr; throw "JAT Serve fileserver did not serve $workspaceUrl" }
           & taskkill.exe /PID $serve.Id /T /F | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "could not stop the Windows Serve smoke process" }
 
