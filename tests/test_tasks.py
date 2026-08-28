@@ -123,6 +123,8 @@ def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():
     assert "linux-runtime:" in workflow
     assert "runs-on: ubuntu-24.04" in workflow
     assert "runtime/rcc.json" in workflow
+    assert "$versionExitCode = $LASTEXITCODE" in workflow
+    assert "[string]::Equals($actualVersion, [string]$manifest.version, [StringComparison]::Ordinal)" in workflow
     assert "scripts/build_environment_artifact.py" in workflow
     assert "env publish" in workflow
     assert "env export" in workflow
