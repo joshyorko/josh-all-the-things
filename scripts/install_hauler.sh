@@ -14,9 +14,6 @@ readonly MANIFEST_PATH="${HAULER_MANIFEST:-$SCRIPT_DIRECTORY/../runtime/hauler.j
 }
 
 python_executable="$CONDA_PREFIX/bin/python"
-if [[ ! -x $python_executable ]]; then
-  python_executable=$(command -v python3 || command -v python || true)
-fi
 [[ -n $python_executable && -x $python_executable ]] || {
   printf 'An environment-owned Python executable is required to read the Hauler manifest.\n' >&2
   exit 2
@@ -68,7 +65,8 @@ if [[ -e $target || -L $target ]]; then
     exit 1
   }
   existing_version=$("$target" version 2>&1 || true)
-  [[ $existing_version == *"$version"* ]] || {
+  version_pattern="${version//./\\.}"
+  [[ $existing_version =~ GitVersion:[[:space:]]+$version_pattern([[:space:]]|$) ]] || {
     printf 'Existing Hauler does not match pinned version %s: %s\n' "$version" "$target" >&2
     exit 1
   }
@@ -107,7 +105,8 @@ ln -- "$staged_target" "$target"
 rm -- "$staged_target"
 
 installed_version=$("$target" version 2>&1 || true)
-[[ $installed_version == *"$version"* ]] || {
+version_pattern="${version//./\\.}"
+[[ $installed_version =~ GitVersion:[[:space:]]+$version_pattern([[:space:]]|$) ]] || {
   printf 'Installed Hauler failed the pinned version check: %s\n' "$target" >&2
   exit 1
 }

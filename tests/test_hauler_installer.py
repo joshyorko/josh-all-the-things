@@ -3,6 +3,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -30,9 +31,12 @@ def _run(
     target: bytes | None = None,
     expected: str = "v2.0.3",
     manifest_payload: bytes | None = None,
+    environment_python: bool = True,
 ):
     conda = tmp_path / "conda"
     (conda / "bin").mkdir(parents=True)
+    if environment_python:
+        (conda / "bin" / "python").symlink_to(sys.executable)
     manifest = tmp_path / "hauler.json"
     manifest.write_text(
         json.dumps(
@@ -109,6 +113,17 @@ def test_checksum_mismatch_fails_before_promotion(tmp_path):
 
     assert result.returncode != 0
     assert "SHA256" in result.stderr
+    assert not destination.exists()
+
+
+def test_installer_rejects_missing_environment_python_without_host_fallback(tmp_path):
+    archive = tmp_path / "archive.tar.gz"
+    payload = _archive(archive)
+
+    result, destination = _run(tmp_path, payload, environment_python=False)
+
+    assert result.returncode != 0
+    assert "environment-owned Python" in result.stderr
     assert not destination.exists()
 
 

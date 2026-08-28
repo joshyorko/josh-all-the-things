@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from jsonschema import validate
 
 from scripts.build_environment_artifact import HAULER_VERSION_COMMAND, _stage_copy, build_parser, main
 
@@ -103,6 +104,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
     ]
 
     result = json.loads(receipt.read_text())
+    validate(instance=result, schema=json.loads((Path(__file__).parents[1] / "docs/environment-artifact-receipt.schema.json").read_text()))
     assert result["operation"] == "build"
     assert result["success"] is True
     assert result["rcc_executable"] == str(rcc)
