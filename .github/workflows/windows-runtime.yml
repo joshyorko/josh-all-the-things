@@ -40,10 +40,10 @@ jobs:
           if ($observed -ne $pin.sha256) {
             throw "RCC SHA256 mismatch: expected $($pin.sha256), got $observed"
           }
-          $versionOutput = & $rcc version
-          $versionExitCode = $LASTEXITCODE
-          $actualVersion = ($versionOutput | Select-Object -First 1).ToString().Trim()
-          if ($versionExitCode -ne 0 -or -not [string]::Equals($actualVersion, [string]$manifest.version, [StringComparison]::Ordinal)) {
+          $output = & $rcc version
+          $rccExit = $LASTEXITCODE
+          $actualVersion = ($output | Select-Object -First 1).Trim()
+          if ($rccExit -ne 0 -or $actualVersion -cne $manifest.version) {
             throw "pinned RCC version check failed: expected $($manifest.version), got $actualVersion"
           }
           "RCC_PATH=$rcc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
