@@ -4,9 +4,9 @@
 
 **Goal:** Put the official pinned Hauler binary inside the JAT RCC Holotree before freeze and publish a freshly verified Linux amd64 environment artifact.
 
-**Architecture:** A JAT-owned manifest and installer run as RCC's post-install layer. `robot.yaml` selects a generated Linux freeze file carrying that hook; ordinary JAT task execution consumes only environment-owned Hauler/tar/zstd. The artifact proof invokes Hauler through the materialized environment's Python because RCC v18.19.2 resolves bare command names before applying the child PATH, and the launcher requires the resolved binary below `CONDA_PREFIX`. The existing optional Homebrew recovery payload remains data-only.
+**Architecture:** A JAT-owned manifest and installer run as RCC's post-install layer. `robot.yaml` selects a generated Linux freeze file carrying that hook; ordinary JAT task execution consumes only environment-owned Hauler/tar/zstd. The artifact proof invokes Hauler through the materialized environment's Python because RCC v18.19.3 resolves bare command names before applying the child PATH, and the launcher requires the resolved binary below `CONDA_PREFIX`. The existing optional Homebrew recovery payload remains data-only.
 
-**Tech Stack:** Bash, Python 3.13, RCC v18.19.2, Hauler v2.0.3, GNU tar/zstd, pytest, Ruff.
+**Tech Stack:** Bash, Python 3.13, RCC v18.19.3, Hauler v2.0.3, GNU tar/zstd, pytest, Ruff.
 
 **Spec:** `docs/superpowers/specs/2026-08-27-hauler-runtime-design.md`
 
@@ -14,7 +14,7 @@
 
 - Hauler source is the official `hauler-dev/hauler` GitHub Release only.
 - Linux amd64 asset is `hauler_2.0.3_linux_amd64.tar.gz` with SHA256 `6685eb1ba86291566f3694d69a8b7e80c928e5a589853691cccf51b26bc61617`.
-- RCC is exactly `v18.19.2` from `43aa8c3f834fc84606fd1e442443fbb224324c40`.
+- RCC is exactly `v18.19.3` from `4148c2b71705c9d2baf0e88b48d08a79cb7bda0f`.
 - No Homebrew, `sudo`, root, floating URL, or post-acquire Holotree mutation may be required.
 - The selected `environment_linux_amd64_freeze.yaml` must include `rccPostInstall`.
 - Optional `--brew` capture/restore behavior remains available as a payload feature.
@@ -53,7 +53,7 @@
 - [ ] **Step 1: Add failing assertions that the Linux freeze carries `rccPostInstall` and `ArchiveAdapter` never invokes `brew`.**
 - [ ] **Step 2: Run focused adapter/task tests and observe the retained Homebrew behavior.**
 - [ ] **Step 3: Remove the Homebrew branch from `ArchiveAdapter` and the `preRunScripts` installer from `robot.yaml`; add the post-install command.**
-- [ ] **Step 4: Build the Linux environment with RCC v18.19.2, generate the freeze file through RCC's artifact directory, and verify its hook and exact dependencies.**
+- [ ] **Step 4: Build the Linux environment with RCC v18.19.3, generate the freeze file through RCC's artifact directory, and verify its hook and exact dependencies.**
 - [ ] **Step 5: Run focused tests and `git diff --check`.**
 
 ### Task 3: Extend the canonical artifact proof with Hauler execution

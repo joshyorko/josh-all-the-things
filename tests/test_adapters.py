@@ -1,4 +1,7 @@
+import io
 import sys
+import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -11,10 +14,12 @@ from jat.safety import validate_archive_members
 class RecordingRunner:
     def __init__(self, responses=None):
         self.calls = []
+        self.cwds = []
         self.responses = list(responses or [])
 
-    def run(self, argv, timeout=None, foreground=False, secrets=()):
+    def run(self, argv, timeout=None, foreground=False, secrets=(), cwd=None):
         self.calls.append((argv, timeout, foreground, secrets))
+        self.cwds.append(cwd)
         if self.responses:
             return self.responses.pop(0)
         return ProcessResult(argv=argv, exit_status=0)
@@ -41,6 +46,15 @@ def test_process_runner_reports_timeout():
     assert completed.exit_status == 124
     assert completed.timed_out is True
     assert "timed out" in completed.diagnostics
+
+
+def test_process_runner_decodes_external_output_without_locale_failures():
+    completed = ProcessRunner().run(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'valid\\x90\\xff\\n')"]
+    )
+    assert completed.exit_status == 0
+    assert "valid" in completed.stdout
+    assert "�" in completed.stdout
 
 
 def test_process_runner_terminates_child_on_ctrl_c(monkeypatch):
@@ -170,6 +184,50 @@ def test_real_gnu_tar_round_trip_and_member_contract(tmp_path):
     assert restored_file.stat().st_mode & 0o777 == 0o640
 
 
+def test_windows_archive_backend_is_contained_deterministic_and_round_trips(tmp_path):
+    pytest.importorskip("zstandard")
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "nested").mkdir()
+    (source / "nested" / "file.txt").write_text("synthetic\n")
+    first = tmp_path / "first.tar.zst"
+    second = tmp_path / "second.tar.zst"
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    stripped = tmp_path / "stripped"
+    stripped.mkdir()
+
+    adapter = ArchiveAdapter(RecordingRunner(), platform_name="windows")
+    adapter.create(source, first)
+    adapter.create(source, second)
+
+    assert first.read_bytes() == second.read_bytes()
+    validate_archive_members(adapter.members(first))
+    adapter.extract(first, restored)
+    assert (restored / "project" / "nested" / "file.txt").read_text() == "synthetic\n"
+    adapter.extract(first, stripped, strip_components=1)
+    assert (stripped / "nested" / "file.txt").read_text() == "synthetic\n"
+
+
+def test_windows_archive_backend_rejects_traversal_before_extraction(tmp_path):
+    zstandard = pytest.importorskip("zstandard")
+    archive = tmp_path / "unsafe.tar.zst"
+    with archive.open("wb") as raw:
+        with zstandard.ZstdCompressor(level=3).stream_writer(raw, closefd=False) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w|") as tar:
+                member = tarfile.TarInfo("../outside.txt")
+                payload = b"outside"
+                member.size = len(payload)
+                tar.addfile(member, io.BytesIO(payload))
+    destination = tmp_path / "restored"
+    destination.mkdir()
+
+    adapter = ArchiveAdapter(RecordingRunner(), platform_name="windows")
+    with pytest.raises(ValueError, match="unsafe path"):
+        adapter.extract(archive, destination)
+    assert not (tmp_path / "outside.txt").exists()
+
+
 def test_hauler_adapter_owns_exact_argv(tmp_path):
     runner = RecordingRunner()
     adapter = HaulerAdapter(runner, executable="/tools/hauler", timeout=42)
@@ -232,3 +290,84 @@ def test_hauler_adapter_owns_exact_argv(tmp_path):
         ],
     ]
     assert runner.calls[-1][2] is True
+
+
+def test_hauler_serve_debug_level_is_forwarded_without_shell_framing(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAT_HAULER_LOG_LEVEL", "debug")
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler")
+    adapter.serve(tmp_path / "store", tmp_path / "temp", tmp_path / "registry", tmp_path / "registry.yaml")
+    assert runner.calls[-1][0][:3] == ["/tools/hauler", "--log-level", "debug"]
+    assert runner.calls[-1][2] is True
+
+
+def test_hauler_serve_files_uses_exact_fileserver_argv(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler.exe")
+    adapter.serve_files(tmp_path / "store", tmp_path / "temp", tmp_path / "files", port=8080)
+    assert runner.calls[-1][0] == [
+        "/tools/hauler.exe",
+        "--store",
+        str(tmp_path / "store"),
+        "--tempdir",
+        str(tmp_path / "temp"),
+        "store",
+        "serve",
+        "fileserver",
+        "--directory",
+        str(tmp_path / "files"),
+        "--port",
+        "8080",
+    ]
+    assert runner.calls[-1][2] is True
+
+
+def test_windows_hauler_adapter_adds_local_files_without_files_manifest(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler.exe", platform_name="windows")
+    store = tmp_path / "store"
+    temp = tmp_path / "temp"
+    workspace = tmp_path / "workspace file.tar.zst"
+    workspace.write_bytes(b"workspace")
+    adapter.sync_files(store, temp, [(workspace, "workspace file.tar.zst")], ["example/image:latest"])
+
+    assert [call[0] for call in runner.calls] == [
+        [
+            "/tools/hauler.exe",
+            "--store",
+            str(store),
+            "--tempdir",
+            str(temp),
+            "store",
+            "add",
+            "file",
+            workspace.name,
+            "--name",
+            "workspace file.tar.zst",
+        ],
+        [
+            "/tools/hauler.exe",
+            "--store",
+            str(store),
+            "--tempdir",
+            str(temp),
+            "store",
+            "add",
+            "image",
+            "example/image:latest",
+            "--local",
+        ],
+    ]
+    assert runner.cwds[0] == workspace.parent
+
+
+def test_windows_hauler_adapter_rejects_unsafe_relative_payload_names(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler.exe", platform_name="windows")
+    store = tmp_path / "store"
+    temp = tmp_path / "temp"
+    for name in ("bad:name", r"bad\name", "CON", "payload."):
+        payload = tmp_path / name
+        with pytest.raises(ValueError, match="unsafe Windows payload filename"):
+            adapter.sync_files(store, temp, [(payload, "payload")])
+    assert runner.calls == []

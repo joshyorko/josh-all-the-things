@@ -39,6 +39,7 @@ class ProcessRunner:
         timeout: float | None = None,
         foreground: bool = False,
         secrets: Iterable[str] = (),
+        cwd: str | os.PathLike[str] | None = None,
     ) -> ProcessResult:
         secret_values = tuple(secret for secret in secrets if secret)
         for secret in secret_values:
@@ -50,7 +51,10 @@ class ProcessRunner:
             stdout=None if foreground else subprocess.PIPE,
             stderr=None if foreground else subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             start_new_session=os.name != "nt",
+            cwd=cwd,
         )
         try:
             stdout, stderr = process.communicate(timeout=timeout)

@@ -2,9 +2,11 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest, ServeRequest
 from jat.safety import ArchiveMember
-from jat.services import JATService
+from jat.services import JATService, _local_file_reference, _registry_config
 
 
 class FakeArchive:
@@ -119,7 +121,7 @@ class RccHauler(FakeHauler):
                 "archive": str(target.parent / "rcc-environment.rcca"),
                 "archive_sha256": hashlib.sha256(b"rcca").hexdigest(),
                 "archive_size": 4,
-                "rcc_version": "v18.19.2",
+                "rcc_version": "v18.19.3",
                 "robot": self.metadata_robot,
                 "provider": "local",
                 "acquired": False,
@@ -140,7 +142,7 @@ class FakeRcc:
             archive=archive,
             archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
             archive_size=4,
-            rcc_version="v18.19.2",
+            rcc_version="v18.19.3",
             robot=robot or source / "robot.yaml",
         )
 
@@ -153,7 +155,7 @@ class FakeRcc:
             archive=archive,
             archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
             archive_size=4,
-            rcc_version=rcc_version or "v18.19.2",
+            rcc_version=rcc_version or "v18.19.3",
             robot=robot,
             acquired=True,
         )
@@ -170,6 +172,23 @@ def service(tmp_path, archive=None, hauler=None, rcc=None):
         producer_version="synthetic-version",
         which=lambda command: f"/tools/{command}",
     )
+
+
+def test_windows_hauler_manifest_file_reference_is_a_file_uri():
+    assert _local_file_reference(Path("D:/work/payload.tar.zst"), windows=True) == "file://D:/work/payload.tar.zst"
+    assert _local_file_reference(Path("D:/work dir/payload.tar.zst"), windows=True) == "file://D:/work%20dir/payload.tar.zst"
+    with pytest.raises(ValueError, match="UNC"):
+        _local_file_reference(Path("//server/share/payload.tar.zst"), windows=True)
+
+
+def test_linux_hauler_manifest_file_reference_escapes_spaces():
+    assert _local_file_reference(Path("/tmp/work dir/payload.tar.zst"), windows=False) == "file:///tmp/work%20dir/payload.tar.zst"
+
+
+def test_registry_config_uses_loopback_and_quotes_windows_root_path():
+    config = _registry_config(Path("D:/josh room/registry"))
+    assert 'rootdirectory: "D:/josh room/registry"' in config
+    assert 'addr: "127.0.0.1:5000"' in config
 
 
 def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):
@@ -435,8 +454,8 @@ def test_serve_uses_explicit_runtime_stage_directory_instead_of_cwd(tmp_path, mo
     observed = {}
 
     class ServingHauler(FakeHauler):
-        def serve(self, store, temp, directory, config):
-            self.calls.append("serve")
+        def serve_files(self, store, temp, directory, port):
+            self.calls.append("serve_files")
             observed["stage_parent"] = Path(store).parent.parent
 
     monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
@@ -444,6 +463,52 @@ def test_serve_uses_explicit_runtime_stage_directory_instead_of_cwd(tmp_path, mo
 
     assert result.success is True, result.diagnostics
     assert observed["stage_parent"] == runtime
+
+
+def test_serve_uses_fileserver_for_files_only_inventory(tmp_path, monkeypatch):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    observed = {}
+
+    class ServingHauler(FakeHauler):
+        def serve(self, *args):
+            raise AssertionError("Files-only Serve must not invoke the OCI registry")
+
+        def serve_files(self, store, temp, directory, port):
+            observed.update(store=store, temp=temp, directory=directory, port=port)
+
+    monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
+    result = service(tmp_path, hauler=ServingHauler()).serve(ServeRequest(haul=haul))
+
+    assert result.success is True, result.diagnostics
+    assert observed["port"] == 8080
+    assert Path(observed["store"]).parent.parent == runtime
+
+
+def test_serve_uses_registry_for_image_inventory(tmp_path, monkeypatch):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    observed = []
+
+    class ImageHauler(FakeHauler):
+        def inventory(self, store, temp):
+            return [
+                {"Reference": "hauler/app:latest", "Type": "image"},
+                {"Reference": "hauler/workspace.tar.zst:latest", "Type": "file"},
+            ]
+
+        def serve(self, *args):
+            observed.append("registry")
+
+        def serve_files(self, *args):
+            observed.append("fileserver")
+
+    result = service(tmp_path, hauler=ImageHauler()).serve(ServeRequest(haul=haul))
+
+    assert result.success is True, result.diagnostics
+    assert observed == ["registry"]
 
 
 def test_serve_rejects_runtime_stage_directory_inside_conda_prefix(tmp_path, monkeypatch):

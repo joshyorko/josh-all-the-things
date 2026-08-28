@@ -1,0 +1,375 @@
+name: JAT Windows runtime
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "conda.yaml"
+      - "robot.yaml"
+      - "runtime/rcc.json"
+      - "runtime/hauler.json"
+      - "scripts/install_hauler.py"
+      - "scripts/build_environment_artifact.py"
+      - "src/jat/archive.py"
+      - "src/jat/services.py"
+      - "tests/**"
+      - ".github/workflows/windows-runtime.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-runtime:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout JAT
+        uses: actions/checkout@v4
+
+      - name: Acquire and verify pinned RCC
+        run: |
+          $manifest = Get-Content -Raw -LiteralPath (Join-Path $PWD "runtime/rcc.json") | ConvertFrom-Json
+          $pin = $manifest.platforms.windows_amd64
+          if ($null -eq $pin) { throw "runtime/rcc.json has no windows_amd64 pin" }
+          $rcc = Join-Path $env:RUNNER_TEMP "rcc.exe"
+          Invoke-WebRequest -Uri $pin.url -OutFile $rcc
+          $observed = (Get-FileHash -Algorithm SHA256 -Path $rcc).Hash.ToLowerInvariant()
+          if ($observed -ne $pin.sha256) {
+            throw "RCC SHA256 mismatch: expected $($pin.sha256), got $observed"
+          }
+          $output = & $rcc version
+          $rccExit = $LASTEXITCODE
+          $actualVersion = ($output | Select-Object -First 1).Trim()
+          if ($rccExit -ne 0 -or $actualVersion -cne $manifest.version) {
+            throw "pinned RCC version check failed: expected $($manifest.version), got $actualVersion"
+          }
+          "RCC_PATH=$rcc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build JAT from the unfrozen contract and generate Windows freeze
+        run: |
+          $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-producer"
+          New-Item -ItemType Directory -Force -Path $env:ROBOCORP_HOME | Out-Null
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue output
+          & $env:RCC_PATH ht vars --robot (Join-Path $PWD "robot.yaml") *> (Join-Path $env:RUNNER_TEMP "windows-initial-build.log")
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content (Join-Path $env:RUNNER_TEMP "windows-initial-build.log")
+            throw "initial Windows JAT environment construction failed"
+          }
+          $initialLog = Join-Path $env:RUNNER_TEMP "windows-initial-build.log"
+          if (-not (Select-String -Path $initialLog -Pattern "environment_windows_amd64.yaml" -Quiet)) {
+            Get-Content $initialLog
+            throw "RCC did not select environment_windows_amd64.yaml for the initial Windows solve"
+          }
+          & $env:RCC_PATH task run --robot (Join-Path $PWD "robot.yaml") --task JAT -- --help *> (Join-Path $env:RUNNER_TEMP "windows-initial-run.log")
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content (Join-Path $env:RUNNER_TEMP "windows-initial-run.log")
+            throw "initial Windows JAT CLI run failed"
+          }
+          $generated = Join-Path $PWD "output/environment_windows_amd64_freeze.yaml"
+          if (-not (Test-Path -LiteralPath $generated -PathType Leaf)) {
+            throw "RCC did not generate $generated"
+          }
+          $freeze = Get-Content -Raw -LiteralPath $generated
+          if ($freeze -notmatch "rccPostInstall:" -or $freeze -notmatch "python scripts/install_hauler.py") {
+            throw "generated Windows freeze omitted the JAT Hauler post-install contract"
+          }
+          Copy-Item -LiteralPath $generated -Destination (Join-Path $PWD "environment_windows_amd64_freeze.yaml")
+          "WINDOWS_FREEZE=$generated" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove environmentConfigs selected the generated Windows freeze
+        run: |
+          $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-freeze-selection"
+          New-Item -ItemType Directory -Force -Path $env:ROBOCORP_HOME | Out-Null
+          $log = Join-Path $env:RUNNER_TEMP "windows-freeze-selection.log"
+          & $env:RCC_PATH ht vars --robot (Join-Path $PWD "robot.yaml") *> $log
+          if ($LASTEXITCODE -ne 0) { Get-Content $log; throw "Windows freeze selection run failed" }
+          Get-Content $log
+          if (-not (Select-String -Path $log -Pattern "environment_windows_amd64_freeze.yaml" -Quiet)) {
+            throw "RCC did not select environment_windows_amd64_freeze.yaml from environmentConfigs"
+          }
+
+      - name: Publish and export the Windows JAT Environment Artifact
+        run: |
+          $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-artifact-producer"
+          New-Item -ItemType Directory -Force -Path $env:ROBOCORP_HOME | Out-Null
+          $publishPath = Join-Path $env:RUNNER_TEMP "windows-publish.json"
+          $publishLog = Join-Path $env:RUNNER_TEMP "windows-publish.log"
+          & $env:RCC_PATH env publish --robot (Join-Path $PWD "robot.yaml") --provider local --json 1> $publishPath 2> $publishLog
+          if ($LASTEXITCODE -ne 0) { Get-Content $publishLog; throw "Windows Environment Artifact publish failed" }
+          $published = Get-Content -Raw $publishPath | ConvertFrom-Json
+          $artifact = $published.artifactDigest
+          if ($artifact -notmatch "^sha256:[0-9a-f]{64}$") { throw "publish returned no canonical artifact digest" }
+          $archive = Join-Path $env:RUNNER_TEMP "jat-runtime-windows.rcca"
+          & $env:RCC_PATH env export --artifact $artifact --provider local --output $archive *> (Join-Path $env:RUNNER_TEMP "windows-export.log")
+          if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-export.log"); throw "Windows artifact export failed" }
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) { throw "Windows .rcca export is missing" }
+          "WINDOWS_ARTIFACT=$artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WINDOWS_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Fresh acquire, no-build variables, and hauler.exe proof
+        run: |
+          $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-artifact-verifier"
+          New-Item -ItemType Directory -Force -Path $env:ROBOCORP_HOME | Out-Null
+          $acquirePath = Join-Path $env:RUNNER_TEMP "windows-acquire.json"
+          & $env:RCC_PATH env acquire --archive $env:WINDOWS_ARCHIVE --permissive-local --json 1> $acquirePath 2> (Join-Path $env:RUNNER_TEMP "windows-acquire.log")
+          if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-acquire.log"); throw "fresh Windows artifact acquire failed" }
+          $acquired = Get-Content -Raw $acquirePath | ConvertFrom-Json
+          if ($acquired.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $acquired.verification.valid -ne $true) { throw "fresh Windows acquire did not validate the exported artifact" }
+          & $env:RCC_PATH --no-build ht vars --robot (Join-Path $PWD "robot.yaml") --json 1> (Join-Path $env:RUNNER_TEMP "windows-no-build-vars.json") 2> (Join-Path $env:RUNNER_TEMP "windows-no-build-vars.log")
+          if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-no-build-vars.log"); throw "no-build Windows ht vars failed" }
+          $diagnosticReceipt = Join-Path $env:RUNNER_TEMP "windows-hauler-diagnostic.json"
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $diagnosticReceipt -- python -c "import json,os,shutil; from pathlib import Path; prefix=Path(os.environ['CONDA_PREFIX']); print(json.dumps({'condaPrefix':str(prefix),'scriptsHauler':(prefix/'Scripts'/'hauler.exe').is_file(),'rootHauler':(prefix/'hauler.exe').is_file(),'whichHauler':shutil.which('hauler'),'whichHaulerExe':shutil.which('hauler.exe')}))"
+          if ($LASTEXITCODE -ne 0) { Get-Content $diagnosticReceipt; throw "acquired Windows artifact diagnostic command failed" }
+          $execPath = Join-Path $env:RUNNER_TEMP "windows-hauler-exec.json"
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- cmd.exe /d /c hauler.exe version 1> $execPath 2> (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log")
+          if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log"); throw "hauler.exe version execution failed" }
+          $executed = Get-Content -Raw $execPath | ConvertFrom-Json
+          if ($executed.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $executed.exitCode -ne 0) { throw "hauler.exe did not execute from the acquired Windows artifact" }
+          $executed
+
+      - name: Probe Hauler Windows local file ingestion
+        run: |
+          $probeRoot = Join-Path $env:RUNNER_TEMP "hauler file probe"
+          $store = Join-Path $probeRoot "store"
+          $temp = Join-Path $probeRoot "temp"
+          $payload = Join-Path $probeRoot "payload file.txt"
+          New-Item -ItemType Directory -Force -Path $probeRoot, $store, $temp | Out-Null
+          Set-Content -LiteralPath $payload -Value "hauler-windows-file-probe" -Encoding utf8
+          $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-artifact-verifier"
+          $storeLiteral = $store | ConvertTo-Json -Compress
+          $tempLiteral = $temp | ConvertTo-Json -Compress
+          $payloadLiteral = $payload | ConvertTo-Json -Compress
+          $launcher = "import os,shutil,subprocess; from pathlib import Path; payload=Path($payloadLiteral); executable=shutil.which('hauler.exe'); prefix=os.path.realpath(os.environ['CONDA_PREFIX']); resolved=os.path.realpath(executable); assert resolved.startswith(prefix + os.sep); subprocess.run([shutil.which('hauler.exe'), '--store', $storeLiteral, '--tempdir', $tempLiteral, 'store', 'add', 'file', payload.name, '--name', 'probe.txt'], cwd=str(payload.parent), check=True)"
+          $log = Join-Path $env:RUNNER_TEMP "windows-hauler-add-file-probe.log"
+          $receipt = Join-Path $env:RUNNER_TEMP "windows-hauler-add-file-probe.json"
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $receipt -- python -c $launcher *> $log
+          if ($LASTEXITCODE -ne 0) { Get-Content $log; throw "Hauler Windows store add file probe failed" }
+
+      - name: Run real JAT Doctor, Build, Restore, and Serve smoke
+        run: |
+          $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-artifact-verifier"
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- python -c "import zstandard" *> (Join-Path $env:RUNNER_TEMP "windows-tool-check.log")
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content (Join-Path $env:RUNNER_TEMP "windows-tool-check.log")
+            throw "acquired Windows artifact lacks its contained zstandard archive backend"
+          }
+          & $env:RCC_PATH task run --robot (Join-Path $PWD "robot.yaml") --task Doctor --dev --silent
+          if ($LASTEXITCODE -ne 0) { throw "JAT Doctor failed on Windows" }
+          $source = Join-Path $PWD "devdata/synthetic-source"
+          $haul = Join-Path $env:RUNNER_TEMP "windows-jat.tar.zst"
+          $buildRequest = Join-Path $env:RUNNER_TEMP "windows-build.json"
+          @{ folder = $source; output = $haul; rcc_environment = "off" } | ConvertTo-Json | Out-File $buildRequest -Encoding utf8
+          & $env:RCC_PATH task run --robot (Join-Path $PWD "robot.yaml") --task Build -- --json-input $buildRequest
+          if ($LASTEXITCODE -ne 0) { throw "JAT Build failed on Windows" }
+          $restore = Join-Path $env:RUNNER_TEMP "windows-restored"
+          $restoreRequest = Join-Path $env:RUNNER_TEMP "windows-restore.json"
+          @{ haul = $haul; destination = $restore } | ConvertTo-Json | Out-File $restoreRequest -Encoding utf8
+          & $env:RCC_PATH task run --robot (Join-Path $PWD "robot.yaml") --task Restore -- --json-input $restoreRequest
+          if ($LASTEXITCODE -ne 0) { throw "JAT Restore failed on Windows" }
+          $serveRequest = Join-Path $env:RUNNER_TEMP "windows-serve.json"
+          @{ haul = $haul } | ConvertTo-Json | Out-File $serveRequest -Encoding utf8
+          $serveRunDir = Join-Path $env:RUNNER_TEMP "jat-serve-runtime"
+          New-Item -ItemType Directory -Force -Path $serveRunDir | Out-Null
+          $env:JAT_RUN_DIR = $serveRunDir
+          $serveOut = Join-Path $env:RUNNER_TEMP "windows-serve.out"
+          $serveErr = Join-Path $env:RUNNER_TEMP "windows-serve.err"
+          $serveArgs = @("task", "run", "--robot", (Join-Path $PWD "robot.yaml"), "--task", "Serve", "--", "--json-input", $serveRequest)
+          $env:JAT_HAULER_LOG_LEVEL = "debug"
+          $serve = Start-Process -FilePath $env:RCC_PATH -ArgumentList $serveArgs -WorkingDirectory $PWD -RedirectStandardOutput $serveOut -RedirectStandardError $serveErr -PassThru
+          $ready = $false
+          $workspaceUrl = "http://127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst"
+          $downloadedWorkspace = Join-Path $env:RUNNER_TEMP "windows-served-workspace.tar.zst"
+          for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            if ($serve.HasExited) { Get-Content $serveOut, $serveErr; throw "JAT Serve exited before fileserver readiness" }
+            try {
+              Invoke-WebRequest -Uri $workspaceUrl -OutFile $downloadedWorkspace -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null
+              if ((Test-Path -LiteralPath $downloadedWorkspace -PathType Leaf) -and (Get-Item -LiteralPath $downloadedWorkspace).Length -gt 0) {
+                $ready = $true
+                break
+              }
+            } catch { }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { Get-Content $serveOut, $serveErr; throw "JAT Serve fileserver did not serve $workspaceUrl" }
+          & taskkill.exe /PID $serve.Id /T /F | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "could not stop the Windows Serve smoke process" }
+
+      - name: Upload generated Windows freeze and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jat-windows-runtime-evidence
+          if-no-files-found: warn
+          path: |
+            output/environment_windows_amd64_freeze.yaml
+            environment_windows_amd64_freeze.yaml
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/*.json
+            ${{ runner.temp }}/windows-serve.*
+
+  linux-runtime:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout JAT
+        uses: actions/checkout@v4
+
+      - name: Acquire and verify pinned RCC
+        run: |
+          set -euo pipefail
+          mapfile -t pin < <(python3 -c 'import json; p=json.load(open("runtime/rcc.json"))["platforms"]["linux_amd64"]; print(json.load(open("runtime/rcc.json"))["version"]); print(p["url"]); print(p["sha256"])')
+          rcc_version="${pin[0]}"
+          rcc_url="${pin[1]}"
+          rcc_sha256="${pin[2]}"
+          rcc_path="$RUNNER_TEMP/rcc"
+          curl --fail --location --silent --show-error --retry 3 "$rcc_url" --output "$rcc_path"
+          printf '%s  %s\n' "$rcc_sha256" "$rcc_path" | sha256sum --check --status -
+          chmod 0755 "$rcc_path"
+          actual_version=$("$rcc_path" version | head -n 1)
+          [[ "$actual_version" == "$rcc_version" ]] || { echo "RCC version mismatch: expected $rcc_version, got $actual_version" >&2; exit 1; }
+          {
+            echo "RCC_PATH=$rcc_path"
+            echo "RCC_VERSION=$rcc_version"
+          } >> "$GITHUB_ENV"
+
+      - name: Prove the tracked Linux freeze is selected
+        run: |
+          set -euo pipefail
+          export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-freeze-selection"
+          mkdir -p "$ROBOCORP_HOME"
+          "$RCC_PATH" ht vars --robot "$PWD/robot.yaml" 2>&1 | tee "$RUNNER_TEMP/linux-freeze-selection.log"
+          grep -Fq 'environment_linux_amd64_freeze.yaml' "$RUNNER_TEMP/linux-freeze-selection.log"
+
+      - name: Publish, export, and internally verify the Linux JAT artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          python3 scripts/build_environment_artifact.py \
+            --robot "$PWD/robot.yaml" \
+            --rcc "$RCC_PATH" \
+            --output "$PWD/dist/jat-runtime.rcca" \
+            --receipt "$PWD/dist/jat-runtime.json" \
+            --timeout 1800 | tee "$RUNNER_TEMP/linux-artifact-builder.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(Path("dist/jat-runtime.json").read_text())
+          assert receipt["platform"] == "linux_amd64"
+          assert receipt["rcc_version"] == "v18.19.3"
+          assert receipt["verified_acquire"] == {"fresh_home": True, "no_build": True}
+          assert receipt["verified_no_build"] == {"fresh_home": True, "no_build": True}
+          assert receipt["verified_hauler"]["resolved_under_conda_prefix"] is True
+          assert Path("dist/jat-runtime.rcca").is_file()
+          print(json.dumps({"artifact_digest": receipt["artifact_digest"], "archive": receipt["archive"]}, sort_keys=True))
+          PY
+
+      - name: Fresh acquire, no-build variables, and Hauler proof from exported artifact
+        run: |
+          set -euo pipefail
+          export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"
+          mkdir -p "$ROBOCORP_HOME"
+          artifact=$(python3 -c 'import json; print(json.load(open("dist/jat-runtime.json"))["artifact_digest"])')
+          "$RCC_PATH" env acquire --archive "$PWD/dist/jat-runtime.rcca" --permissive-local --json > "$RUNNER_TEMP/linux-acquire.json"
+          python3 - "$RUNNER_TEMP/linux-acquire.json" "$artifact" <<'PY'
+          import json
+          import sys
+
+          acquired = json.load(open(sys.argv[1]))
+          assert acquired["artifactDigest"] == sys.argv[2]
+          assert acquired["verification"]["valid"] is True
+          PY
+          "$RCC_PATH" --no-build ht vars --robot "$PWD/robot.yaml" --json > "$RUNNER_TEMP/linux-no-build-vars.json"
+          hauler_probe="import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
+          "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --json -- python -c "$hauler_probe" > "$RUNNER_TEMP/linux-hauler-exec.json"
+          python3 - "$RUNNER_TEMP/linux-hauler-exec.json" "$artifact" <<'PY'
+          import json
+          import sys
+
+          execution = json.load(open(sys.argv[1]))
+          assert execution["artifactDigest"] == sys.argv[2]
+          assert execution["exitCode"] == 0
+          PY
+
+      - name: Run real Linux Doctor, Build, Restore, and Serve smoke
+        run: |
+          set -euo pipefail
+          export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"
+          artifact=$(python3 -c 'import json; print(json.load(open("dist/jat-runtime.json"))["artifact_digest"])')
+          "$RCC_PATH" --no-build task run --robot "$PWD/robot.yaml" --task Doctor --dev --silent
+          source="$PWD/devdata/synthetic-source"
+          haul="$RUNNER_TEMP/linux-jat.tar.zst"
+          build_request="$RUNNER_TEMP/linux-build.json"
+          python3 - "$build_request" "$source" "$haul" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          Path(sys.argv[1]).write_text(json.dumps({"folder": sys.argv[2], "output": sys.argv[3], "rcc_environment": "off"}))
+          PY
+          "$RCC_PATH" --no-build task run --robot "$PWD/robot.yaml" --task Build -- --json-input "$build_request"
+          restore="$RUNNER_TEMP/linux-restored"
+          restore_request="$RUNNER_TEMP/linux-restore.json"
+          python3 - "$restore_request" "$haul" "$restore" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          Path(sys.argv[1]).write_text(json.dumps({"haul": sys.argv[2], "destination": sys.argv[3]}))
+          PY
+          "$RCC_PATH" --no-build task run --robot "$PWD/robot.yaml" --task Restore -- --json-input "$restore_request"
+          serve_request="$RUNNER_TEMP/linux-serve.json"
+          python3 - "$serve_request" "$haul" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          Path(sys.argv[1]).write_text(json.dumps({"haul": sys.argv[2]}))
+          PY
+          export JAT_RUN_DIR="$RUNNER_TEMP/jat-linux-serve-runtime"
+          export JAT_HAULER_LOG_LEVEL=debug
+          mkdir -p "$JAT_RUN_DIR"
+          serve_log="$RUNNER_TEMP/linux-serve.log"
+          "$RCC_PATH" --no-build task run --robot "$PWD/robot.yaml" --task Serve -- --json-input "$serve_request" > "$serve_log" 2>&1 &
+          serve_pid=$!
+          cleanup() {
+            if kill -0 "$serve_pid" 2>/dev/null; then
+              kill "$serve_pid" 2>/dev/null || true
+            fi
+            wait "$serve_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          served="$RUNNER_TEMP/linux-served-workspace.tar.zst"
+          ready=false
+          for attempt in $(seq 1 30); do
+            if ! kill -0 "$serve_pid" 2>/dev/null; then
+              cat "$serve_log"
+              echo "JAT Serve exited before fileserver readiness" >&2
+              exit 1
+            fi
+            if curl --fail --silent --show-error --output "$served" --max-time 2 \
+              http://127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst && [[ -s "$served" ]]; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          [[ "$ready" == true ]] || { cat "$serve_log"; echo "JAT Serve fileserver did not serve a non-empty workspace artifact" >&2; exit 1; }
+
+      - name: Upload Linux artifact and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jat-linux-runtime-evidence
+          if-no-files-found: warn
+          path: |
+            dist/jat-runtime.rcca
+            dist/jat-runtime.json
+            output/environment_linux_amd64_freeze.yaml
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/*.json

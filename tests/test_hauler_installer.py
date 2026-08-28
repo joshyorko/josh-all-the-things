@@ -1,25 +1,24 @@
 import hashlib
+import io
 import json
-import os
 import stat
-import subprocess
-import sys
 import tarfile
 from pathlib import Path
 
+import pytest
+
+from scripts.install_hauler import install, resolve_platform
+
 
 ROOT = Path(__file__).parents[1]
-SCRIPT = ROOT / "scripts" / "install_hauler.sh"
 
 
-def _archive(path: Path, version: str = "v2.0.3") -> bytes:
+def _archive(path: Path, executable: str = "hauler", version: str = "v2.0.3") -> bytes:
     payload = f"#!/bin/sh\nprintf 'GitVersion:    {version}\\n'\n".encode()
     with tarfile.open(path, "w:gz") as archive:
-        info = tarfile.TarInfo("hauler")
+        info = tarfile.TarInfo(executable)
         info.mode = 0o755
         info.size = len(payload)
-        import io
-
         archive.addfile(info, io.BytesIO(payload))
         license_info = tarfile.TarInfo("LICENSE")
         license_payload = b"license\n"
@@ -29,156 +28,173 @@ def _archive(path: Path, version: str = "v2.0.3") -> bytes:
     return path.read_bytes()
 
 
-def _run(
-    tmp_path: Path,
-    payload: bytes,
-    *,
-    target: bytes | None = None,
-    expected: str = "v2.0.3",
-    manifest_payload: bytes | None = None,
-    environment_python: bool = True,
-    tar_marker: Path | None = None,
-):
-    conda = tmp_path / "conda"
-    (conda / "bin").mkdir(parents=True)
-    if environment_python:
-        (conda / "bin" / "python").symlink_to(sys.executable)
+def _manifest(tmp_path: Path, *, platform: str, asset: str, payload: bytes, version: str = "v2.0.3") -> Path:
     manifest = tmp_path / "hauler.json"
     manifest.write_text(
         json.dumps(
             {
                 "schema_version": 1,
                 "hauler": {
-                    "version": expected,
-                    "platform": "linux-amd64",
-                    "asset": "hauler_linux_amd64.tar.gz",
-                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.0.3/hauler_linux_amd64.tar.gz",
-                    "sha256": hashlib.sha256(manifest_payload or payload).hexdigest(),
+                    "version": version,
+                    "platforms": {
+                        platform: {
+                            "asset": asset,
+                            "url": f"https://github.com/hauler-dev/hauler/releases/download/{version}/{asset}",
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                            "executable": "hauler.exe" if platform == "windows-amd64" else "hauler",
+                        }
+                    },
                 },
             }
         )
     )
-    fixture = tmp_path / "fixture.tar.gz"
-    fixture.write_bytes(payload)
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    curl = fake_bin / "curl"
-    curl.write_text(
-        "#!/bin/sh\n"
-        "set -eu\n"
-        "output=\n"
-        "while [ \"$#\" -gt 0 ]; do\n"
-        "  if [ \"$1\" = \"--output\" ]; then output=$2; shift 2; else shift; fi\n"
-        "done\n"
-        "cp -- \"$HAULER_FIXTURE\" \"$output\"\n"
-    )
-    curl.chmod(0o755)
-    if tar_marker is not None:
-        tar = fake_bin / "tar"
-        tar.write_text(f"#!/bin/sh\n/usr/bin/touch {tar_marker}\n")
-        tar.chmod(0o755)
-    destination = conda / "bin" / "hauler"
-    if target is not None:
-        destination.write_bytes(target)
-        destination.chmod(0o755)
-    environment = {
-        **os.environ,
-        "CONDA_PREFIX": str(conda),
-        "HAULER_MANIFEST": str(manifest),
-        "HAULER_FIXTURE": str(fixture),
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-    }
-    result = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=environment, check=False)
-    return result, destination
+    return manifest
 
 
-def test_canonical_manifest_contains_official_linux_amd64_pin():
+def _download(payload: bytes):
+    def download(_url: str, destination: Path) -> None:
+        destination.write_bytes(payload)
+
+    return download
+
+
+def test_resolve_platform_maps_supported_linux_and_windows_x64():
+    assert resolve_platform("Linux", "x86_64") == "linux-amd64"
+    assert resolve_platform("Windows", "AMD64") == "windows-amd64"
+    with pytest.raises(ValueError, match="unsupported"):
+        resolve_platform("Darwin", "x86_64")
+
+
+def test_canonical_manifest_contains_official_linux_and_windows_pins():
     manifest = json.loads((ROOT / "runtime" / "hauler.json").read_text())
     assert manifest == {
         "schema_version": 1,
         "hauler": {
             "version": "v2.0.3",
-            "platform": "linux-amd64",
-            "asset": "hauler_2.0.3_linux_amd64.tar.gz",
-            "url": "https://github.com/hauler-dev/hauler/releases/download/v2.0.3/hauler_2.0.3_linux_amd64.tar.gz",
-            "sha256": "6685eb1ba86291566f3694d69a8b7e80c928e5a589853691cccf51b26bc61617",
+            "platforms": {
+                "linux-amd64": {
+                    "asset": "hauler_2.0.3_linux_amd64.tar.gz",
+                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.0.3/hauler_2.0.3_linux_amd64.tar.gz",
+                    "sha256": "6685eb1ba86291566f3694d69a8b7e80c928e5a589853691cccf51b26bc61617",
+                    "executable": "hauler",
+                },
+                "windows-amd64": {
+                    "asset": "hauler_2.0.3_windows_amd64.tar.gz",
+                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.0.3/hauler_2.0.3_windows_amd64.tar.gz",
+                    "sha256": "e272b51f8323e6ca9a017f81821294a3cc55019f5e67cca525fa0efb8536b8c0",
+                    "executable": "hauler.exe",
+                },
+            },
         },
     }
 
 
-def test_installer_verifies_before_extracting_and_promotes_atomically(tmp_path):
+def test_windows_installs_exe_into_conda_scripts_without_admin(tmp_path):
+    archive = tmp_path / "archive.tar.gz"
+    payload = _archive(archive, executable="hauler.exe")
+    conda = tmp_path / "conda"
+    conda.mkdir()
+    manifest = _manifest(
+        tmp_path,
+        platform="windows-amd64",
+        asset="hauler_2.0.3_windows_amd64.tar.gz",
+        payload=payload,
+    )
+
+    target = install(
+        manifest,
+        conda,
+        system="Windows",
+        machine="AMD64",
+        download=_download(payload),
+    )
+
+    assert target == conda / "Scripts" / "hauler.exe"
+    assert target.read_bytes() == b"#!/bin/sh\nprintf 'GitVersion:    v2.0.3\\n'\n"
+    assert stat.S_IMODE(target.stat().st_mode) & 0o111
+
+
+def test_linux_installs_into_conda_bin_and_reuses_matching_target(tmp_path):
     archive = tmp_path / "archive.tar.gz"
     payload = _archive(archive)
-    result, destination = _run(tmp_path, payload)
+    conda = tmp_path / "conda"
+    conda.mkdir()
+    manifest = _manifest(
+        tmp_path,
+        platform="linux-amd64",
+        asset="hauler_2.0.3_linux_amd64.tar.gz",
+        payload=payload,
+    )
+    calls = []
 
-    assert result.returncode == 0, result.stderr
-    assert destination.read_text() == "#!/bin/sh\nprintf 'GitVersion:    v2.0.3\\n'\n"
-    assert stat.S_IMODE(destination.stat().st_mode) == 0o755
+    def download(url: str, destination: Path) -> None:
+        calls.append(url)
+        destination.write_bytes(payload)
+
+    target = install(manifest, conda, system="Linux", machine="x86_64", download=download)
+    assert target == conda / "bin" / "hauler"
+    assert len(calls) == 1
+    assert install(manifest, conda, system="Linux", machine="x86_64", download=download) == target
+    assert len(calls) == 1
 
 
 def test_checksum_mismatch_fails_before_promotion(tmp_path):
     archive = tmp_path / "archive.tar.gz"
     payload = _archive(archive)
-    result, destination = _run(tmp_path, payload + b"tampered", manifest_payload=payload)
+    manifest = _manifest(
+        tmp_path,
+        platform="linux-amd64",
+        asset="hauler_2.0.3_linux_amd64.tar.gz",
+        payload=payload + b"tampered",
+    )
+    conda = tmp_path / "conda"
+    conda.mkdir()
 
-    assert result.returncode != 0
-    assert "SHA256" in result.stderr
-    assert not destination.exists()
+    with pytest.raises(ValueError, match="SHA256"):
+        install(manifest, conda, system="Linux", machine="x86_64", download=_download(payload))
+    assert not (conda / "bin" / "hauler").exists()
 
 
-def test_installer_rejects_unsafe_archive_before_extraction(tmp_path):
+def test_unsafe_archive_fails_before_promotion(tmp_path):
     archive = tmp_path / "archive.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
         escaped = tarfile.TarInfo("../escaped")
         payload = b"escaped"
         escaped.mode = 0o600
         escaped.size = len(payload)
-        import io
-
         tar.addfile(escaped, io.BytesIO(payload))
-        link = tarfile.TarInfo("link")
-        link.type = tarfile.SYMTYPE
-        link.linkname = "/tmp/outside"
-        tar.addfile(link)
     payload = archive.read_bytes()
+    manifest = _manifest(
+        tmp_path,
+        platform="linux-amd64",
+        asset="hauler_2.0.3_linux_amd64.tar.gz",
+        payload=payload,
+    )
+    conda = tmp_path / "conda"
+    conda.mkdir()
 
-    tar_marker = tmp_path / "tar-invoked"
-    result, destination = _run(tmp_path, payload, tar_marker=tar_marker)
-
-    assert result.returncode != 0
-    assert "unsafe" in result.stderr.lower()
-    assert not tar_marker.exists()
-    assert not destination.exists()
-    assert not (tmp_path / "conda" / "escaped").exists()
-
-
-def test_installer_rejects_missing_environment_python_without_host_fallback(tmp_path):
-    archive = tmp_path / "archive.tar.gz"
-    payload = _archive(archive)
-
-    result, destination = _run(tmp_path, payload, environment_python=False)
-
-    assert result.returncode != 0
-    assert "environment-owned Python" in result.stderr
-    assert not destination.exists()
-
-
-def test_matching_existing_installation_is_reused_without_download(tmp_path):
-    archive = tmp_path / "archive.tar.gz"
-    payload = _archive(archive)
-    existing = b"#!/bin/sh\nprintf 'GitVersion:    v2.0.3\\n'\n"
-    result, destination = _run(tmp_path, payload, target=existing)
-
-    assert result.returncode == 0, result.stderr
-    assert destination.read_bytes() == existing
+    with pytest.raises(ValueError, match="unsafe"):
+        install(manifest, conda, system="Linux", machine="x86_64", download=_download(payload))
+    assert not (conda / "bin" / "hauler").exists()
+    assert not (conda / "escaped").exists()
 
 
 def test_mismatched_existing_installation_fails_closed(tmp_path):
     archive = tmp_path / "archive.tar.gz"
-    payload = _archive(archive)
-    existing = b"#!/bin/sh\nprintf 'GitVersion:    v1.0.0\\n'\n"
-    result, destination = _run(tmp_path, payload, target=existing)
+    payload = _archive(archive, version="v1.0.0")
+    manifest = _manifest(
+        tmp_path,
+        platform="linux-amd64",
+        asset="hauler_2.0.3_linux_amd64.tar.gz",
+        payload=payload,
+        version="v2.0.3",
+    )
+    conda = tmp_path / "conda"
+    target = conda / "bin" / "hauler"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"#!/bin/sh\nprintf 'GitVersion:    v1.0.0\\n'\n")
+    target.chmod(0o755)
 
-    assert result.returncode != 0
-    assert "does not match" in result.stderr
-    assert destination.read_bytes() == existing
+    with pytest.raises(ValueError, match="does not match"):
+        install(manifest, conda, system="Linux", machine="x86_64", download=_download(payload))
+    assert target.read_bytes().endswith(b"v1.0.0\\n'\n")

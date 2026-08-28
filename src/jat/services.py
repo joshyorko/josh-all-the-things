@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 from shutil import which as system_which
+from urllib.parse import quote
 
 from robocorp import log
 
@@ -106,7 +107,17 @@ class JATService:
                 validation_temp = stage.path / "validation-temp"
                 temp.mkdir()
                 validation_temp.mkdir()
-                self.hauler.sync(build_store, temp, manifest)
+                artifact_files = [(workspace_archive, WORKSPACE_ARTIFACT)]
+                if brew_archive:
+                    artifact_files.append((brew_archive, BREW_ARTIFACT))
+                if rcc_archive:
+                    artifact_files.append((rcc_archive, RCC_ARTIFACT))
+                if rcc_metadata_path:
+                    artifact_files.append((rcc_metadata_path, RCC_METADATA_ARTIFACT))
+                if os.name == "nt" and hasattr(self.hauler, "sync_files"):
+                    self.hauler.sync_files(build_store, temp, artifact_files, images)
+                else:
+                    self.hauler.sync(build_store, temp, manifest)
                 staged = stage.path / output.name
                 self.hauler.save(build_store, temp, staged)
                 self.hauler.load(validation_store, validation_temp, staged)
@@ -220,8 +231,11 @@ class JATService:
                 registry.mkdir()
                 config.write_text(_registry_config(registry))
                 self.hauler.load(store, temp, haul)
-                self.hauler.info(store, temp)
-                self.hauler.serve(store, temp, registry, config)
+                inventory = self.hauler.inventory(store, temp)
+                if _inventory_is_files_only(inventory):
+                    self.hauler.serve_files(store, temp, registry, port=8080)
+                else:
+                    self.hauler.serve(store, temp, registry, config)
             return OperationResult(
                 operation="serve", success=True, exit_status=0, producer_version=self.producer_version
             )
@@ -235,7 +249,7 @@ class JATService:
         try:
             _ = self.archive
         except RuntimeError:
-            missing.append("GNU tar with --zstd")
+            missing.append("environment-owned tar+zstd archive backend")
         return OperationResult(
             operation="doctor",
             success=not missing,
@@ -340,7 +354,7 @@ def _write_manifest(
                 "  name: joshs-all-the-things-workspace",
                 "spec:",
                 "  files:",
-                f"    - path: {json.dumps(str(workspace))}",
+                f"    - path: {json.dumps(_local_file_reference(workspace))}",
                 f"      name: {WORKSPACE_ARTIFACT}",
             ]
         )
@@ -355,7 +369,7 @@ def _write_manifest(
                     "  name: joshs-all-the-things-homebrew-recovery",
                     "spec:",
                     "  files:",
-                    f"    - path: {json.dumps(str(brew))}",
+                    f"    - path: {json.dumps(_local_file_reference(brew))}",
                     f"      name: {BREW_ARTIFACT}",
                 ]
             )
@@ -370,7 +384,7 @@ def _write_manifest(
                     "  name: joshs-all-the-things-rcc-environment",
                     "spec:",
                     "  files:",
-                    f"    - path: {json.dumps(str(rcc_archive))}",
+                    f"    - path: {json.dumps(_local_file_reference(rcc_archive))}",
                     f"      name: {RCC_ARTIFACT}",
                 ]
             )
@@ -385,7 +399,7 @@ def _write_manifest(
                     "  name: joshs-all-the-things-rcc-environment-metadata",
                     "spec:",
                     "  files:",
-                    f"    - path: {json.dumps(str(rcc_metadata))}",
+                    f"    - path: {json.dumps(_local_file_reference(rcc_metadata))}",
                     f"      name: {RCC_METADATA_ARTIFACT}",
                 ]
             )
@@ -403,6 +417,22 @@ def _write_manifest(
             lines.extend((f"    - name: {json.dumps(image)}", "      local: true"))
         documents.append("\n".join(lines))
     path.write_text("\n---\n".join(documents) + "\n")
+
+
+def _local_file_reference(path: Path, windows: bool | None = None) -> str:
+    """Render a local path in the URI form Hauler's file getter accepts."""
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return path.resolve().as_uri()
+    value = path.as_posix()
+    if value.startswith("//"):
+        raise ValueError("UNC paths are not supported for Hauler local file sources")
+    if len(value) >= 3 and value[1:3] == ":/":
+        drive = quote(value[:2], safe=":")
+        remainder = quote(value[2:], safe="/~")
+        return f"file://{drive}{remainder}"
+    return Path(value).resolve().as_uri()
 
 
 def _validate_robocorp_home(source: Path) -> None:
@@ -453,6 +483,10 @@ def _saved_robot_path(workspace: Path, relative: Path) -> Path:
 
 def _inventory_references(inventory: list[dict]) -> set[str]:
     return {item["Reference"] for item in inventory}
+
+
+def _inventory_is_files_only(inventory: list[dict]) -> bool:
+    return bool(inventory) and all(str(item.get("Type", "")).lower() == "file" for item in inventory)
 
 
 def _validate_inventory(inventory: list[dict], expect_brew: bool, expect_rcc: bool = False) -> None:
@@ -511,7 +545,8 @@ def _git_version(root: Path) -> str:
         return pinned
     try:
         completed = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+            ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", check=False
         )
     except OSError:
         return "unknown"
@@ -533,7 +568,7 @@ storage:
 catalog:
   maxentries: 1000
 http:
-  addr: ":5000"
+  addr: "127.0.0.1:5000"
 validation:
   manifests:
     urls:

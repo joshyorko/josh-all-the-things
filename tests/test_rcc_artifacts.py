@@ -25,11 +25,11 @@ def test_rcc_adapter_uses_released_json_commands_and_returns_metadata(tmp_path):
     archive.write_bytes(b"RCCA")
     runner = RecordingRunner(
         [
-            result(stdout="rcc v18.19.2\n"),
+            result(stdout="rcc v18.19.3\n"),
             result(stdout=json.dumps({"artifactDigest": "sha256:" + "a" * 64, "specificationDigest": "sha256:" + "b" * 64, "legacyBlueprintKey": "c" * 16})),
             result(stdout="published\n"),
             result(stdout=json.dumps({"artifactDigest": "sha256:" + "a" * 64, "specificationDigest": "sha256:" + "b" * 64, "legacyBlueprintKey": "c" * 16, "archive": str(archive)})),
-            result(stdout="rcc v18.19.2\n"),
+            result(stdout="rcc v18.19.3\n"),
             result(stdout="[]\n"),
         ]
     )
@@ -42,7 +42,7 @@ def test_rcc_adapter_uses_released_json_commands_and_returns_metadata(tmp_path):
     assert metadata.artifact == "sha256:" + "a" * 64
     assert metadata.specification_digest == "sha256:" + "b" * 64
     assert metadata.legacy_blueprint_key == "c" * 16
-    assert metadata.rcc_version == "v18.19.2"
+    assert metadata.rcc_version == "v18.19.3"
     assert acquired.artifact == metadata.artifact
     assert [call[0] for call in runner.calls] == [
         ["/tools/rcc", "version"],
@@ -55,7 +55,7 @@ def test_rcc_adapter_uses_released_json_commands_and_returns_metadata(tmp_path):
 
 
 def test_rcc_adapter_rejects_non_json_verification_output(tmp_path):
-    runner = RecordingRunner([result(stdout="rcc v18.19.2\n"), result(stdout="not-json")])
+    runner = RecordingRunner([result(stdout="rcc v18.19.3\n"), result(stdout="not-json")])
     adapter = RCCArtifactAdapter(runner)
     try:
         adapter.verify(tmp_path / "robot.yaml")
@@ -66,10 +66,10 @@ def test_rcc_adapter_rejects_non_json_verification_output(tmp_path):
 
 
 def test_rcc_adapter_rejects_unsupported_version(tmp_path):
-    adapter = RCCArtifactAdapter(RecordingRunner([result(stdout="rcc v18.19.1\n")]))
+    adapter = RCCArtifactAdapter(RecordingRunner([result(stdout="rcc v18.19.2\n")]))
     try:
         adapter.publish_and_export(tmp_path, tmp_path / "environment.rcca")
     except RuntimeError as error:
-        assert "v18.19.2" in str(error)
+        assert "v18.19.3" in str(error)
     else:
         raise AssertionError("unsupported RCC version was accepted")

@@ -28,7 +28,7 @@ hauler_launcher=$(jq -er '
 jq -e --arg hauler_launcher "$hauler_launcher" '.format_version == 2 and .operation == "build" and .success == true and
   (.jat_git_sha | test("^[0-9a-f]{40}$")) and
   (.rcc_executable | type == "string" and length > 0) and
-  .rcc_version == "v18.19.2" and .platform == "linux_amd64" and
+  .rcc_version == "v18.19.3" and .platform == "linux_amd64" and
   .verified_acquire.fresh_home == true and .verified_acquire.no_build == true and
   .verified_no_build.fresh_home == true and .verified_no_build.no_build == true and
   .verified_exec.fresh_home == true and

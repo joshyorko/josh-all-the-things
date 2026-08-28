@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace JAT's custom Hololib distribution with canonical RCC v18.19.2 Environment Artifacts and optionally carry a workspace's RCC environment inside an interoperable Hauler haul.
+**Goal:** Replace JAT's custom Hololib distribution with canonical RCC v18.19.3 Environment Artifacts and optionally carry a workspace's RCC environment inside an interoperable Hauler haul.
 
 **Architecture:** Keep `JATService` and the Hauler CLI adapter intact. Add one narrow RCC CLI JSON adapter beside Hauler, store a typed RCC metadata sidecar plus exactly one `.rcca` file artifact in the haul, and verify acquired environments through ordinary `rcc --no-build ht vars` before workspace promotion.
 
-**Tech Stack:** Python 3.13, Pydantic, RCC v18.19.2 CLI, Hauler CLI, pytest, Ruff.
+**Tech Stack:** Python 3.13, Pydantic, RCC v18.19.3 CLI, Hauler CLI, pytest, Ruff.
 
 **Spec:** User-approved migration brief in the coordinating Codex task.
 
 ## Global Constraints
 
-- Use released RCC v18.19.2 from commit `43aa8c3f834fc84606fd1e442443fbb224324c40`.
+- Use released RCC v18.19.3 from commit `4148c2b71705c9d2baf0e88b48d08a79cb7bda0f`.
 - Do not use `rcc ht export`, `rcc ht import`, RCC Go internals, or native Hauler packages.
 - Preserve all legacy Build/Restore, image, Homebrew, create-only, path-safety, cleanup, cancellation, and bounded-diagnostic behavior.
 - `rcc_environment=off` is byte-compatible request behavior; `auto` captures only root `robot.yaml`; `required` fails closed.
@@ -77,7 +77,7 @@
 ### Task 2: Prove real legacy and portable interoperability
 
 **Files:**
-- Evidence only under `/home/kdlocpanda/Documents/Codex/2026-08-25/jat-rcc-v18.19.2-evidence/`
+- Evidence only under `/home/kdlocpanda/Documents/Codex/2026-08-25/jat-rcc-v18.19.3-evidence/`
 
 **Interfaces:**
 - Consumes: repaired Task 1 CLI/task contract.
@@ -97,7 +97,7 @@
 - Produce: `dist/jat-runtime.json`
 
 **Interfaces:**
-- Consumes: final candidate JAT SHA and released RCC v18.19.2.
+- Consumes: final candidate JAT SHA and released RCC v18.19.3.
 - Produces: verified canonical archive and publication receipt for immutable GHCR transport.
 
 - [ ] **Step 1: Build with isolated producer/verifier homes and create-only outputs**
