@@ -20,15 +20,22 @@ command -v jq >/dev/null
 command -v oras >/dev/null
 [[ -f $archive && -f $receipt ]] || { printf 'Verified JAT artifact and receipt are required.\n' >&2; exit 2; }
 [[ -f $schema ]] || { printf 'Receipt schema is required: %s\n' "$schema" >&2; exit 2; }
+expected_rcc_version=$(jq -er '.properties.rcc_version.const' "$schema")
+platform=$(jq -er '.platform' "$receipt")
+case "$platform" in
+  linux_amd64|windows_amd64) ;;
+  *) printf 'Unsupported JAT artifact platform: %s\n' "$platform" >&2; exit 2;;
+esac
+archive_filename=$(basename -- "$archive")
 hauler_launcher=$(jq -er '
   .properties.verified_hauler.properties.launcher.const
   | select(type == "array" and length == 3 and .[0] == "python" and .[1] == "-c" and (.[2] | type == "string"))
   | .[2]
 ' "$schema")
-jq -e --arg hauler_launcher "$hauler_launcher" '.format_version == 2 and .operation == "build" and .success == true and
+jq -e --arg hauler_launcher "$hauler_launcher" --arg expected_rcc_version "$expected_rcc_version" --arg platform "$platform" --arg archive_filename "$archive_filename" '.format_version == 2 and .operation == "build" and .success == true and
   (.jat_git_sha | test("^[0-9a-f]{40}$")) and
   (.rcc_executable | type == "string" and length > 0) and
-  .rcc_version == "v18.19.3" and .platform == "linux_amd64" and
+  .rcc_version == $expected_rcc_version and .platform == $platform and
   .verified_acquire.fresh_home == true and .verified_acquire.no_build == true and
   .verified_no_build.fresh_home == true and .verified_no_build.no_build == true and
   .verified_exec.fresh_home == true and
@@ -38,12 +45,13 @@ jq -e --arg hauler_launcher "$hauler_launcher" '.format_version == 2 and .operat
   (.artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
   (.specification_digest | test("^sha256:[0-9a-f]{64}$")) and
   (.legacy_blueprint_key | type == "string" and length > 0) and
-  .archive.filename == "jat-runtime.rcca" and
+  .archive.filename == $archive_filename and
   (.archive.sha256 | test("^[0-9a-f]{64}$")) and
   (.archive.size | type == "number" and . > 0)' "$receipt" >/dev/null
 [[ $(sha256sum "$archive" | cut -d' ' -f1) == "$(jq -r .archive.sha256 "$receipt")" ]] || { printf 'Artifact does not match its receipt.\n' >&2; exit 2; }
 [[ $(stat --printf='%s' "$archive") == "$(jq -r .archive.size "$receipt")" ]] || { printf 'Artifact size does not match its receipt.\n' >&2; exit 2; }
 artifact=$(jq -r .artifact_digest "$receipt")
+# Push one platform-specific immutable carrier tag; artifact identity is unchanged.
 reference="$repository:$(jq -r .platform "$receipt")-${artifact#sha256:}"
 printf '%s' "$GITHUB_TOKEN" | oras login ghcr.io --username "$username" --password-stdin
 (cd "$(dirname "$archive")" && oras push "$reference" --artifact-type application/vnd.joshyorko.rcc-environment-artifact.v2 \

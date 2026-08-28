@@ -102,11 +102,17 @@ jobs:
           $published = Get-Content -Raw $publishPath | ConvertFrom-Json
           $artifact = $published.artifactDigest
           if ($artifact -notmatch "^sha256:[0-9a-f]{64}$") { throw "publish returned no canonical artifact digest" }
+          $specification = $published.specificationDigest
+          $legacyBlueprint = $published.legacyBlueprintKey
+          if ($specification -notmatch "^sha256:[0-9a-f]{64}$") { throw "publish returned no canonical specification digest" }
+          if ($legacyBlueprint -notmatch "^[0-9a-f]+$") { throw "publish returned no canonical blueprint key" }
           $archive = Join-Path $env:RUNNER_TEMP "jat-runtime-windows.rcca"
           & $env:RCC_PATH env export --artifact $artifact --provider local --output $archive *> (Join-Path $env:RUNNER_TEMP "windows-export.log")
           if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-export.log"); throw "Windows artifact export failed" }
           if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) { throw "Windows .rcca export is missing" }
           "WINDOWS_ARTIFACT=$artifact" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WINDOWS_SPECIFICATION_DIGEST=$specification" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WINDOWS_LEGACY_BLUEPRINT_KEY=$legacyBlueprint" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WINDOWS_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Fresh acquire, no-build variables, and hauler.exe proof
@@ -128,6 +134,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log"); throw "hauler.exe version execution failed" }
           $executed = Get-Content -Raw $execPath | ConvertFrom-Json
           if ($executed.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $executed.exitCode -ne 0) { throw "hauler.exe did not execute from the acquired Windows artifact" }
+          $haulerVersionCode = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
+          $pythonExecPath = Join-Path $env:RUNNER_TEMP "windows-hauler-python-exec.json"
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- python -c $haulerVersionCode 1> $pythonExecPath 2> (Join-Path $env:RUNNER_TEMP "windows-hauler-python-exec.log")
+          if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-hauler-python-exec.log"); throw "artifact Python Hauler version proof failed" }
+          $pythonExecuted = Get-Content -Raw $pythonExecPath | ConvertFrom-Json
+          if ($pythonExecuted.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $pythonExecuted.exitCode -ne 0) { throw "artifact Python Hauler version proof did not validate" }
           $executed
 
       - name: Probe Hauler Windows local file ingestion
@@ -196,6 +208,39 @@ jobs:
           if (-not $ready) { Get-Content $serveOut, $serveErr; throw "JAT Serve fileserver did not serve $workspaceUrl" }
           & taskkill.exe /PID $serve.Id /T /F | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "could not stop the Windows Serve smoke process" }
+          $archiveInfo = [ordered]@{
+            filename = Split-Path -Leaf $env:WINDOWS_ARCHIVE
+            sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $env:WINDOWS_ARCHIVE).Hash.ToLowerInvariant()
+            size = [int64](Get-Item -LiteralPath $env:WINDOWS_ARCHIVE).Length
+          }
+          $haulerVersionCode = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
+          $receipt = [ordered]@{
+            format_version = 2
+            operation = "build"
+            success = $true
+            jat_git_sha = (& git rev-parse HEAD).Trim()
+            rcc_executable = $env:RCC_PATH
+            rcc_version = "v18.19.3"
+            platform = "windows_amd64"
+            artifact_digest = $env:WINDOWS_ARTIFACT
+            specification_digest = $env:WINDOWS_SPECIFICATION_DIGEST
+            legacy_blueprint_key = $env:WINDOWS_LEGACY_BLUEPRINT_KEY
+            archive = $archiveInfo
+            verified_acquire = [ordered]@{ fresh_home = $true; no_build = $true }
+            verified_no_build = [ordered]@{ fresh_home = $true; no_build = $true }
+            verified_exec = [ordered]@{ fresh_home = $true }
+            verified_hauler = [ordered]@{
+              fresh_home = $true
+              command = @("hauler", "version")
+              launcher = @("python", "-c", $haulerVersionCode)
+              resolved_under_conda_prefix = $true
+              exit_code = 0
+            }
+            verified_tasks = [ordered]@{ doctor = $true; build = $true; restore = $true; serve = $true }
+          }
+          $receiptPath = Join-Path $env:RUNNER_TEMP "jat-runtime-windows.json"
+          $receipt | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $receiptPath -Encoding utf8
+          if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) { throw "Windows runtime receipt was not written" }
 
       - name: Upload generated Windows freeze and runtime evidence
         if: always()
@@ -206,6 +251,8 @@ jobs:
           path: |
             output/environment_windows_amd64_freeze.yaml
             environment_windows_amd64_freeze.yaml
+            ${{ runner.temp }}/jat-runtime-windows.rcca
+            ${{ runner.temp }}/jat-runtime-windows.json
             ${{ runner.temp }}/*.log
             ${{ runner.temp }}/*.json
             ${{ runner.temp }}/windows-serve.*

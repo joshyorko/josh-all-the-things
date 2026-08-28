@@ -380,6 +380,62 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
     assert not oras_log.exists(), "invalid receipt reached ORAS"
 
 
+def test_publish_wrapper_accepts_windows_archive_and_keeps_platform_tag(tmp_path):
+    root = Path(__file__).parents[1]
+    if shutil.which("jq") is None:
+        pytest.fail("jq is required to exercise the publication wrapper")
+
+    archive = tmp_path / "jat-runtime-windows.rcca"
+    archive_bytes = b"schema-valid Windows RCCA archive"
+    archive.write_bytes(archive_bytes)
+    receipt = tmp_path / "jat-runtime-windows.json"
+    receipt_data = {
+        "format_version": 2,
+        "operation": "build",
+        "success": True,
+        "jat_git_sha": "1" * 40,
+        "rcc_executable": "C:/runner/rcc.exe",
+        "rcc_version": "v18.19.3",
+        "platform": "windows_amd64",
+        "artifact_digest": "sha256:" + "e" * 64,
+        "specification_digest": "sha256:" + "f" * 64,
+        "legacy_blueprint_key": "a" * 16,
+        "archive": {"filename": archive.name, "sha256": hashlib.sha256(archive_bytes).hexdigest(), "size": len(archive_bytes)},
+        "verified_acquire": {"fresh_home": True, "no_build": True},
+        "verified_no_build": {"fresh_home": True, "no_build": True},
+        "verified_exec": {"fresh_home": True},
+        "verified_hauler": {
+            "fresh_home": True,
+            "command": ["hauler", "version"],
+            "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+            "resolved_under_conda_prefix": True,
+            "exit_code": 0,
+        },
+        "verified_tasks": {"doctor": True, "build": True, "restore": True, "serve": True},
+    }
+    receipt.write_text(json.dumps(receipt_data) + "\n")
+    validate(instance=receipt_data, schema=json.loads((root / "docs/environment-artifact-receipt.schema.json").read_text()))
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    oras_log = tmp_path / "oras.log"
+    write_fake_oras(fake_bin / "oras", oras_log)
+    environment = os.environ.copy()
+    environment.update(PATH=f"{fake_bin}{os.pathsep}{environment['PATH']}", GITHUB_TOKEN="fake-token")
+    result = subprocess.run(
+        [str(root / "scripts/publish_environment_artifact.sh"), "--archive", str(archive), "--receipt", str(receipt), "--repository", "ghcr.io/example/jat-runtime"],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"Windows receipt was rejected: stdout={result.stdout!r} stderr={result.stderr!r}"
+    assert result.stdout.strip() == "ghcr.io/example/jat-runtime@sha256:" + "d" * 64
+    calls = [json.loads(line) for line in oras_log.read_text().splitlines()]
+    assert calls[1][1] == "ghcr.io/example/jat-runtime:windows_amd64-" + "e" * 64
+
+
 def test_publish_script_has_canonical_media_types_and_receipt_validation():
     root = Path(__file__).parents[1]
     script = (root / "scripts/publish_environment_artifact.sh").read_text()
