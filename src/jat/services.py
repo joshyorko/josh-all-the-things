@@ -561,7 +561,7 @@ storage:
 catalog:
   maxentries: 1000
 http:
-  addr: ":5000"
+  addr: "127.0.0.1:5000"
 validation:
   manifests:
     urls:

@@ -170,9 +170,18 @@ jobs:
           $serveOut = Join-Path $env:RUNNER_TEMP "windows-serve.out"
           $serveErr = Join-Path $env:RUNNER_TEMP "windows-serve.err"
           $serveArgs = @("task", "run", "--robot", (Join-Path $PWD "robot.yaml"), "--task", "Serve", "--", "--json-input", $serveRequest)
+          $env:JAT_HAULER_LOG_LEVEL = "debug"
           $serve = Start-Process -FilePath $env:RCC_PATH -ArgumentList $serveArgs -WorkingDirectory $PWD -RedirectStandardOutput $serveOut -RedirectStandardError $serveErr -PassThru
-          Start-Sleep -Seconds 30
-          if ($serve.HasExited) { Get-Content $serveOut, $serveErr; throw "JAT Serve exited before reaching the Hauler registry path" }
+          $ready = $false
+          for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            if ($serve.HasExited) { Get-Content $serveOut, $serveErr; throw "JAT Serve exited before registry readiness" }
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:5000/v2/" -UseBasicParsing -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { $ready = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { Get-Content $serveOut, $serveErr; throw "JAT Serve registry did not become ready at http://127.0.0.1:5000/v2/" }
           & taskkill.exe /PID $serve.Id /T /F | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "could not stop the Windows Serve smoke process" }
 

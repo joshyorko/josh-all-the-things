@@ -6,7 +6,7 @@ import pytest
 
 from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest, ServeRequest
 from jat.safety import ArchiveMember
-from jat.services import JATService, _local_file_reference
+from jat.services import JATService, _local_file_reference, _registry_config
 
 
 class FakeArchive:
@@ -183,6 +183,12 @@ def test_windows_hauler_manifest_file_reference_is_a_file_uri():
 
 def test_linux_hauler_manifest_file_reference_escapes_spaces():
     assert _local_file_reference(Path("/tmp/work dir/payload.tar.zst"), windows=False) == "file:///tmp/work%20dir/payload.tar.zst"
+
+
+def test_registry_config_uses_loopback_and_quotes_windows_root_path():
+    config = _registry_config(Path("D:/josh room/registry"))
+    assert 'rootdirectory: "D:/josh room/registry"' in config
+    assert 'addr: "127.0.0.1:5000"' in config
 
 
 def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):

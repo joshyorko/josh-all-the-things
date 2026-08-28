@@ -1,6 +1,7 @@
 """Exact Hauler subprocess contract."""
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -78,20 +79,24 @@ class HaulerAdapter:
         )
 
     def serve(self, store: Path, temp: Path, directory: Path, config: Path):
+        arguments = [
+            "store",
+            "serve",
+            "registry",
+            "--store",
+            str(store),
+            "--tempdir",
+            str(temp),
+            "--directory",
+            str(directory),
+            "--config",
+            str(config),
+        ]
+        log_level = os.environ.get("JAT_HAULER_LOG_LEVEL")
+        if log_level:
+            arguments = ["--log-level", log_level, *arguments]
         return self._run(
-            [
-                "store",
-                "serve",
-                "registry",
-                "--store",
-                str(store),
-                "--tempdir",
-                str(temp),
-                "--directory",
-                str(directory),
-                "--config",
-                str(config),
-            ],
+            arguments,
             foreground=True,
         )
 

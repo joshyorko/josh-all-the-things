@@ -292,6 +292,15 @@ def test_hauler_adapter_owns_exact_argv(tmp_path):
     assert runner.calls[-1][2] is True
 
 
+def test_hauler_serve_debug_level_is_forwarded_without_shell_framing(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAT_HAULER_LOG_LEVEL", "debug")
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler")
+    adapter.serve(tmp_path / "store", tmp_path / "temp", tmp_path / "registry", tmp_path / "registry.yaml")
+    assert runner.calls[-1][0][:3] == ["/tools/hauler", "--log-level", "debug"]
+    assert runner.calls[-1][2] is True
+
+
 def test_windows_hauler_adapter_adds_local_files_without_files_manifest(tmp_path):
     runner = RecordingRunner()
     adapter = HaulerAdapter(runner, executable="/tools/hauler.exe", platform_name="windows")
