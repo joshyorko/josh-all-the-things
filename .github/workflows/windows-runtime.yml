@@ -135,7 +135,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $probeRoot, $store, $temp | Out-Null
           Set-Content -LiteralPath $payload -Value "hauler-windows-file-probe" -Encoding utf8
           $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-artifact-verifier"
-          $command = "hauler.exe store add file `"$payload`" --name probe.txt --store `"$store`" --tempdir `"$temp`""
+          $command = "hauler.exe --store `"$store`" --tempdir `"$temp`" store add file `"$payload`" --name probe.txt"
           $log = Join-Path $env:RUNNER_TEMP "windows-hauler-add-file-probe.log"
           $receipt = Join-Path $env:RUNNER_TEMP "windows-hauler-add-file-probe.json"
           & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $receipt -- cmd.exe /d /c $command *> $log

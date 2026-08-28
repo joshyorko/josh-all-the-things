@@ -19,30 +19,30 @@ class HaulerAdapter:
         for path, name in files:
             self._run(
                 [
+                    "--store",
+                    str(store),
+                    "--tempdir",
+                    str(temp),
                     "store",
                     "add",
                     "file",
                     str(path),
                     "--name",
                     name,
-                    "--store",
-                    str(store),
-                    "--tempdir",
-                    str(temp),
                 ]
             )
         for image in images or []:
             self._run(
                 [
+                    "--store",
+                    str(store),
+                    "--tempdir",
+                    str(temp),
                     "store",
                     "add",
                     "image",
                     image,
                     "--local",
-                    "--store",
-                    str(store),
-                    "--tempdir",
-                    str(temp),
                 ]
             )
 
