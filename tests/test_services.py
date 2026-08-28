@@ -2,6 +2,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest, ServeRequest
 from jat.safety import ArchiveMember
 from jat.services import JATService, _local_file_reference
@@ -173,7 +175,14 @@ def service(tmp_path, archive=None, hauler=None, rcc=None):
 
 
 def test_windows_hauler_manifest_file_reference_is_a_file_uri():
-    assert _local_file_reference(Path("D:/work/payload.tar.zst"), windows=True) == "file:///D:/work/payload.tar.zst"
+    assert _local_file_reference(Path("D:/work/payload.tar.zst"), windows=True) == "file://D:/work/payload.tar.zst"
+    assert _local_file_reference(Path("D:/work dir/payload.tar.zst"), windows=True) == "file://D:/work%20dir/payload.tar.zst"
+    with pytest.raises(ValueError, match="UNC"):
+        _local_file_reference(Path("//server/share/payload.tar.zst"), windows=True)
+
+
+def test_linux_hauler_manifest_file_reference_escapes_spaces():
+    assert _local_file_reference(Path("/tmp/work dir/payload.tar.zst"), windows=False) == "file:///tmp/work%20dir/payload.tar.zst"
 
 
 def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):

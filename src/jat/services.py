@@ -413,9 +413,12 @@ def _local_file_reference(path: Path, windows: bool | None = None) -> str:
     if not windows:
         return path.resolve().as_uri()
     value = path.as_posix()
+    if value.startswith("//"):
+        raise ValueError("UNC paths are not supported for Hauler local file sources")
     if len(value) >= 3 and value[1:3] == ":/":
-        encoded = quote(value, safe="/:~")
-        return f"file:///{encoded}"
+        drive = quote(value[:2], safe=":")
+        remainder = quote(value[2:], safe="/~")
+        return f"file://{drive}{remainder}"
     return Path(value).resolve().as_uri()
 
 
