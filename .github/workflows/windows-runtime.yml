@@ -135,10 +135,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path $probeRoot, $store, $temp | Out-Null
           Set-Content -LiteralPath $payload -Value "hauler-windows-file-probe" -Encoding utf8
           $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-artifact-verifier"
-          $command = "hauler.exe --store `"$store`" --tempdir `"$temp`" store add file `"$payload`" --name probe.txt"
+          $storeLiteral = $store | ConvertTo-Json -Compress
+          $tempLiteral = $temp | ConvertTo-Json -Compress
+          $payloadLiteral = $payload | ConvertTo-Json -Compress
+          $launcher = "import os,shutil,subprocess; executable=shutil.which('hauler.exe'); prefix=os.path.realpath(os.environ['CONDA_PREFIX']); resolved=os.path.realpath(executable); assert resolved.startswith(prefix + os.sep); subprocess.run([shutil.which('hauler.exe'), '--store', $storeLiteral, '--tempdir', $tempLiteral, 'store', 'add', 'file', $payloadLiteral, '--name', 'probe.txt'], check=True)"
           $log = Join-Path $env:RUNNER_TEMP "windows-hauler-add-file-probe.log"
           $receipt = Join-Path $env:RUNNER_TEMP "windows-hauler-add-file-probe.json"
-          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $receipt -- cmd.exe /d /c $command *> $log
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $receipt -- python -c $launcher *> $log
           if ($LASTEXITCODE -ne 0) { Get-Content $log; throw "Hauler Windows store add file probe failed" }
 
       - name: Run real JAT Doctor, Build, Restore, and Serve smoke
