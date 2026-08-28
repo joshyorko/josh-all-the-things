@@ -32,6 +32,7 @@ def _run(
     expected: str = "v2.0.3",
     manifest_payload: bytes | None = None,
     environment_python: bool = True,
+    tar_marker: Path | None = None,
 ):
     conda = tmp_path / "conda"
     (conda / "bin").mkdir(parents=True)
@@ -67,6 +68,10 @@ def _run(
         "cp -- \"$HAULER_FIXTURE\" \"$output\"\n"
     )
     curl.chmod(0o755)
+    if tar_marker is not None:
+        tar = fake_bin / "tar"
+        tar.write_text(f"#!/bin/sh\n/usr/bin/touch {tar_marker}\n")
+        tar.chmod(0o755)
     destination = conda / "bin" / "hauler"
     if target is not None:
         destination.write_bytes(target)
@@ -114,6 +119,32 @@ def test_checksum_mismatch_fails_before_promotion(tmp_path):
     assert result.returncode != 0
     assert "SHA256" in result.stderr
     assert not destination.exists()
+
+
+def test_installer_rejects_unsafe_archive_before_extraction(tmp_path):
+    archive = tmp_path / "archive.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        escaped = tarfile.TarInfo("../escaped")
+        payload = b"escaped"
+        escaped.mode = 0o600
+        escaped.size = len(payload)
+        import io
+
+        tar.addfile(escaped, io.BytesIO(payload))
+        link = tarfile.TarInfo("link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/tmp/outside"
+        tar.addfile(link)
+    payload = archive.read_bytes()
+
+    tar_marker = tmp_path / "tar-invoked"
+    result, destination = _run(tmp_path, payload, tar_marker=tar_marker)
+
+    assert result.returncode != 0
+    assert "unsafe" in result.stderr.lower()
+    assert not tar_marker.exists()
+    assert not destination.exists()
+    assert not (tmp_path / "conda" / "escaped").exists()
 
 
 def test_installer_rejects_missing_environment_python_without_host_fallback(tmp_path):

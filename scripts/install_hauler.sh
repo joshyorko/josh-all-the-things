@@ -88,6 +88,35 @@ observed_sha256=$(sha256sum "$archive" | cut -d ' ' -f 1)
   exit 1
 }
 
+"$python_executable" - "$archive" <<'PY'
+import posixpath
+import sys
+import tarfile
+
+archive_path = sys.argv[1]
+try:
+    with tarfile.open(archive_path, "r:gz") as archive:
+        members = archive.getmembers()
+except (OSError, tarfile.TarError) as error:
+    raise SystemExit(f"unsafe Hauler archive: {error}")
+
+hauler_files = []
+for member in members:
+    name = member.name
+    normalized = posixpath.normpath(name)
+    if not name or name.startswith("/") or normalized == ".." or normalized.startswith("../"):
+        raise SystemExit(f"unsafe Hauler archive member path: {name!r}")
+    if member.issym() or member.islnk() or member.isdev() or not (member.isfile() or member.isdir()):
+        raise SystemExit(f"unsafe Hauler archive member type: {name!r}")
+    if member.isfile():
+        if name != "hauler":
+            raise SystemExit(f"unexpected Hauler archive file: {name!r}")
+        hauler_files.append(member)
+
+if len(hauler_files) != 1:
+    raise SystemExit("Hauler archive must contain exactly one regular file named 'hauler'")
+PY
+
 extract_directory="$stage_directory/extract"
 mkdir -- "$extract_directory"
 tar --extract --gzip --file "$archive" --directory "$extract_directory" --no-same-owner --no-same-permissions
