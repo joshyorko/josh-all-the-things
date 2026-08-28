@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,41 @@ def test_windows_serve_smoke_downloads_workspace_from_fileserver():
     assert "Invoke-WebRequest -Uri $workspaceUrl -OutFile $downloadedWorkspace -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null" in workflow
     assert "Get-Item -LiteralPath $downloadedWorkspace" in workflow
     assert "$response.StatusCode" not in workflow
+
+
+def test_rcc_manifest_pins_current_linux_and_windows_assets_without_future_placeholders():
+    manifest_path = Path("runtime/rcc.json")
+    manifest_text = manifest_path.read_text()
+    manifest = json.loads(manifest_text)
+    assert manifest["schema_version"] == 1
+    assert manifest["version"] == "v18.19.2"
+    assert "v18.19.3" not in manifest_text
+    assert manifest["platforms"] == {
+        "linux_amd64": {
+            "asset": "rcc-linux64",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.2/rcc-linux64",
+            "sha256": "3a90a331325feb5b75b3ebc7492303a964438ce017347f451aeee3ed7d578b3d",
+        },
+        "windows_amd64": {
+            "asset": "rcc-windows64.exe",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.2/rcc-windows64.exe",
+            "sha256": "43acaf8ba0ab4c22c60832ef7e0ef4556a32843147e5ca33539796da648bb470",
+        },
+    }
+    for pin in manifest["platforms"].values():
+        assert re.fullmatch(r"[0-9a-f]{64}", pin["sha256"])
+
+
+def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():
+    workflow = Path(".github/workflows/windows-runtime.yml").read_text()
+    assert "linux-runtime:" in workflow
+    assert "runs-on: ubuntu-24.04" in workflow
+    assert "runtime/rcc.json" in workflow
+    assert "scripts/build_environment_artifact.py" in workflow
+    assert "env publish" in workflow
+    assert "env export" in workflow
+    assert "--no-build" in workflow
+    assert "jat-linux-runtime-evidence" in workflow
 
 
 def test_normal_runtime_contract_has_no_homebrew_install_or_probe():
