@@ -117,7 +117,7 @@ jobs:
           & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $diagnosticReceipt -- python -c "import json,os,shutil; from pathlib import Path; prefix=Path(os.environ['CONDA_PREFIX']); print(json.dumps({'condaPrefix':str(prefix),'scriptsHauler':(prefix/'Scripts'/'hauler.exe').is_file(),'rootHauler':(prefix/'hauler.exe').is_file(),'whichHauler':shutil.which('hauler'),'whichHaulerExe':shutil.which('hauler.exe')}))"
           if ($LASTEXITCODE -ne 0) { Get-Content $diagnosticReceipt; throw "acquired Windows artifact diagnostic command failed" }
           $execPath = Join-Path $env:RUNNER_TEMP "windows-hauler-exec.json"
-          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- hauler.exe version 1> $execPath 2> (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log")
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- cmd.exe /d /c hauler.exe version 1> $execPath 2> (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log")
           if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log"); throw "hauler.exe version execution failed" }
           $executed = Get-Content -Raw $execPath | ConvertFrom-Json
           if ($executed.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $executed.exitCode -ne 0) { throw "hauler.exe did not execute from the acquired Windows artifact" }
