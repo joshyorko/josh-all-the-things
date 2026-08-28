@@ -107,7 +107,17 @@ class JATService:
                 validation_temp = stage.path / "validation-temp"
                 temp.mkdir()
                 validation_temp.mkdir()
-                self.hauler.sync(build_store, temp, manifest)
+                artifact_files = [(workspace_archive, WORKSPACE_ARTIFACT)]
+                if brew_archive:
+                    artifact_files.append((brew_archive, BREW_ARTIFACT))
+                if rcc_archive:
+                    artifact_files.append((rcc_archive, RCC_ARTIFACT))
+                if rcc_metadata_path:
+                    artifact_files.append((rcc_metadata_path, RCC_METADATA_ARTIFACT))
+                if os.name == "nt" and hasattr(self.hauler, "sync_files"):
+                    self.hauler.sync_files(build_store, temp, artifact_files, images)
+                else:
+                    self.hauler.sync(build_store, temp, manifest)
                 staged = stage.path / output.name
                 self.hauler.save(build_store, temp, staged)
                 self.hauler.load(validation_store, validation_temp, staged)

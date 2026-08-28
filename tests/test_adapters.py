@@ -279,3 +279,41 @@ def test_hauler_adapter_owns_exact_argv(tmp_path):
         ],
     ]
     assert runner.calls[-1][2] is True
+
+
+def test_windows_hauler_adapter_adds_local_files_without_files_manifest(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler.exe", platform_name="windows")
+    store = tmp_path / "store"
+    temp = tmp_path / "temp"
+    workspace = tmp_path / "workspace.tar.zst"
+    workspace.write_bytes(b"workspace")
+    adapter.sync_files(store, temp, [(workspace, "workspace.tar.zst")], ["example/image:latest"])
+
+    assert [call[0] for call in runner.calls] == [
+        [
+            "/tools/hauler.exe",
+            "store",
+            "add",
+            "file",
+            str(workspace),
+            "--name",
+            "workspace.tar.zst",
+            "--store",
+            str(store),
+            "--tempdir",
+            str(temp),
+        ],
+        [
+            "/tools/hauler.exe",
+            "store",
+            "add",
+            "image",
+            "example/image:latest",
+            "--local",
+            "--store",
+            str(store),
+            "--tempdir",
+            str(temp),
+        ],
+    ]
