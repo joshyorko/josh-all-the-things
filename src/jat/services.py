@@ -235,7 +235,7 @@ class JATService:
         try:
             _ = self.archive
         except RuntimeError:
-            missing.append("GNU tar with --zstd")
+            missing.append("environment-owned tar+zstd archive backend")
         return OperationResult(
             operation="doctor",
             success=not missing,

@@ -1,4 +1,7 @@
+import io
 import sys
+import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -168,6 +171,50 @@ def test_real_gnu_tar_round_trip_and_member_contract(tmp_path):
     restored_file = restored / "project" / "file name.txt"
     assert restored_file.read_bytes() == original.read_bytes()
     assert restored_file.stat().st_mode & 0o777 == 0o640
+
+
+def test_windows_archive_backend_is_contained_deterministic_and_round_trips(tmp_path):
+    pytest.importorskip("zstandard")
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "nested").mkdir()
+    (source / "nested" / "file.txt").write_text("synthetic\n")
+    first = tmp_path / "first.tar.zst"
+    second = tmp_path / "second.tar.zst"
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    stripped = tmp_path / "stripped"
+    stripped.mkdir()
+
+    adapter = ArchiveAdapter(RecordingRunner(), platform_name="windows")
+    adapter.create(source, first)
+    adapter.create(source, second)
+
+    assert first.read_bytes() == second.read_bytes()
+    validate_archive_members(adapter.members(first))
+    adapter.extract(first, restored)
+    assert (restored / "project" / "nested" / "file.txt").read_text() == "synthetic\n"
+    adapter.extract(first, stripped, strip_components=1)
+    assert (stripped / "nested" / "file.txt").read_text() == "synthetic\n"
+
+
+def test_windows_archive_backend_rejects_traversal_before_extraction(tmp_path):
+    zstandard = pytest.importorskip("zstandard")
+    archive = tmp_path / "unsafe.tar.zst"
+    with archive.open("wb") as raw:
+        with zstandard.ZstdCompressor(level=3).stream_writer(raw, closefd=False) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w|") as tar:
+                member = tarfile.TarInfo("../outside.txt")
+                payload = b"outside"
+                member.size = len(payload)
+                tar.addfile(member, io.BytesIO(payload))
+    destination = tmp_path / "restored"
+    destination.mkdir()
+
+    adapter = ArchiveAdapter(RecordingRunner(), platform_name="windows")
+    with pytest.raises(ValueError, match="unsafe path"):
+        adapter.extract(archive, destination)
+    assert not (tmp_path / "outside.txt").exists()
 
 
 def test_hauler_adapter_owns_exact_argv(tmp_path):
