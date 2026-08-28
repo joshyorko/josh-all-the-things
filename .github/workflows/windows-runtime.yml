@@ -113,6 +113,9 @@ jobs:
           if ($acquired.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $acquired.verification.valid -ne $true) { throw "fresh Windows acquire did not validate the exported artifact" }
           & $env:RCC_PATH --no-build ht vars --robot (Join-Path $PWD "robot.yaml") --json 1> (Join-Path $env:RUNNER_TEMP "windows-no-build-vars.json") 2> (Join-Path $env:RUNNER_TEMP "windows-no-build-vars.log")
           if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-no-build-vars.log"); throw "no-build Windows ht vars failed" }
+          $diagnosticReceipt = Join-Path $env:RUNNER_TEMP "windows-hauler-diagnostic.json"
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $diagnosticReceipt -- python -c "import json,os,shutil; from pathlib import Path; prefix=Path(os.environ['CONDA_PREFIX']); print(json.dumps({'condaPrefix':str(prefix),'scriptsHauler':(prefix/'Scripts'/'hauler.exe').is_file(),'rootHauler':(prefix/'hauler.exe').is_file(),'whichHauler':shutil.which('hauler'),'whichHaulerExe':shutil.which('hauler.exe')}))"
+          if ($LASTEXITCODE -ne 0) { Get-Content $diagnosticReceipt; throw "acquired Windows artifact diagnostic command failed" }
           $execPath = Join-Path $env:RUNNER_TEMP "windows-hauler-exec.json"
           & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- hauler.exe version 1> $execPath 2> (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log")
           if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log"); throw "hauler.exe version execution failed" }
