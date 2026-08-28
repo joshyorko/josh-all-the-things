@@ -538,7 +538,8 @@ def _git_version(root: Path) -> str:
         return pinned
     try:
         completed = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+            ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", check=False
         )
     except OSError:
         return "unknown"

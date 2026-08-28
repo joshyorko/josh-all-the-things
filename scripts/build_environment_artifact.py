@@ -32,7 +32,10 @@ def _environment(source: dict[str, str], home: Path, rcc_home: Path) -> dict[str
 
 
 def _run(argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout, check=False)
+    result = subprocess.run(
+        argv, cwd=cwd, env=env, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=timeout, check=False
+    )
     if result.returncode:
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(argv)}\n{result.stderr[-4000:]}")
     return result

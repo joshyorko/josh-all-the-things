@@ -48,6 +48,15 @@ def test_process_runner_reports_timeout():
     assert "timed out" in completed.diagnostics
 
 
+def test_process_runner_decodes_external_output_without_locale_failures():
+    completed = ProcessRunner().run(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'valid\\x90\\xff\\n')"]
+    )
+    assert completed.exit_status == 0
+    assert "valid" in completed.stdout
+    assert "�" in completed.stdout
+
+
 def test_process_runner_terminates_child_on_ctrl_c(monkeypatch):
     class InterruptedProcess:
         returncode = -15

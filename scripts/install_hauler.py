@@ -105,7 +105,8 @@ def _read_executable(archive_path: Path, executable: str) -> bytes:
 def _version_matches(target: Path, version: str) -> bool:
     try:
         result = subprocess.run(
-            [str(target), "version"], capture_output=True, text=True, check=False, timeout=30
+            [str(target), "version"], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False, timeout=30
         )
     except (OSError, subprocess.SubprocessError):
         return False

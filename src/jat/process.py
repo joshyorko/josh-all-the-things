@@ -51,6 +51,8 @@ class ProcessRunner:
             stdout=None if foreground else subprocess.PIPE,
             stderr=None if foreground else subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             start_new_session=os.name != "nt",
             cwd=cwd,
         )
