@@ -83,6 +83,7 @@ def test_windows_artifact_proof_uses_cmd_to_resolve_hauler_inside_child_path():
 def test_windows_local_file_probe_uses_artifact_python_argv():
     workflow = Path(".github/workflows/windows-runtime.yml").read_text()
     assert "subprocess.run([shutil.which('hauler.exe')" in workflow
+    assert "cwd=str(payload.parent)" in workflow
 
 
 def test_normal_runtime_contract_has_no_homebrew_install_or_probe():

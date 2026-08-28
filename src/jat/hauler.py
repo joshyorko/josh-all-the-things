@@ -1,6 +1,7 @@
 """Exact Hauler subprocess contract."""
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ class HaulerAdapter:
     def sync_files(self, store: Path, temp: Path, files: list[tuple[Path, str]], images: list[str] | None = None):
         """Add local files/images through Hauler's Windows-supported API."""
         for path, name in files:
+            payload_name = _safe_windows_payload_name(path)
             self._run(
                 [
                     "--store",
@@ -26,10 +28,11 @@ class HaulerAdapter:
                     "store",
                     "add",
                     "file",
-                    str(path),
+                    payload_name,
                     "--name",
                     name,
-                ]
+                ],
+                cwd=path.parent,
             )
         for image in images or []:
             self._run(
@@ -92,10 +95,31 @@ class HaulerAdapter:
             foreground=True,
         )
 
-    def _run(self, arguments: list[str], foreground: bool = False):
+    def _run(self, arguments: list[str], foreground: bool = False, cwd: Path | None = None):
         completed = self.runner.run(
-            [self.executable, *arguments], timeout=self.timeout, foreground=foreground
+            [self.executable, *arguments], timeout=self.timeout, foreground=foreground, cwd=cwd
         )
         if not completed.success:
             raise RuntimeError(completed.diagnostics or "Hauler operation failed")
         return completed
+
+
+_WINDOWS_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL"} | {
+    f"COM{number}" for number in range(1, 10)
+} | {f"LPT{number}" for number in range(1, 10)}
+
+
+def _safe_windows_payload_name(path: Path) -> str:
+    name = path.name
+    stem = re.split(r"[.]", name, maxsplit=1)[0].upper()
+    if (
+        not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+        or ":" in name
+        or name.endswith((".", " "))
+        or stem in _WINDOWS_RESERVED_NAMES
+    ):
+        raise ValueError(f"unsafe Windows payload filename: {name!r}")
+    return name

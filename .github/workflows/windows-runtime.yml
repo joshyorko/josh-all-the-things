@@ -138,7 +138,7 @@ jobs:
           $storeLiteral = $store | ConvertTo-Json -Compress
           $tempLiteral = $temp | ConvertTo-Json -Compress
           $payloadLiteral = $payload | ConvertTo-Json -Compress
-          $launcher = "import os,shutil,subprocess; executable=shutil.which('hauler.exe'); prefix=os.path.realpath(os.environ['CONDA_PREFIX']); resolved=os.path.realpath(executable); assert resolved.startswith(prefix + os.sep); subprocess.run([shutil.which('hauler.exe'), '--store', $storeLiteral, '--tempdir', $tempLiteral, 'store', 'add', 'file', $payloadLiteral, '--name', 'probe.txt'], check=True)"
+          $launcher = "import os,shutil,subprocess; from pathlib import Path; payload=Path($payloadLiteral); executable=shutil.which('hauler.exe'); prefix=os.path.realpath(os.environ['CONDA_PREFIX']); resolved=os.path.realpath(executable); assert resolved.startswith(prefix + os.sep); subprocess.run([shutil.which('hauler.exe'), '--store', $storeLiteral, '--tempdir', $tempLiteral, 'store', 'add', 'file', payload.name, '--name', 'probe.txt'], cwd=str(payload.parent), check=True)"
           $log = Join-Path $env:RUNNER_TEMP "windows-hauler-add-file-probe.log"
           $receipt = Join-Path $env:RUNNER_TEMP "windows-hauler-add-file-probe.json"
           & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $receipt -- python -c $launcher *> $log

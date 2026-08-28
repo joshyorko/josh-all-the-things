@@ -14,10 +14,12 @@ from jat.safety import validate_archive_members
 class RecordingRunner:
     def __init__(self, responses=None):
         self.calls = []
+        self.cwds = []
         self.responses = list(responses or [])
 
-    def run(self, argv, timeout=None, foreground=False, secrets=()):
+    def run(self, argv, timeout=None, foreground=False, secrets=(), cwd=None):
         self.calls.append((argv, timeout, foreground, secrets))
+        self.cwds.append(cwd)
         if self.responses:
             return self.responses.pop(0)
         return ProcessResult(argv=argv, exit_status=0)
@@ -286,9 +288,9 @@ def test_windows_hauler_adapter_adds_local_files_without_files_manifest(tmp_path
     adapter = HaulerAdapter(runner, executable="/tools/hauler.exe", platform_name="windows")
     store = tmp_path / "store"
     temp = tmp_path / "temp"
-    workspace = tmp_path / "workspace.tar.zst"
+    workspace = tmp_path / "workspace file.tar.zst"
     workspace.write_bytes(b"workspace")
-    adapter.sync_files(store, temp, [(workspace, "workspace.tar.zst")], ["example/image:latest"])
+    adapter.sync_files(store, temp, [(workspace, "workspace file.tar.zst")], ["example/image:latest"])
 
     assert [call[0] for call in runner.calls] == [
         [
@@ -300,9 +302,9 @@ def test_windows_hauler_adapter_adds_local_files_without_files_manifest(tmp_path
             "store",
             "add",
             "file",
-            str(workspace),
+            workspace.name,
             "--name",
-            "workspace.tar.zst",
+            "workspace file.tar.zst",
         ],
         [
             "/tools/hauler.exe",
@@ -317,3 +319,16 @@ def test_windows_hauler_adapter_adds_local_files_without_files_manifest(tmp_path
             "--local",
         ],
     ]
+    assert runner.cwds[0] == workspace.parent
+
+
+def test_windows_hauler_adapter_rejects_unsafe_relative_payload_names(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler.exe", platform_name="windows")
+    store = tmp_path / "store"
+    temp = tmp_path / "temp"
+    for name in ("bad:name", r"bad\name", "CON", "payload."):
+        payload = tmp_path / name
+        with pytest.raises(ValueError, match="unsafe Windows payload filename"):
+            adapter.sync_files(store, temp, [(payload, "payload")])
+    assert runner.calls == []
