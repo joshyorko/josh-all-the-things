@@ -108,9 +108,7 @@ for member in members:
         raise SystemExit(f"unsafe Hauler archive member path: {name!r}")
     if member.issym() or member.islnk() or member.isdev() or not (member.isfile() or member.isdir()):
         raise SystemExit(f"unsafe Hauler archive member type: {name!r}")
-    if member.isfile():
-        if name != "hauler":
-            raise SystemExit(f"unexpected Hauler archive file: {name!r}")
+    if member.isfile() and name == "hauler":
         hauler_files.append(member)
 
 if len(hauler_files) != 1:

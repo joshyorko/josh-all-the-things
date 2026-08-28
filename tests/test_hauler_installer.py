@@ -21,6 +21,11 @@ def _archive(path: Path, version: str = "v2.0.3") -> bytes:
         import io
 
         archive.addfile(info, io.BytesIO(payload))
+        license_info = tarfile.TarInfo("LICENSE")
+        license_payload = b"license\n"
+        license_info.mode = 0o644
+        license_info.size = len(license_payload)
+        archive.addfile(license_info, io.BytesIO(license_payload))
     return path.read_bytes()
 
 
