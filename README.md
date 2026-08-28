@@ -22,7 +22,12 @@ its RCC-managed runtime; it is not the haul itself.
 Build the canonical JAT runtime artifact with RCC v18.19.2. The builder uses
 isolated producer and verifier homes, publishes and exports through RCC's
 official Environment Artifact commands, acquires the archive into the fresh
-verifier, and proves ordinary `--no-build` resolution before promotion:
+verifier, and proves ordinary `--no-build` resolution before promotion. RCC
+v18.19.2 resolves a relative `env exec` command before applying the child
+environment, so the Hauler check uses the artifact's Python to locate and run
+the `hauler` binary from the acquired Holotree. The launcher also requires the
+resolved executable to be below the acquired `CONDA_PREFIX`, preventing a
+contaminated host PATH from satisfying the proof:
 
 ```bash
 scripts/build_environment_artifact.sh \
@@ -33,6 +38,9 @@ scripts/build_environment_artifact.sh \
 Both outputs are create-only. The receipt records RCC's artifact,
 specification, and legacy blueprint identities together with the exact JAT
 commit, RCC version, platform, archive SHA-256 and size, and fresh-home proofs.
+`verified_hauler.command` remains the logical `hauler version` operation;
+`verified_hauler.launcher` records the Python boundary used to prove it without
+a host Hauler.
 RCC owns environment inventory and materialization; JAT does not export or
 import raw Holotree state.
 
@@ -353,6 +361,7 @@ requires them and you understand the transport tradeoff.
 - `src/jat/` is the shared Python service implementation.
 - `tasks.py` contains thin typed `robocorp.tasks` entrypoints.
 - `robot.yaml` exposes `Build`, `Restore`, `Serve`, `JAT`, and devTask `Doctor`.
-- `conda.yaml` defines the contained runtime and only bootstraps Homebrew during
-  environment creation. The main tool runs as the RCC task, not as a
-  `rccPostInstall` hook.
+- `conda.yaml` defines the contained runtime and installs the pinned official
+  Hauler release through RCC's `rccPostInstall` hook before the environment is
+  frozen. Homebrew is not part of normal JAT execution; `--brew` is only a
+  data payload option.

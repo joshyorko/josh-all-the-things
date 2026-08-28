@@ -26,14 +26,7 @@ class ArchiveAdapter:
             candidate = which(name)
             if candidate and self.runner.run([candidate, "--zstd", "--version"], timeout=30).success:
                 return candidate
-        brew = which("brew")
-        if brew:
-            prefix = self.runner.run([brew, "--prefix", "gnu-tar"], timeout=30)
-            if prefix.success and prefix.stdout.strip().startswith("/"):
-                candidate = str(Path(prefix.stdout.strip()) / "bin" / "tar")
-                if self.runner.run([candidate, "--zstd", "--version"], timeout=30).success:
-                    return candidate
-        raise RuntimeError("GNU tar with --zstd is unavailable (gtar, capable tar, or Linuxbrew gnu-tar)")
+        raise RuntimeError("GNU tar with --zstd is unavailable (gtar or capable tar required)")
 
     def create(self, source: Path, archive: Path) -> None:
         self._require(

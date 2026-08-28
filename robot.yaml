@@ -23,9 +23,6 @@ environmentConfigs:
 
 artifactsDir: output
 
-preRunScripts:
-  - bash scripts/install_dependencies.sh 1
-
 PATH:
   - .
 PYTHONPATH:

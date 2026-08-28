@@ -12,6 +12,17 @@ from pathlib import Path
 
 DEFAULT_RCC = "rcc"
 EXPECTED_RCC_VERSION = "v18.19.2"
+HAULER_VERSION_COMMAND = (
+    "python",
+    "-c",
+    "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); "
+    "prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; "
+    "resolved = os.path.realpath(executable) if executable else ''; "
+    "python_resolved = os.path.realpath(sys.executable); "
+    "inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); "
+    "python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); "
+    "sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)",
+)
 
 
 def _environment(source: dict[str, str], home: Path, rcc_home: Path) -> dict[str, str]:
@@ -115,9 +126,30 @@ def main(argv: list[str] | None = None) -> int:
         variables = _json(_run([args.rcc, "--no-build", "ht", "vars", "--robot", str(robot), "--json"], cwd=root, env=verifier_env, timeout=args.timeout))
         if not isinstance(variables, list):
             raise TypeError("no-build verification did not return RCC variables")
-        execution = _json(_run([args.rcc, "env", "exec", "--artifact", artifact, "--permissive-local", "--json", "--", "python", "-c", "print('jat-runtime-proof')"], cwd=root, env=verifier_env, timeout=args.timeout))
+        execution = _json(_run([args.rcc, "--no-build", "env", "exec", "--artifact", artifact, "--permissive-local", "--json", "--", "python", "-c", "print('jat-runtime-proof')"], cwd=root, env=verifier_env, timeout=args.timeout))
         if execution.get("artifactDigest") != artifact or execution.get("exitCode") != 0:
             raise RuntimeError("environment execution proof failed")
+        hauler_execution = _json(
+            _run(
+                [
+                    args.rcc,
+                    "--no-build",
+                    "env",
+                    "exec",
+                    "--artifact",
+                    artifact,
+                    "--permissive-local",
+                    "--json",
+                    "--",
+                    *HAULER_VERSION_COMMAND,
+                ],
+                cwd=root,
+                env=verifier_env,
+                timeout=args.timeout,
+            )
+        )
+        if hauler_execution.get("artifactDigest") != artifact or hauler_execution.get("exitCode") != 0:
+            raise RuntimeError("Hauler version execution proof failed")
         jat_sha = args.jat_git_sha or _git_sha(root, producer_env, args.timeout)
         if len(jat_sha) != 40 or any(character not in "0123456789abcdef" for character in jat_sha):
             raise ValueError("JAT git SHA must be a full lowercase commit digest")
@@ -137,6 +169,13 @@ def main(argv: list[str] | None = None) -> int:
             "verified_acquire": {"fresh_home": True, "no_build": True},
             "verified_no_build": {"fresh_home": True, "no_build": True},
             "verified_exec": {"fresh_home": True},
+            "verified_hauler": {
+                "fresh_home": True,
+                "command": ["hauler", "version"],
+                "launcher": list(HAULER_VERSION_COMMAND),
+                "resolved_under_conda_prefix": True,
+                "exit_code": 0,
+            },
         }
         staged_receipt = work / "jat-runtime.json"
         staged_receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")

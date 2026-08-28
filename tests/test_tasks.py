@@ -40,6 +40,27 @@ def test_robot_declares_typed_task_surface():
     assert "  JoshAllTheThings:" not in body
 
 
+def test_linux_environment_contract_installs_hauler_before_freeze():
+    conda = Path("conda.yaml").read_text()
+    robot = Path("robot.yaml").read_text()
+    freeze = Path("environment_linux_amd64_freeze.yaml")
+
+    assert "rccPostInstall:" in conda
+    assert "bash scripts/install_hauler.sh" in conda
+    assert "preRunScripts:" not in robot
+    assert "install_dependencies.sh" not in robot
+    assert freeze.is_file()
+    assert "rccPostInstall:" in freeze.read_text()
+
+
+def test_normal_runtime_contract_has_no_homebrew_install_or_probe():
+    assert "brew" not in Path("robot.yaml").read_text().lower()
+    assert "homebrew" not in Path("robot.yaml").read_text().lower()
+    assert "brew" not in Path("src/jat/archive.py").read_text().lower()
+    assert not Path("scripts/install_dependencies.sh").exists()
+    assert not Path("Brewfile").exists()
+
+
 def test_rcc_tasks_use_python_service_not_legacy_bash():
     body = Path("tasks.py").read_text()
     assert "JATService" in body
@@ -70,3 +91,20 @@ def test_runtime_dependencies_are_explicitly_pinned():
     body = Path("conda.yaml").read_text()
     assert "robocorp-log==" in body
     assert "robocorp-truststore==" in body
+
+
+def test_production_runtime_does_not_carry_unused_host_or_test_tools():
+    body = Path("conda.yaml").read_text()
+    assert "robocorp-tasks==4.1.1" in body
+    for dependency in ("      - robocorp==", "  - uv=", "  - git", "  - gzip", "      - pytest==", "      - ruff=="):
+        assert dependency not in body
+
+
+def test_producer_version_fails_soft_when_git_is_unavailable(monkeypatch, tmp_path):
+    from jat.services import _git_version
+
+    def unavailable(*_args, **_kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr("jat.services.subprocess.run", unavailable)
+    assert _git_version(tmp_path) == "unknown"

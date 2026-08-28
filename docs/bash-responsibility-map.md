@@ -6,7 +6,7 @@
 | `usage`, `prompt_value`, `interactive_wizard`, `expand_interactive_path` | CLI help and prompting | `src/jat/cli.py` |
 | `parse_build`, `parse_restore`, `parse_serve`, `require_option_value` | CLI parsing | `src/jat/cli.py`, `src/jat/models.py` |
 | `die`, `cleanup`, `make_temp_dir` | Exit and owned cleanup | `src/jat/staging.py`, CLI exception mapping |
-| `require_command`, `find_brew`, `bootstrap_dependencies` | Capability bootstrap | `scripts/install_dependencies.sh`, `Doctor` |
+| `require_command`, `install_hauler` | Capability bootstrap | `scripts/install_hauler.sh`, `Doctor` |
 | `select_archive_command`, `select_checksum_command` | Tool capability selection | `src/jat/archive.py`, `src/jat/process.py` |
 | `absolute_existing_directory`, `absolute_existing_file`, `absolute_new_path`, `reject_line_breaks` | Fail-closed path validation | `src/jat/safety.py` |
 | `yaml_quote`, `shell_quote`, `write_manifest` | Hauler manifest rendering | `src/jat/hauler.py` |

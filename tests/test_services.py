@@ -2,7 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest
+from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest, ServeRequest
 from jat.safety import ArchiveMember
 from jat.services import JATService
 
@@ -425,3 +425,41 @@ def test_restore_rejects_unsafe_archive_before_destination_promotion(tmp_path):
     assert result.success is False
     assert not destination.exists()
     assert "unsupported member type" in result.diagnostics
+
+
+def test_serve_uses_explicit_runtime_stage_directory_instead_of_cwd(tmp_path, monkeypatch):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    observed = {}
+
+    class ServingHauler(FakeHauler):
+        def serve(self, store, temp, directory, config):
+            self.calls.append("serve")
+            observed["stage_parent"] = Path(store).parent.parent
+
+    monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
+    result = service(tmp_path, hauler=ServingHauler()).serve(ServeRequest(haul=haul))
+
+    assert result.success is True, result.diagnostics
+    assert observed["stage_parent"] == runtime
+
+
+def test_serve_rejects_runtime_stage_directory_inside_conda_prefix(tmp_path, monkeypatch):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    conda_prefix = tmp_path / "holotree"
+    runtime = conda_prefix / "output"
+    runtime.mkdir(parents=True)
+
+    class ServingHauler(FakeHauler):
+        def serve(self, store, temp, directory, config):
+            self.calls.append("serve")
+
+    monkeypatch.setenv("CONDA_PREFIX", str(conda_prefix))
+    monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
+    result = service(tmp_path, hauler=ServingHauler()).serve(ServeRequest(haul=haul))
+
+    assert result.success is False
+    assert "outside the acquired environment" in result.diagnostics

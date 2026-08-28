@@ -7,8 +7,20 @@ import sys
 from pathlib import Path
 
 import pytest
+from jsonschema import validate
 
-from scripts.build_environment_artifact import _stage_copy, build_parser, main
+from scripts.build_environment_artifact import HAULER_VERSION_COMMAND, _stage_copy, build_parser, main
+
+
+HAULER_VERSION_CHECK = (
+    "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); "
+    "prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; "
+    "resolved = os.path.realpath(executable) if executable else ''; "
+    "python_resolved = os.path.realpath(sys.executable); "
+    "inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); "
+    "python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); "
+    "sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
+)
 
 
 def write_fake_rcc(path: Path, log: Path) -> None:
@@ -27,8 +39,10 @@ def write_fake_rcc(path: Path, log: Path) -> None:
         "    print(json.dumps([{'key': 'RCC_ENVIRONMENT_HASH', 'value': 'sha256:' + 'a' * 64}]))\n"
         "elif args[:2] == ['env', 'acquire']:\n"
         "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'verification': {'valid': os.environ.get('JAT_FAKE_RCC_FAIL_ACQUIRE') != '1'}}))\n"
-        "elif args[:2] == ['env', 'exec']:\n"
-        "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': 0}))\n"
+        "elif args[:2] == ['env', 'exec'] or args[:3] == ['--no-build', 'env', 'exec']:\n"
+        "    command = args[args.index('--') + 1:]\n"
+        "    exit_code = 127 if command == ['hauler', 'version'] else 0\n"
+        "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': exit_code}))\n"
         "elif args == ['version']:\n"
         "    print(os.environ.get('JAT_FAKE_RCC_VERSION', 'v18.19.2'))\n"
     )
@@ -73,10 +87,24 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
     assert calls[3][calls[3].index("--archive") + 1] != str(output)
     assert "--permissive-local" in calls[3] and "--json" in calls[3]
     assert calls[4][:3] == ["--no-build", "ht", "vars"]
-    assert calls[5][:2] == ["env", "exec"]
+    assert calls[5][:3] == ["--no-build", "env", "exec"]
     assert "--artifact" in calls[5]
+    assert calls[6] == [
+        "--no-build",
+        "env",
+        "exec",
+        "--artifact",
+        "sha256:" + "a" * 64,
+        "--permissive-local",
+        "--json",
+        "--",
+        "python",
+        "-c",
+        HAULER_VERSION_CHECK,
+    ]
 
     result = json.loads(receipt.read_text())
+    validate(instance=result, schema=json.loads((Path(__file__).parents[1] / "docs/environment-artifact-receipt.schema.json").read_text()))
     assert result["operation"] == "build"
     assert result["success"] is True
     assert result["rcc_executable"] == str(rcc)
@@ -96,8 +124,38 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "rcc_executable": str(rcc),
         "verified_acquire": {"fresh_home": True, "no_build": True},
         "verified_exec": {"fresh_home": True},
+        "verified_hauler": {
+            "fresh_home": True,
+            "command": ["hauler", "version"],
+            "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+            "resolved_under_conda_prefix": True,
+            "exit_code": 0,
+        },
         "verified_no_build": {"fresh_home": True, "no_build": True},
     }
+
+
+def test_hauler_proof_rejects_host_python_even_when_hauler_is_under_prefix(tmp_path):
+    prefix = tmp_path / "holotree"
+    bin_directory = prefix / "bin"
+    bin_directory.mkdir(parents=True)
+    marker = tmp_path / "hauler-invoked"
+    hauler = bin_directory / "hauler"
+    hauler.write_text(f"#!/bin/sh\n/usr/bin/touch {marker}\n")
+    hauler.chmod(0o755)
+
+    environment = dict(os.environ)
+    environment.update(CONDA_PREFIX=str(prefix), PATH=str(bin_directory))
+    result = subprocess.run(
+        [sys.executable, "-c", HAULER_VERSION_COMMAND[2]],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 127
+    assert not marker.exists()
 
 
 def test_builder_defaults_to_rcc_and_does_not_export_to_final_output(tmp_path, monkeypatch):
@@ -207,6 +265,13 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
                 "verified_acquire": {"fresh_home": True, "no_build": True},
                 "verified_no_build": {"fresh_home": True, "no_build": True},
                 "verified_exec": {"fresh_home": True},
+                "verified_hauler": {
+                    "fresh_home": True,
+                    "command": ["hauler", "version"],
+                    "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+                    "resolved_under_conda_prefix": True,
+                    "exit_code": 0,
+                },
             }
         )
         + "\n"
@@ -261,10 +326,40 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
         ["manifest", "fetch", "--descriptor", reference],
     ]
 
+    weak = json.loads(receipt.read_text())
+    weak["verified_hauler"]["launcher"] = [
+        "python",
+        "-c",
+        "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); "
+        "prefix = os.environ.get('CONDA_PREFIX'); resolved = os.path.realpath(executable) if executable else ''; "
+        "inside = bool(prefix and resolved.startswith(os.path.realpath(prefix) + os.sep)); "
+        "sys.exit(127 if not inside else subprocess.run([resolved, 'version'], check=False).returncode)",
+    ]
+    receipt.write_text(json.dumps(weak) + "\n")
+    oras_log.unlink(missing_ok=True)
+    weak_rejected = subprocess.run(
+        [
+            str(root / "scripts/publish_environment_artifact.sh"),
+            "--archive",
+            str(archive),
+            "--receipt",
+            str(receipt),
+            "--repository",
+            "ghcr.io/example/jat-runtime",
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert weak_rejected.returncode != 0
+    assert not oras_log.exists(), "weak Hauler proof reached ORAS"
+
     invalid = json.loads(receipt.read_text())
     invalid["rcc_version"] = "v18.19.1"
     receipt.write_text(json.dumps(invalid) + "\n")
-    oras_log.unlink()
+    oras_log.unlink(missing_ok=True)
     rejected = subprocess.run(
         [
             str(root / "scripts/publish_environment_artifact.sh"),
