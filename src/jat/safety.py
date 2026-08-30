@@ -32,6 +32,17 @@ def new_output_path(path: Path) -> Path:
     return absolute
 
 
+def new_output_directory(path: Path) -> Path:
+    """A create-only directory destination that overwrites nothing."""
+    absolute = _absolute(path)
+    if absolute == Path("/"):
+        raise ValueError("destination must not be the filesystem root")
+    if absolute.exists() or absolute.is_symlink():
+        raise ValueError(f"destination already exists and will not be overwritten: {absolute}")
+    _real_directory(absolute.parent, "destination parent")
+    return absolute
+
+
 def existing_file(path: Path) -> Path:
     absolute = _absolute(path)
     if absolute.is_symlink():

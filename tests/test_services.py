@@ -4,9 +4,25 @@ from pathlib import Path
 
 import pytest
 
-from jat.models import BuildRequest, EnvironmentArtifactMetadata, RestoreRequest, ServeRequest
+from jat.models import (
+    BuildRequest,
+    CopyRequest,
+    EnvironmentArtifactMetadata,
+    ExportRequest,
+    ExtractRequest,
+    InspectRequest,
+    RestoreRequest,
+    ServeRequest,
+)
+from jat.process import ProcessResult
+from pydantic import ValidationError
 from jat.safety import ArchiveMember
-from jat.services import JATService, _local_file_reference, _registry_config
+from jat.services import (
+    JATService,
+    WORKSPACE_REFERENCE,
+    _local_file_reference,
+    _registry_config,
+)
 
 
 class FakeArchive:
@@ -42,10 +58,13 @@ class FakeHauler:
         self.extracted_brew = extracted_brew
         self.on_info = on_info
 
-    def sync(self, store, temp, manifest):
+    def sync(self, store, temp, *manifests, retries=None, exclude_extras=False):
         self.calls.append("sync")
 
-    def save(self, store, temp, haul):
+    def sync_image_txt(self, store, temp, sources, retries=None, exclude_extras=False):
+        self.calls.append("sync_image_txt")
+
+    def save(self, store, temp, haul, chunk_size=None, containerd=False):
         self.calls.append("save")
         haul.write_bytes(b"synthetic-haul")
 
@@ -528,3 +547,318 @@ def test_serve_rejects_runtime_stage_directory_inside_conda_prefix(tmp_path, mon
 
     assert result.success is False
     assert "outside the acquired environment" in result.diagnostics
+
+
+class CapsuleRunner:
+    def __init__(self, supervise_result=None):
+        self.supervised = None
+        self.supervise_result = supervise_result
+
+    def supervise(self, argvs, timeout=None, secrets=()):
+        self.supervised = argvs
+        return self.supervise_result or ProcessResult(argv=[a for argv in argvs for a in argv], exit_status=0)
+
+
+class CapsuleHauler:
+    def __init__(self, inventory, extracted=None, chunk_count=0):
+        self.calls = []
+        self.inventory_data = inventory
+        self.extracted = extracted or {}
+        self.chunk_count = chunk_count
+
+    def load(self, store, temp, haul):
+        self.calls.append(("load", Path(haul).name))
+
+    def inventory(self, store, temp):
+        self.calls.append(("inventory",))
+        return self.inventory_data
+
+    def extract(self, reference, store, temp, output):
+        self.calls.append(("extract", reference))
+        for name, content in self.extracted.get(reference, {}).items():
+            target = output / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+
+    def save(self, store, temp, haul, chunk_size=None, containerd=False):
+        self.calls.append(("save", chunk_size, containerd))
+        if containerd:
+            Path(haul).write_bytes(b"containerd-tar")
+            return
+        if chunk_size:
+            base = str(haul)[: -len(".tar.zst")]
+            for index in range(self.chunk_count):
+                Path(f"{base}_{index}.tar.zst").write_bytes(f"chunk{index}".encode())
+            return
+        Path(haul).write_bytes(b"synthetic-haul")
+
+    def copy(self, store, temp, target, retries=None, plain_http=False, insecure=False):
+        self.calls.append(("copy", target, retries, plain_http, insecure))
+
+    def serve_files(self, store, temp, directory, port):
+        self.calls.append(("serve_files", port))
+
+    def serve(self, store, temp, directory, config, port=None):
+        self.calls.append(("serve_registry",))
+
+    def serve_fileserver_command(self, store, temp, directory, port):
+        return ["hauler", "fileserver", str(port)]
+
+    def serve_registry_command(self, store, temp, directory, config):
+        return ["hauler", "registry"]
+
+    def sync(self, store, temp, *manifests, retries=None, exclude_extras=False):
+        self.calls.append(("sync", manifests, retries, exclude_extras))
+
+    def sync_image_txt(self, store, temp, sources, retries=None, exclude_extras=False):
+        self.calls.append(("sync_image_txt", sources, retries, exclude_extras))
+
+
+WORKSPACE_ONLY_INVENTORY = [{"Reference": WORKSPACE_REFERENCE, "Type": "file"}]
+MIXED_INVENTORY = [
+    {"Reference": WORKSPACE_REFERENCE, "Type": "file"},
+    {"Reference": "hauler/app:latest", "Type": "image", "Platform": "linux/amd64", "Size": 1234},
+    {"Reference": "hauler/extra-notes.txt:latest", "Type": "file"},
+]
+
+
+def capsule_service(tmp_path, hauler, runner=None):
+    return JATService(
+        archive=FakeArchive(),
+        hauler=hauler,
+        runner=runner,
+        producer_version="synthetic-version",
+        which=lambda command: f"/tools/{command}",
+    )
+
+
+def test_inspect_returns_normalized_inventory_and_anchors_without_restoring(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "run"))
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    result = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY)).inspect(InspectRequest(haul=haul))
+    assert result.success, result.diagnostics
+    assert result.format_version == 2
+    assert [entry.reference for entry in result.inventory] == [
+        WORKSPACE_REFERENCE,
+        "hauler/app:latest",
+        "hauler/extra-notes.txt:latest",
+    ]
+    image = result.inventory[1]
+    assert image.type == "image" and image.size == 1234 and image.platform == "linux/amd64"
+    assert result.anchors == {"workspace": True, "brew": False, "rcc_environment": False, "rcc_metadata": False}
+    assert result.complete is True
+    assert not any((tmp_path / "run").iterdir()), "inspect must clean up its owned stage"
+
+
+def test_extract_extracts_one_reference_and_records_outputs(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    hauler = CapsuleHauler(
+        MIXED_INVENTORY,
+        extracted={"hauler/extra-notes.txt:latest": {"content/notes.txt": b"notes"}},
+    )
+    destination = tmp_path / "out"
+    result = capsule_service(tmp_path, hauler).extract(
+        ExtractRequest(haul=haul, reference="hauler/extra-notes.txt:latest", destination=destination)
+    )
+    assert result.success, result.diagnostics
+    assert (destination / "content" / "notes.txt").read_bytes() == b"notes"
+    assert result.payloads[0].path == destination / "content" / "notes.txt"
+    assert result.payloads[0].sha256 == hashlib.sha256(b"notes").hexdigest()
+    assert ("extract", "hauler/extra-notes.txt:latest") in hauler.calls
+
+
+def test_extract_rejects_missing_reference_without_touching_destination(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    destination = tmp_path / "out"
+    result = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY)).extract(
+        ExtractRequest(haul=haul, reference="hauler/absent:latest", destination=destination)
+    )
+    assert result.success is False
+    assert "does not contain reference" in result.diagnostics
+    assert not destination.exists()
+
+
+def test_extract_never_overwrites_an_existing_destination(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    destination = tmp_path / "out"
+    destination.mkdir()
+    keep = destination / "keep.txt"
+    keep.write_text("keep")
+    result = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY)).extract(
+        ExtractRequest(haul=haul, reference="hauler/extra-notes.txt:latest", destination=destination)
+    )
+    assert result.success is False
+    assert keep.read_text() == "keep"
+
+
+def test_export_delegates_containerd_save_and_records_evidence(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    output = tmp_path / "images.tar"
+    hauler = CapsuleHauler(MIXED_INVENTORY)
+    result = capsule_service(tmp_path, hauler).export(ExportRequest(haul=haul, output=output))
+    assert result.success, result.diagnostics
+    assert ("save", None, True) in hauler.calls
+    assert output.read_bytes() == b"containerd-tar"
+    assert result.payloads[0].path == output
+    assert result.payloads[0].sha256 == hashlib.sha256(b"containerd-tar").hexdigest()
+    assert result.payloads[0].size == len(b"containerd-tar")
+
+
+def test_copy_rejects_unsupported_targets_and_reports_transfer_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "run"))
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    hauler = CapsuleHauler(MIXED_INVENTORY)
+    service = capsule_service(tmp_path, hauler)
+    with pytest.raises(ValidationError):
+        CopyRequest(haul=haul, to="s3://bucket/prefix")
+    moved = service.copy(CopyRequest(haul=haul, to="registry://registry.example.test", retries=5))
+    assert moved.success, moved.diagnostics
+    assert ("copy", "registry://registry.example.test", 5, False, False) in hauler.calls
+    assert moved.transfer.destination == "registry://registry.example.test"
+    assert moved.transfer.transport == "remote-registry"
+    assert moved.transfer.requested_retries == 5
+
+
+def test_serve_modes_select_endpoints_explicitly(tmp_path, monkeypatch):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+
+    monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
+    hauler = CapsuleHauler(MIXED_INVENTORY)
+    files_result = capsule_service(tmp_path, hauler).serve(ServeRequest(haul=haul, mode="files"))
+    assert files_result.success, files_result.diagnostics
+    assert ("serve_files", 8080) in hauler.calls
+    assert files_result.serve.fileserver_bind == "all-interfaces"
+
+    hauler = CapsuleHauler(MIXED_INVENTORY)
+    registry_result = capsule_service(tmp_path, hauler).serve(ServeRequest(haul=haul, mode="registry", registry_port=5001))
+    assert ("serve_registry",) in hauler.calls
+    assert registry_result.serve.registry_url == "http://127.0.0.1:5001"
+
+    files_only = capsule_service(tmp_path, CapsuleHauler(WORKSPACE_ONLY_INVENTORY)).serve(
+        ServeRequest(haul=haul, mode="auto")
+    )
+    assert files_only.serve.mode == "files"
+    mixed_auto = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY)).serve(
+        ServeRequest(haul=haul, mode="auto")
+    )
+    assert mixed_auto.serve.mode == "registry"
+
+
+def test_serve_both_supervises_two_children_from_one_capsule(tmp_path, monkeypatch):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "runtime"))
+    runner = CapsuleRunner()
+    hauler = CapsuleHauler(MIXED_INVENTORY)
+    result = capsule_service(tmp_path, hauler, runner=runner).serve(
+        ServeRequest(haul=haul, mode="both", fileserver_port=8081, registry_port=5001)
+    )
+    assert result.success, result.diagnostics
+    assert runner.supervised == [["hauler", "fileserver", "8081"], ["hauler", "registry"]]
+    assert result.serve.mode == "both"
+    assert result.serve.fileserver_url == "http://127.0.0.1:8081"
+    assert result.serve.registry_url == "http://127.0.0.1:5001"
+
+
+def test_serve_both_fails_when_a_sibling_exits_unexpectedly(tmp_path, monkeypatch):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "runtime"))
+    runner = CapsuleRunner(supervise_result=ProcessResult(argv=["hauler"], exit_status=1, stderr="boom"))
+    result = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY), runner=runner).serve(
+        ServeRequest(haul=haul, mode="both")
+    )
+    assert result.success is False
+    assert not (tmp_path / "runtime" / ".jat-serve-tar.zst").exists()
+
+
+def test_build_merge_user_manifests_images_file_and_retry_policy(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    images_file = tmp_path / "images.txt"
+    images_file.write_text("busybox:1.36\n")
+    remote_manifest = "https://example.test/product.yaml"
+    output = tmp_path / "haul.tar.zst"
+    hauler = CapsuleHauler([{ "Reference": WORKSPACE_REFERENCE, "Type": "file"}])
+    result = capsule_service(tmp_path, hauler).build(
+        BuildRequest(
+            folder=source,
+            output=output,
+            images_files=[str(images_file)],
+            hauler_manifests=[remote_manifest],
+            exclude_extras=True,
+            retries=2,
+        )
+    )
+    assert result.success, result.diagnostics
+    syncs = [call for call in hauler.calls if call[0] == "sync"]
+    assert len(syncs[0][1]) == 1 and str(syncs[0][1][0]).endswith("manifest.yaml")
+    assert syncs[0][2] == 2 and syncs[0][3] is True
+    assert syncs[1] == ("sync", (remote_manifest,), 2, True), "user manifests are passed exactly as provided"
+    assert [call for call in hauler.calls if call[0] == "sync_image_txt"] == [
+        ("sync_image_txt", [str(images_file)], 2, True)
+    ]
+    assert ("save", None, False) in hauler.calls
+
+
+def test_build_rejects_absent_local_capture_sources_before_staging(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    result = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY)).build(
+        BuildRequest(folder=source, output=tmp_path / "haul.tar.zst", hauler_manifests=["./absent.yaml"])
+    )
+    assert result.success is False
+    assert "absent.yaml" in result.diagnostics
+
+
+def test_build_chunked_promotes_all_chunks_or_none(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "haul.tar.zst"
+    hauler = CapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=3)
+    result = capsule_service(tmp_path, hauler).build(
+        BuildRequest(folder=source, output=output, chunk_size="1MB")
+    )
+    assert result.success, result.diagnostics
+    assert result.format_version == 2
+    assert result.payload_path is None, "one path must never silently mean a set"
+    names = [chunk.path.name for chunk in result.payloads]
+    assert names == ["haul_0.tar.zst", "haul_1.tar.zst", "haul_2.tar.zst"]
+    for chunk in result.payloads:
+        assert chunk.size == len(f"chunk{names.index(chunk.path.name)}")
+        assert chunk.sha256 == hashlib.sha256(f"chunk{names.index(chunk.path.name)}".encode()).hexdigest()
+    assert ("save", "1MB", False) in hauler.calls
+    loads = [call for call in hauler.calls if call[0] == "load"]
+    assert loads[-1] == ("load", "haul_0.tar.zst"), "validation reloads the documented chunk entrypoint"
+    assert result.complete is True
+
+
+def test_build_chunked_failure_leaves_no_partial_final_set(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "haul.tar.zst"
+
+    class ExplodingCapsuleHauler(CapsuleHauler):
+        def inventory(self, store, temp):
+            raise RuntimeError("validation failed")
+
+    result = capsule_service(tmp_path, ExplodingCapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=2)).build(
+        BuildRequest(folder=source, output=output, chunk_size="1MB")
+    )
+    assert result.success is False
+    assert not list(tmp_path.glob("haul_*.tar.zst"))
+
+
+def test_registry_config_accepts_port_override():
+    config = _registry_config(Path("D:/josh room/registry"), 5001)
+    assert 'addr: "127.0.0.1:5001"' in config
+    assert 'rootdirectory: "D:/josh room/registry"' in config

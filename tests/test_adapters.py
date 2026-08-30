@@ -371,3 +371,165 @@ def test_windows_hauler_adapter_rejects_unsafe_relative_payload_names(tmp_path):
         with pytest.raises(ValueError, match="unsafe Windows payload filename"):
             adapter.sync_files(store, temp, [(payload, "payload")])
     assert runner.calls == []
+
+
+def test_hauler_sync_accepts_multiple_manifests_with_retries_and_slim_policy(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler")
+    adapter.sync(tmp_path / "store", tmp_path / "temp", "base.yaml", "https://example.test/product.yaml", retries=2, exclude_extras=True)
+    assert runner.calls[0][0] == [
+        "/tools/hauler",
+        "store",
+        "sync",
+        "--store",
+        str(tmp_path / "store"),
+        "--tempdir",
+        str(tmp_path / "temp"),
+        "--exclude-extras",
+        "--filename",
+        "base.yaml",
+        "--filename",
+        "https://example.test/product.yaml",
+        "--retries",
+        "2",
+    ]
+
+
+def test_hauler_sync_image_txt_delegates_native_ingestion(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler")
+    adapter.sync_image_txt(tmp_path / "store", tmp_path / "temp", ["./images.txt", "https://example.test/images.txt"], retries=4)
+    assert runner.calls[0][0] == [
+        "/tools/hauler",
+        "store",
+        "sync",
+        "--store",
+        str(tmp_path / "store"),
+        "--tempdir",
+        str(tmp_path / "temp"),
+        "--image-txt",
+        "./images.txt",
+        "--image-txt",
+        "https://example.test/images.txt",
+        "--retries",
+        "4",
+    ]
+    adapter.sync_image_txt(tmp_path / "store", tmp_path / "temp", [])
+    assert len(runner.calls) == 1
+
+
+def test_hauler_save_chunk_size_and_containerd_are_exact_and_exclusive(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler")
+    adapter.save(tmp_path / "store", tmp_path / "temp", tmp_path / "haul.tar.zst", chunk_size="500MB")
+    assert runner.calls[0][0] == [
+        "/tools/hauler",
+        "store",
+        "save",
+        "--store",
+        str(tmp_path / "store"),
+        "--tempdir",
+        str(tmp_path / "temp"),
+        "--filename",
+        str(tmp_path / "haul.tar.zst"),
+        "--chunk-size",
+        "500MB",
+    ]
+    adapter.save(tmp_path / "store", tmp_path / "temp", tmp_path / "images.tar", containerd=True)
+    assert runner.calls[1][0][-1] == "--containerd"
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        adapter.save(tmp_path / "store", tmp_path / "temp", tmp_path / "x.tar.zst", chunk_size="1G", containerd=True)
+    assert len(runner.calls) == 2
+
+
+def test_hauler_copy_targets_are_passed_through_with_transport_flags(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler")
+    adapter.copy(tmp_path / "store", tmp_path / "temp", "registry://registry.example.test", retries=5)
+    adapter.copy(tmp_path / "store", tmp_path / "temp", "dir:///tmp/exported", plain_http=True, insecure=True)
+    assert [call[0][-1] for call in runner.calls] == [
+        "registry://registry.example.test",
+        "dir:///tmp/exported",
+    ]
+    assert runner.calls[0][0][-3:] == ["--retries", "5", "registry://registry.example.test"]
+    assert "--plain-http" in runner.calls[1][0] and "--insecure" in runner.calls[1][0]
+
+
+def test_hauler_windows_image_adds_forward_slim_policy(tmp_path):
+    runner = RecordingRunner()
+    adapter = HaulerAdapter(runner, executable="/tools/hauler.exe", platform_name="windows")
+    adapter.sync_files(tmp_path / "store", tmp_path / "temp", [], ["example/image:latest"], retries=2, exclude_extras=True)
+    assert runner.calls[0][0] == [
+        "/tools/hauler.exe",
+        "--store",
+        str(tmp_path / "store"),
+        "--tempdir",
+        str(tmp_path / "temp"),
+        "store",
+        "add",
+        "image",
+        "example/image:latest",
+        "--local",
+        "--exclude-extras",
+        "--retries",
+        "2",
+    ]
+
+
+def test_hauler_serve_commands_include_executable_and_optional_log_level(tmp_path, monkeypatch):
+    monkeypatch.delenv("JAT_HAULER_LOG_LEVEL", raising=False)
+    adapter = HaulerAdapter(RecordingRunner(), executable="/tools/hauler")
+    fileserver = adapter.serve_fileserver_command(tmp_path / "store", tmp_path / "temp", tmp_path / "files", 8080)
+    registry = adapter.serve_registry_command(
+        tmp_path / "store", tmp_path / "temp", tmp_path / "registry", tmp_path / "registry.yaml"
+    )
+    assert fileserver == [
+        "/tools/hauler",
+        "--store",
+        str(tmp_path / "store"),
+        "--tempdir",
+        str(tmp_path / "temp"),
+        "store",
+        "serve",
+        "fileserver",
+        "--directory",
+        str(tmp_path / "files"),
+        "--port",
+        "8080",
+    ]
+    assert registry == [
+        "/tools/hauler",
+        "store",
+        "serve",
+        "registry",
+        "--store",
+        str(tmp_path / "store"),
+        "--tempdir",
+        str(tmp_path / "temp"),
+        "--directory",
+        str(tmp_path / "registry"),
+        "--config",
+        str(tmp_path / "registry.yaml"),
+    ]
+    monkeypatch.setenv("JAT_HAULER_LOG_LEVEL", "debug")
+    assert adapter.serve_registry_command(
+        tmp_path / "store", tmp_path / "temp", tmp_path / "registry", tmp_path / "registry.yaml"
+    )[:3] == ["/tools/hauler", "--log-level", "debug"]
+
+
+def test_hauler_long_operations_stream_progress_when_a_sink_is_attached(tmp_path):
+    class StreamingRunner(RecordingRunner):
+        def run(self, argv, timeout=None, foreground=False, secrets=(), cwd=None, on_line=None):
+            self.calls.append((argv, timeout, foreground, secrets))
+            if on_line is not None:
+                on_line("transferring blob 1/2")
+            return result(argv=argv)
+
+    sink_lines = []
+    adapter = HaulerAdapter(StreamingRunner(), executable="/tools/hauler", progress=sink_lines.append)
+    adapter.sync(tmp_path / "store", tmp_path / "temp", "manifest.yaml")
+    assert sink_lines == ["transferring blob 1/2"]
+
+    quiet = HaulerAdapter(RecordingRunner(), executable="/tools/hauler")
+    quiet.sync(tmp_path / "store", tmp_path / "temp", "manifest.yaml")
+    assert all("on_line" not in str(call) for call in quiet.runner.calls)

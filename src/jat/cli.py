@@ -4,34 +4,98 @@ import argparse
 import sys
 from collections.abc import Callable, Sequence
 
-from .models import BuildRequest, OperationResult, RestoreRequest, ServeRequest
+from .models import (
+    BuildRequest,
+    CopyRequest,
+    ExportRequest,
+    ExtractRequest,
+    InspectRequest,
+    OperationResult,
+    RestoreRequest,
+    ServeRequest,
+)
 from .runtime import configure_runtime
 from .services import JATService
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="jat", description="Build, restore, and serve portable workspace hauls.")
+    root = argparse.ArgumentParser(
+        prog="jat", description="Capture, inspect, and project portable capability capsules."
+    )
     subcommands = root.add_subparsers(dest="command")
 
-    build = subcommands.add_parser("build", help="Build a portable workspace haul")
+    build = subcommands.add_parser("build", help="Build a portable capability capsule")
     build.add_argument("--folder", required=True)
     build.add_argument("--output", required=True)
     build.add_argument("--brew")
     images = build.add_mutually_exclusive_group()
     images.add_argument("--image", action="append", default=[], dest="images")
     images.add_argument("--all-images", action="store_true")
+    build.add_argument(
+        "--images-file",
+        action="append",
+        default=[],
+        dest="images_files",
+        help="Local or HTTP(S) images.txt consumed by Hauler's native --image-txt",
+    )
+    build.add_argument(
+        "--hauler-manifest",
+        action="append",
+        default=[],
+        dest="hauler_manifests",
+        help="Advanced declarative composition: sync a Hauler Files/Images/Charts manifest",
+    )
+    build.add_argument(
+        "--exclude-extras",
+        action="store_true",
+        help="Slim acquisition: exclude cosign signatures, attestations, SBOMs, and referrers",
+    )
+    build.add_argument("--chunk-size", help="Split the haul into chunks (e.g. 500M, 1G, 500MB)")
+    build.add_argument(
+        "--retries",
+        type=int,
+        default=3,
+        help="Transfer reliability policy for retry-capable Hauler operations (minimum 1)",
+    )
     build.add_argument("--rcc-environment", choices=("off", "auto", "required"), default="off")
     build.add_argument("--rcc-robot")
     build.add_argument("--json", action="store_true")
 
-    restore = subcommands.add_parser("restore", help="Restore a portable workspace haul")
+    restore = subcommands.add_parser("restore", help="Restore a workspace from a capsule")
     restore.add_argument("--haul", required=True)
     restore.add_argument("--destination", required=True)
     restore.add_argument("--json", action="store_true")
 
-    serve = subcommands.add_parser("serve", help="Serve images from a portable haul")
+    inspect = subcommands.add_parser("inspect", help="List capsule content without restoring anything")
+    inspect.add_argument("--haul", required=True)
+    inspect.add_argument("--json", action="store_true")
+
+    extract = subcommands.add_parser("extract", help="Extract one selected reference from a capsule")
+    extract.add_argument("--haul", required=True)
+    extract.add_argument("--reference", required=True)
+    extract.add_argument("--destination", required=True)
+    extract.add_argument("--json", action="store_true")
+
+    serve = subcommands.add_parser("serve", help="Serve capsule content")
     serve.add_argument("--haul", required=True)
+    serve.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
+    serve.add_argument("--fileserver-port", type=int, default=8080)
+    serve.add_argument("--registry-port", type=int, default=5000)
     serve.add_argument("--json", action="store_true")
+
+    export = subcommands.add_parser("export", help="Materialize capsule images for containerd")
+    export.add_argument("--haul", required=True)
+    export.add_argument("--format", choices=("containerd",), default="containerd")
+    export.add_argument("--output", required=True)
+    export.add_argument("--json", action="store_true")
+
+    copy = subcommands.add_parser("copy", help="Seed an external Hauler target from a capsule")
+    copy.add_argument("--haul", required=True)
+    copy.add_argument("--to", required=True, help="registry://... or dir://... target")
+    copy.add_argument("--retries", type=int, default=3, help="Per-artifact retry policy for registry pushes (minimum 1)")
+    copy.add_argument("--plain-http", action="store_true")
+    copy.add_argument("--insecure", action="store_true")
+    copy.add_argument("--json", action="store_true")
 
     doctor = subcommands.add_parser("doctor", help="Check JAT runtime prerequisites")
     doctor.add_argument("--json", action="store_true")
@@ -51,6 +115,8 @@ def main(
     if service is None:
         configure_runtime()
         service = JATService()
+        if not parsed.json:
+            service.announce = print
     result = _invoke(service, parsed)
     _print_result(result, parsed.json)
     return result.exit_status
@@ -65,14 +131,44 @@ def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:
                 brew=parsed.brew,
                 images=parsed.images,
                 all_images=parsed.all_images,
+                images_files=parsed.images_files,
+                hauler_manifests=parsed.hauler_manifests,
+                exclude_extras=parsed.exclude_extras,
+                chunk_size=parsed.chunk_size,
+                retries=parsed.retries,
                 rcc_environment=parsed.rcc_environment,
                 rcc_robot=parsed.rcc_robot,
             )
         )
     if parsed.command == "restore":
         return service.restore(RestoreRequest(haul=parsed.haul, destination=parsed.destination))
+    if parsed.command == "inspect":
+        return service.inspect(InspectRequest(haul=parsed.haul))
+    if parsed.command == "extract":
+        return service.extract(
+            ExtractRequest(haul=parsed.haul, reference=parsed.reference, destination=parsed.destination)
+        )
     if parsed.command == "serve":
-        return service.serve(ServeRequest(haul=parsed.haul))
+        return service.serve(
+            ServeRequest(
+                haul=parsed.haul,
+                mode=parsed.mode,
+                fileserver_port=parsed.fileserver_port,
+                registry_port=parsed.registry_port,
+            )
+        )
+    if parsed.command == "export":
+        return service.export(ExportRequest(haul=parsed.haul, format=parsed.format, output=parsed.output))
+    if parsed.command == "copy":
+        return service.copy(
+            CopyRequest(
+                haul=parsed.haul,
+                to=parsed.to,
+                retries=parsed.retries,
+                plain_http=parsed.plain_http,
+                insecure=parsed.insecure,
+            )
+        )
     if parsed.command == "doctor":
         return service.doctor()
     raise ValueError(f"unsupported command: {parsed.command}")
@@ -100,16 +196,29 @@ def _interactive_arguments(input_fn: Callable[[str], str]) -> list[str]:
 
 def _print_result(result: OperationResult, as_json: bool) -> None:
     if as_json:
-        print(result.model_dump_json(indent=2))
+        print(result.model_dump_json(indent=2, exclude_none=True))
         return
     stream = sys.stdout if result.success else sys.stderr
-    if result.success:
-        message = f"{result.operation} completed"
-        if result.payload_path:
-            message += f": {result.payload_path}"
-    else:
-        message = result.diagnostics or f"{result.operation} failed"
-    print(message, file=stream)
+    if not result.success:
+        print(result.diagnostics or f"{result.operation} failed", file=stream)
+        return
+    print(f"{result.operation} completed", file=stream)
+    if result.payload_path:
+        print(f"  payload: {result.payload_path}", file=stream)
+    for output in result.payloads or []:
+        print(f"  output: {output.path} ({output.size} bytes, sha256 {output.sha256[:16]}...)", file=stream)
+    if result.inventory is not None:
+        for entry in result.inventory:
+            print(f"  {entry.type}: {entry.reference}", file=stream)
+        present = [kind for kind, exists in (result.anchors or {}).items() if exists]
+        print(f"  JAT anchors: {', '.join(present) if present else 'none'}", file=stream)
+    if result.serve is not None:
+        if result.serve.fileserver_url:
+            print(f"  fileserver ({result.serve.fileserver_bind}): {result.serve.fileserver_url}", file=stream)
+        if result.serve.registry_url:
+            print(f"  registry ({result.serve.registry_bind}): {result.serve.registry_url}", file=stream)
+    if result.transfer is not None:
+        print(f"  transferred to: {result.transfer.destination} ({result.transfer.transport})", file=stream)
 
 
 if __name__ == "__main__":
