@@ -76,6 +76,17 @@ Receipts never carry credentials.
   not validated otherwise.
 - A chunk set smaller than one chunk still emits a single `_0` chunk file (no
   bare base file).
+- `store extract` matches references by substring containment, so a requested
+  reference that is a substring of another reference (e.g. `hauler/foo.txt:latest`
+  inside `myhauler/foo.txt:latest`) would extract both; JAT rejects such
+  ambiguous references before delegating.
+- Hauler's directory-copy branch does not use its retry loop; JAT therefore
+  reports `effective_retries: 1` for local projections and reserves the
+  requested value for registry pushes.
+- A `.zip` chunk set also fails `store load` (zip streaming constraint), and a
+  hidden-base chunk set (`.capsule.tar.zst` -> `_0.capsule.tar.zst`) fails
+  reassembly with a truncated blob; JAT rejects both output names before
+  capture.
 
 ## Supervision and progress
 

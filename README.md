@@ -453,13 +453,17 @@ Registry targets (`registry://`, `reg://`, `oci://`) are remote artifact
 transfers: Hauler retries each artifact push per `--retries`, and Hauler's
 normal auth/config/environment contract (`hauler login`, `--plain-http`,
 `--insecure`) applies. JAT never stores or prints credentials: targets that
-embed credentials (`user:token@host`) or query/fragment components are rejected,
-and any credential echo is redacted from diagnostics. Directory targets
-(`dir://`, `directory://`) are a local projection, not a network transfer, and
-do not share the remote retry semantics; because Hauler replaces same-named
-artifacts inside the target, the target must be a create-only path or an empty
-directory (never `/`), so an unrelated file can never be overwritten.
-Unsupported schemes are rejected explicitly.
+embed credentials in their userinfo or query/fragment components are rejected,
+and any credential echo is redacted from diagnostics. Remote capture sources
+(`--images-file`, `--hauler-manifest` URLs) are held to the same standard.
+Directory targets (`dir://`, `directory://`) are a local projection, not a
+network transfer: the receipt reports `effective_retries: 1` for them (Hauler's
+directory branch does not retry), and the projection is staged next to the
+destination and promoted only after Hauler succeeds, so a failure never leaves
+a partial target. Because Hauler replaces same-named artifacts inside the
+target, the destination must be a create-only path or an empty directory (never
+`/`), so an unrelated file can never be overwritten. Unsupported schemes are
+rejected explicitly.
 
 ## Use Hauler Directly for Additional Operations
 
