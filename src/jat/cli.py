@@ -4,6 +4,8 @@ import argparse
 import sys
 from collections.abc import Callable, Sequence
 
+from pydantic import ValidationError
+
 from .models import (
     BuildRequest,
     CopyRequest,
@@ -16,6 +18,8 @@ from .models import (
 )
 from .runtime import configure_runtime
 from .services import JATService
+
+_OPERATIONS = frozenset(("build", "restore", "inspect", "extract", "serve", "export", "copy", "doctor"))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -117,9 +121,26 @@ def main(
         service = JATService()
         if not parsed.json:
             service.announce = print
-    result = _invoke(service, parsed)
+    try:
+        result = _invoke(service, parsed)
+    except ValidationError as error:
+        result = _invalid_request_result(service, parsed, error)
     _print_result(result, parsed.json)
     return result.exit_status
+
+
+def _invalid_request_result(
+    service: JATService, parsed: argparse.Namespace, error: ValidationError
+) -> OperationResult:
+    """Invalid options still produce the documented machine-readable result."""
+    operation = parsed.command if parsed.command in _OPERATIONS else "doctor"
+    return OperationResult(
+        operation=operation,
+        success=False,
+        exit_status=1,
+        producer_version=getattr(service, "producer_version", "unknown"),
+        diagnostics=f"invalid request: {error}",
+    )
 
 
 def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:

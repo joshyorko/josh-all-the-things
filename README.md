@@ -319,7 +319,11 @@ is not part of `--hauler-manifest`.)
 JAT syncs your manifests into the same store as its core anchors. Your manifest
 paths are passed to Hauler exactly as you provide them — Hauler resolves chart
 `valuesFiles` relative to the manifest file, so JAT never relocates or rewrites
-your manifests.
+your manifests. JAT's anchors are reserved: if user-provided content replaces or
+duplicates a reserved anchor reference (`joshs-all-the-things-workspace.tar.zst`,
+`homebrew-recovery.tar.zst`, `rcc-environment.rcca`,
+`rcc-environment-metadata.json`), the build fails instead of producing a capsule
+that cannot restore the intended workspace.
 
 ### Slim Acquisition and Transfer Retries
 
@@ -448,10 +452,14 @@ rcc task script -r robot.yaml -- ./jat copy \
 Registry targets (`registry://`, `reg://`, `oci://`) are remote artifact
 transfers: Hauler retries each artifact push per `--retries`, and Hauler's
 normal auth/config/environment contract (`hauler login`, `--plain-http`,
-`--insecure`) applies. JAT never stores or prints credentials. Directory
-targets (`dir://`, `directory://`) are a local projection, not a network
-transfer, and do not share the remote retry semantics. Unsupported schemes are
-rejected explicitly.
+`--insecure`) applies. JAT never stores or prints credentials: targets that
+embed credentials (`user:token@host`) or query/fragment components are rejected,
+and any credential echo is redacted from diagnostics. Directory targets
+(`dir://`, `directory://`) are a local projection, not a network transfer, and
+do not share the remote retry semantics; because Hauler replaces same-named
+artifacts inside the target, the target must be a create-only path or an empty
+directory (never `/`), so an unrelated file can never be overwritten.
+Unsupported schemes are rejected explicitly.
 
 ## Use Hauler Directly for Additional Operations
 

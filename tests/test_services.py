@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from jat.safety import ArchiveMember
 from jat.services import (
     JATService,
+    WORKSPACE_ARTIFACT as WORKSPACE_ARTIFACT_NAME,
     WORKSPACE_REFERENCE,
     _local_file_reference,
     _registry_config,
@@ -927,3 +928,126 @@ def test_build_chunked_rolls_back_when_a_competing_output_appears_mid_promotion(
     assert not (tmp_path / "haul_0.tar.zst").exists(), "created links must be rolled back"
     competitor = tmp_path / "haul_1.tar.zst"
     assert competitor.read_bytes() == b"raced", "data JAT did not create is never deleted"
+
+
+def test_build_rejects_user_manifest_colliding_with_reserved_anchor_names(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "haul.tar.zst"
+    collision = tmp_path / "clobber.yaml"
+    collision.write_text(
+        "\n".join(
+            [
+                "apiVersion: content.hauler.cattle.io/v1",
+                "kind: Files",
+                "metadata:",
+                "  name: sneaky",
+                "spec:",
+                "  files:",
+                f"    - path: {json.dumps(str(collision))}",
+                f"      name: {WORKSPACE_ARTIFACT_NAME}",
+            ]
+        )
+        + "\n"
+    )
+
+    class ClobberingCapsuleHauler(CapsuleHauler):
+        def __init__(self, inventory):
+            super().__init__(inventory)
+            self.clobbered = False
+
+        def sync(self, store, temp, *manifests, retries=None, exclude_extras=False):
+            super().sync(store, temp, *manifests, retries=retries, exclude_extras=exclude_extras)
+            for manifest in manifests:
+                if Path(manifest).name == "manifest.yaml":
+                    continue  # the JAT-owned core manifest legitimately names the anchors
+                if WORKSPACE_ARTIFACT_NAME in Path(manifest).read_text():
+                    self.clobbered = True
+
+        def inventory(self, store, temp):
+            rows = super().inventory(store, temp)
+            if self.clobbered:
+                return [
+                    {**row, "Digest": "sha256:" + "f" * 64} if row["Reference"] == WORKSPACE_REFERENCE else row
+                    for row in rows
+                ]
+            return rows
+
+    result = capsule_service(tmp_path, ClobberingCapsuleHauler(WORKSPACE_ONLY_INVENTORY)).build(
+        BuildRequest(folder=source, output=output, hauler_manifests=[str(collision)])
+    )
+    assert result.success is False
+    assert "collides with the reserved JAT anchor" in result.diagnostics
+    assert not output.exists()
+
+
+def test_build_accepts_user_content_that_leaves_anchors_untouched(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    extra = tmp_path / "extra.yaml"
+    extra.write_text(
+        "\n".join(
+            [
+                "apiVersion: content.hauler.cattle.io/v1",
+                "kind: Files",
+                "metadata:",
+                "  name: benign",
+                "spec:",
+                "  files:",
+                f"    - path: {json.dumps(str(extra))}",
+                "      name: extra.txt",
+            ]
+        )
+        + "\n"
+    )
+    result = capsule_service(tmp_path, CapsuleHauler(WORKSPACE_ONLY_INVENTORY)).build(
+        BuildRequest(folder=source, output=tmp_path / "haul.tar.zst", hauler_manifests=[str(extra)])
+    )
+    assert result.success, result.diagnostics
+
+
+def test_copy_rejects_local_directory_targets_that_would_be_overwritten(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "run"))
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    service = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY))
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "existing.txt").write_text("keep")
+    result = service.copy(CopyRequest(haul=haul, to=f"dir://{occupied}"))
+    assert result.success is False
+    assert "destination must be empty" in result.diagnostics
+    assert (occupied / "existing.txt").read_text() == "keep"
+
+    result = service.copy(CopyRequest(haul=haul, to="dir:///"))
+    assert result.success is False
+    assert "destination must not be" in result.diagnostics
+
+    copied_file = tmp_path / "plain-file"
+    copied_file.write_text("data")
+    result = service.copy(CopyRequest(haul=haul, to=f"dir://{copied_file}"))
+    assert result.success is False
+    assert copied_file.read_text() == "data"
+
+
+def test_copy_redacts_credential_echo_from_failure_diagnostics(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "run"))
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    secret_target = "registry://user:token@registry.example.test"
+
+    class EchoingCapsuleHauler(CapsuleHauler):
+        def copy(self, store, temp, target, retries=None, plain_http=False, insecure=False):
+            raise RuntimeError(f"push to {target} failed after 3 attempts")
+
+    # model_construct bypasses validation to exercise the defense-in-depth
+    # redaction of driver-level credential echoes in failure diagnostics.
+    result = capsule_service(tmp_path, EchoingCapsuleHauler(MIXED_INVENTORY)).copy(
+        CopyRequest.model_construct(
+            haul=haul, to=secret_target, retries=1, plain_http=True, insecure=False
+        )
+    )
+    assert result.success is False
+    assert "token" not in result.diagnostics
+    assert "<redacted>" in result.diagnostics

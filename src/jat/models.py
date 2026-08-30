@@ -118,12 +118,25 @@ class CopyRequest(RequestModel):
 
     @field_validator("to")
     @classmethod
-    def target_uses_supported_scheme(cls, value):
+    def target_uses_supported_scheme_without_credentials(cls, value):
         if "://" not in value or any(character.isspace() for character in value):
             raise ValueError("copy target must be a scheme-qualified Hauler target")
-        scheme = value.split("://", 1)[0].lower() + "://"
-        if scheme not in COPY_SCHEMES:
-            raise ValueError(f"unsupported copy target scheme {scheme!r}; supported: {', '.join(COPY_SCHEMES)}")
+        scheme, _, remainder = value.partition("://")
+        if scheme.lower() + "://" not in COPY_SCHEMES:
+            raise ValueError(
+                f"unsupported copy target scheme {scheme!r}; supported: {', '.join(COPY_SCHEMES)}"
+            )
+        # Credentials never travel in the target: JAT uses Hauler's normal
+        # auth contract (hauler login / helpers), and the target is copied
+        # verbatim into receipts and diagnostics.
+        authority = remainder.split("/", 1)[0]
+        if "@" in authority:
+            raise ValueError(
+                "copy target must not embed credentials (user:token@host); "
+                "authenticate with hauler login or a credential helper"
+            )
+        if "?" in value or "#" in value:
+            raise ValueError("copy target must not contain query or fragment components")
         return value
 
 

@@ -252,3 +252,29 @@ def test_inspect_human_output_lists_content_and_anchors(capsys):
     output = capsys.readouterr().out
     assert "hauler/x:latest" in output
     assert "JAT anchors" in output
+
+
+def test_invalid_cli_options_produce_normal_machine_readable_failure(capsys):
+    service = RecordingService()
+    status = main(
+        ["build", "--folder", "/workspace", "--output", "/tmp/haul.tar.zst", "--retries", "0", "--json"],
+        service=service,
+    )
+    assert status == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["operation"] == "build"
+    assert payload["success"] is False
+    assert payload["exit_status"] == 1
+    assert "retries" in payload["diagnostics"]
+
+    for arguments, operation in (
+        (["build", "--folder", "/w", "--output", "/tmp/h.tar.zst", "--chunk-size", "1MiB", "--json"], "build"),
+        (["copy", "--haul", "h.tar.zst", "--to", "registry://user:token@host", "--json"], "copy"),
+        (["serve", "--haul", "h.tar.zst", "--registry-port", "0", "--json"], "serve"),
+    ):
+        service = RecordingService()
+        assert main(arguments, service=service) == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["operation"] == operation
+        assert payload["success"] is False
+        assert "invalid request:" in payload["diagnostics"]

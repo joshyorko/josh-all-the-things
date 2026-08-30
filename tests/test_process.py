@@ -46,9 +46,13 @@ def test_streaming_run_reports_failure_and_keeps_tail(tmp_path):
     assert "err-line" in completed.stderr
 
 
-def test_streaming_run_stops_process_on_timeout(tmp_path):
+def test_streaming_run_stops_process_on_timeout_and_keeps_stderr(tmp_path):
     script = streaming_script(
-        tmp_path, "import time\nprint('started', flush=True)\ntime.sleep(30)\n"
+        tmp_path,
+        "import sys, time\n"
+        "print('started', flush=True)\n"
+        "print('transfer failed', file=sys.stderr, flush=True)\n"
+        "time.sleep(30)\n",
     )
     started = time.monotonic()
     completed = ProcessRunner().run([sys.executable, str(script)], timeout=1, on_line=lambda line: None)
@@ -56,6 +60,7 @@ def test_streaming_run_stops_process_on_timeout(tmp_path):
     assert completed.timed_out is True
     assert completed.exit_status == 124
     assert elapsed < 15
+    assert "transfer failed" in completed.stderr, "timeout receipts must retain the stderr tail"
 
 
 def test_supervise_runs_children_to_completion():

@@ -264,3 +264,18 @@ def test_operation_result_v2_represents_multi_output_serve_and_transfer(tmp_path
         complete=True,
     )
     assert copied.transfer.requested_retries == 2
+
+
+def test_copy_request_rejects_credential_bearing_targets():
+    for target in (
+        "registry://user:token@registry.example.test",
+        "registry://user@registry.example.test",
+        "reg://token@reg.example.test",
+        "registry://registry.example.test/path?token=secret",
+        "registry://registry.example.test#fragment",
+    ):
+        with pytest.raises(ValidationError) as raised:
+            CopyRequest(haul="h.tar.zst", to=target)
+        assert "credentials" in str(raised.value) or "query or fragment" in str(raised.value)
+    assert CopyRequest(haul="h.tar.zst", to="registry://registry.example.test").to.endswith("example.test")
+    assert CopyRequest(haul="h.tar.zst", to="dir:///tmp/exported").to.startswith("dir://")

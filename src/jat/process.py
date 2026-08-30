@@ -146,7 +146,12 @@ class ProcessRunner:
             log.warn(f"Process timed out: {Path(argv[0]).name}")
             self._join(readers)
             return self._result(
-                argv, 124, self._streamed_tail(tails, counts, "stdout", True), "", secret_values, timed_out=True
+                argv,
+                124,
+                self._streamed_tail(tails, counts, "stdout", True),
+                self._streamed_tail(tails, counts, "stderr", False),
+                secret_values,
+                timed_out=True,
             )
         except KeyboardInterrupt:
             self._stop(process)

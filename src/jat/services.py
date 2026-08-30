@@ -55,6 +55,18 @@ RCC_METADATA_REFERENCE = "hauler/rcc-environment-metadata.json:latest"
 COPY_REMOTE_SCHEMES = ("registry://", "reg://", "oci://")
 COPY_LOCAL_SCHEMES = ("dir://", "directory://")
 
+_CREDENTIAL_IN_TARGET = re.compile(r"//[^/\s:@]+:[^/\s@]+@")
+
+
+def _local_directory_target(target: str) -> Path:
+    """Resolve the filesystem path of a dir://|directory:// target."""
+    remainder = target.split("://", 1)[1]
+    return Path(remainder) if remainder.startswith("/") else Path.cwd() / remainder
+
+
+def _redact_target_credentials(value: str) -> str:
+    return _CREDENTIAL_IN_TARGET.sub("//<redacted>@", value)
+
 
 class _ProgressSink:
     """Forward bounded truthful Hauler transfer lines without a second engine."""
@@ -175,6 +187,14 @@ class JATService:
                     self.hauler.sync(
                         build_store, temp, manifest, retries=retries, exclude_extras=exclude_extras
                     )
+                # JAT owns its anchors: user-provided content must never
+                # replace or duplicate a reserved anchor reference. Snapshot
+                # the anchor identities after the core sync and re-verify
+                # after composition (works for local and remote manifests
+                # alike, without parsing user manifests).
+                anchor_snapshot = None
+                if hauler_manifests or images_files:
+                    anchor_snapshot = _anchor_snapshot(self.hauler.inventory(build_store, temp))
                 # User Hauler manifests are passed exactly as provided: pinned
                 # v2.0.3 resolves chart valuesFiles relative to the manifest
                 # file, so JAT must not relocate or rewrite them.
@@ -184,6 +204,8 @@ class JATService:
                     self.hauler.sync_image_txt(
                         build_store, temp, images_files, retries=retries, exclude_extras=exclude_extras
                     )
+                if anchor_snapshot is not None:
+                    _verify_anchors_unchanged(self.hauler.inventory(build_store, temp), anchor_snapshot)
                 staged = stage.path / output.name
                 _require_chunkable_output_name(output.name, request.chunk_size)
                 self.hauler.save(build_store, temp, staged, chunk_size=request.chunk_size)
@@ -459,6 +481,11 @@ class JATService:
             else:
                 supported = ", ".join((*COPY_REMOTE_SCHEMES, *COPY_LOCAL_SCHEMES))
                 raise ValueError(f"unsupported copy target scheme {scheme!r}; supported: {supported}")
+            if transport == "local-directory":
+                # A directory projection must never overwrite unrelated data:
+                # Hauler replaces same-named artifacts inside the target, so
+                # the target is validated create-only/empty before Hauler runs.
+                empty_destination(_local_directory_target(target), haul)
             with self._loaded_capsule(haul, _operation_runtime_directory(), "copy") as (stage, store, temp, inventory):
                 self.hauler.copy(
                     store,
@@ -483,7 +510,9 @@ class JATService:
                 complete=True,
             )
         except (OSError, RuntimeError, ValueError) as error:
-            return self._failure("copy", error)
+            # Credential-bearing targets are rejected by the request model;
+            # this redaction keeps any driver-level echo out of diagnostics.
+            return self._failure("copy", _redact_target_credentials(str(error)))
 
     def _announce(self, message: str) -> None:
         if self.announce is not None:
@@ -829,6 +858,34 @@ validation:
       allow:
         - ".+"
 '''
+
+
+def _anchor_snapshot(inventory: list[dict]) -> dict[str, list[tuple]]:
+    """Identity rows for the reserved JAT anchor references, sorted."""
+    reserved = (WORKSPACE_REFERENCE, BREW_REFERENCE, RCC_REFERENCE, RCC_METADATA_REFERENCE)
+    snapshot: dict[str, list[tuple]] = {}
+    for item in inventory:
+        reference = item["Reference"]
+        if reference in reserved:
+            snapshot.setdefault(reference, []).append((item.get("Digest"), item.get("Size")))
+    return {reference: sorted(rows) for reference, rows in snapshot.items()}
+
+
+def _verify_anchors_unchanged(inventory: list[dict], snapshot: dict[str, list[tuple]]) -> None:
+    """Reject composition that replaced or duplicated a reserved anchor.
+
+    A user manifest or image list that adds content under a reserved anchor
+    reference changes that reference's identity rows (digest, size, or row
+    count); either outcome would silently break restore of the intended
+    workspace, so the build fails before save.
+    """
+    current = _anchor_snapshot(inventory)
+    for reference, expected in snapshot.items():
+        if current.get(reference) != expected:
+            raise ValueError(
+                "user-provided Hauler content collides with the reserved JAT anchor "
+                f"reference {reference!r}; JAT anchors cannot be replaced or duplicated"
+            )
 
 
 def _validate_capture_sources(sources: list[str], label: str) -> list[str]:
