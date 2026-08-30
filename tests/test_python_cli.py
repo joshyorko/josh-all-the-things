@@ -278,3 +278,44 @@ def test_invalid_cli_options_produce_normal_machine_readable_failure(capsys):
         assert payload["operation"] == operation
         assert payload["success"] is False
         assert "invalid request:" in payload["diagnostics"]
+
+
+def test_validation_receipts_never_contain_rejected_values(capsys):
+    service = RecordingService()
+    status = main(
+        ["copy", "--haul", "h.tar.zst", "--to", "registry://user:token@host", "--json"],
+        service=service,
+    )
+    assert status == 1
+    payload = json.loads(capsys.readouterr().out)
+    diagnostics = payload["diagnostics"]
+    assert "user:token@host" not in diagnostics, "the rejected value must never appear"
+    assert ":token@" not in diagnostics and "token" not in diagnostics.replace(" userinfo", "")
+    assert "must not embed credentials" in diagnostics
+
+
+def test_v1_cli_json_keeps_legacy_field_set_with_explicit_nulls(capsys):
+    service = RecordingService()
+    assert main(["doctor", "--json"], service=service) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == {
+        "format_version",
+        "operation",
+        "success",
+        "exit_status",
+        "payload_path",
+        "payload_size",
+        "sha256",
+        "producer_version",
+        "diagnostics",
+        "environment_artifact",
+    }
+    assert payload["payload_path"] is None
+    assert "payloads" not in payload and "complete" not in payload
+
+    service = RecordingService()
+    assert main(["inspect", "--haul", "h.tar.zst", "--json"], service=service) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["format_version"] == 2
+    assert "inventory" in payload and "anchors" in payload and "complete" in payload
+    assert "payload_path" not in payload, "v2 serialization excludes null fields"

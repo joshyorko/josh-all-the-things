@@ -1116,3 +1116,63 @@ def test_build_chunked_rejects_leading_dot_output_names_before_capture(tmp_path)
     assert result.success is False
     assert "must not start with a dot" in result.diagnostics
     assert ("save", "1MB", False) not in hauler.calls
+
+
+def test_extract_rejects_ambiguous_substring_references_before_hauler_runs(tmp_path):
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    ambiguous = [
+        {"Reference": "hauler/foo.txt:latest", "Type": "file"},
+        {"Reference": "myhauler/foo.txt:latest", "Type": "file"},
+    ]
+    hauler = CapsuleHauler(ambiguous)
+    destination = tmp_path / "out"
+    result = capsule_service(tmp_path, hauler).extract(
+        ExtractRequest(haul=haul, reference="hauler/foo.txt:latest", destination=destination)
+    )
+    assert result.success is False
+    assert "ambiguous under Hauler's substring matching" in result.diagnostics
+    assert "myhauler/foo.txt:latest" in result.diagnostics
+    assert not any(call[0] == "extract" for call in hauler.calls), "extraction must be rejected before Hauler runs"
+    assert not destination.exists()
+
+
+def test_copy_receipt_reports_honest_effective_retries(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "run"))
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    service = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY))
+
+    local = service.copy(CopyRequest(haul=haul, to=f"dir://{tmp_path / 'projected'}", retries=5))
+    assert local.success, local.diagnostics
+    assert local.transfer.effective_retries == 1, "Hauler's directory branch does not retry"
+    assert local.transfer.requested_retries == 5
+
+    remote = service.copy(CopyRequest(haul=haul, to="registry://registry.example.test", retries=5))
+    assert remote.success, remote.diagnostics
+    assert remote.transfer.effective_retries == 5, "registry pushes are per-artifact retry-wrapped"
+
+
+def test_copy_dir_projection_is_staged_and_promoted_atomically(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "run"))
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+
+    class RecordingCopyHauler(CapsuleHauler):
+        def copy(self, store, temp, target, retries=None, plain_http=False, insecure=False):
+            self.calls.append(("copy", target, retries))
+            # Hauler writes into the staged projection, never the public path.
+            Path(target.removeprefix("dir://")).mkdir(parents=True, exist_ok=True)
+            (Path(target.removeprefix("dir://")) / WORKSPACE_ARTIFACT_NAME).write_bytes(b"workspace")
+
+    destination = tmp_path / "projected"
+    hauler = RecordingCopyHauler(MIXED_INVENTORY)
+    result = capsule_service(tmp_path, hauler).copy(CopyRequest(haul=haul, to=f"dir://{destination}"))
+    assert result.success, result.diagnostics
+    targets = [call[1] for call in hauler.calls if call[0] == "copy"]
+    assert all(not t.removeprefix("dir://").startswith(str(destination)) for t in targets), (
+        "Hauler must never write directly into the public target"
+    )
+    assert (destination / WORKSPACE_ARTIFACT_NAME).read_bytes() == b"workspace"
+    leftovers = [path.name for path in tmp_path.iterdir() if path.name.startswith(".jat-copy-")]
+    assert not leftovers, "the staging area is cleaned up after promotion"

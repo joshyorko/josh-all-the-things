@@ -4,6 +4,7 @@ import re
 import tempfile
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -66,7 +67,23 @@ class BuildRequest(RequestModel):
         for source in value:
             if not source or source.strip() != source:
                 raise ValueError("capture sources must be non-empty paths or HTTP(S) URLs")
-            if "://" in source and not _REMOTE_URL_PATTERN.match(source):
+            if _REMOTE_URL_PATTERN.match(source):
+                # Hauler logs the original source URL in its processing lines,
+                # which JAT forwards to progress output and failure
+                # diagnostics, so secrets must never travel inside a capture
+                # source URL.
+                parsed = urlparse(source)
+                if parsed.username or parsed.password:
+                    raise ValueError(
+                        "remote capture sources must not embed credentials in their userinfo; "
+                        "fetch through an anonymous URL or pre-stage the file locally"
+                    )
+                if parsed.query or parsed.fragment:
+                    raise ValueError(
+                        "remote capture sources must not contain query or fragment "
+                        "components (signed URLs leak their signature through Hauler logs)"
+                    )
+            elif "://" in source:
                 raise ValueError("remote capture sources must use HTTP(S)")
         return value
 
@@ -132,7 +149,7 @@ class CopyRequest(RequestModel):
         authority = remainder.split("/", 1)[0]
         if "@" in authority:
             raise ValueError(
-                "copy target must not embed credentials (user:token@host); "
+                "copy target must not embed credentials in its userinfo; "
                 "authenticate with hauler login or a credential helper"
             )
         if "?" in value or "#" in value:

@@ -4,7 +4,6 @@ import signal
 import socket
 import subprocess
 import sys
-import tarfile
 import time
 import urllib.request
 from contextlib import contextmanager
@@ -384,8 +383,14 @@ def test_real_containerd_export_produces_hauler_containerd_layout(tmp_path):
     assert exported.payloads[0].size == output.stat().st_size
     assert exported.payloads[0].sha256 == exported.sha256
 
-    with tarfile.open(output) as archive:
-        names = archive.getnames()
+    # Pinned Hauler always writes a zstd-compressed tar for containerd
+    # exports, and the declared RCC Python (3.13.11) cannot decode zstd with
+    # tarfile, so read the member list through GNU tar like the archive
+    # boundary does.
+    listing = subprocess.run(
+        ["tar", "--zstd", "-tf", str(output)], capture_output=True, text=True, check=True
+    )
+    names = listing.stdout.splitlines()
     assert any(name.startswith("blobs/sha256/") for name in names)
     assert not any(name == "oci-layout" for name in names), "containerd compatibility removes oci-layout"
 

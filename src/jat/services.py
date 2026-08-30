@@ -232,13 +232,14 @@ class JATService:
                     complete=True,
                     environment_artifact=rcc_metadata,
                 )
+            single = outputs[0]
             return OperationResult(
                 operation="build",
                 success=True,
                 exit_status=0,
-                payload_path=output,
-                payload_size=output.stat().st_size,
-                sha256=_sha256(output),
+                payload_path=single.path,
+                payload_size=single.size,
+                sha256=single.sha256,
                 producer_version=self.producer_version,
                 environment_artifact=rcc_metadata,
             )
@@ -417,6 +418,17 @@ class JATService:
                     raise ValueError(
                         f"haul does not contain reference {reference!r}; known references: {known}"
                     )
+                # Pinned v2.0.3 matches extract references with substring
+                # containment, so hauler/foo.txt:latest would also extract
+                # myhauler/foo.txt:latest. The operation promises exactly one
+                # selected reference: reject any additional substring match
+                # before delegating to Hauler.
+                substring_matches = sorted(candidate for candidate in references if reference in candidate)
+                if len(substring_matches) > 1:
+                    raise ValueError(
+                        f"reference {reference!r} is ambiguous under Hauler's substring matching; "
+                        f"matching references: {', '.join(substring_matches)}"
+                    )
                 extracted = stage.path / "extracted"
                 extracted.mkdir()
                 self.hauler.extract(reference, store, temp, extracted)
@@ -452,18 +464,17 @@ class JATService:
                 # The adapter rejects any chunk-size/--containerd combination.
                 self.hauler.save(store, temp, staged, containerd=True)
                 os.link(staged, output)
+            evidence = ArtifactOutput(path=output, size=output.stat().st_size, sha256=_sha256(output))
             return OperationResult(
                 format_version=2,
                 operation="export",
                 success=True,
                 exit_status=0,
-                payload_path=output,
-                payload_size=output.stat().st_size,
-                sha256=_sha256(output),
+                payload_path=evidence.path,
+                payload_size=evidence.size,
+                sha256=evidence.sha256,
                 producer_version=self.producer_version,
-                payloads=[
-                    ArtifactOutput(path=output, size=output.stat().st_size, sha256=_sha256(output))
-                ],
+                payloads=[evidence],
                 complete=True,
             )
         except (OSError, RuntimeError, ValueError) as error:
@@ -482,19 +493,40 @@ class JATService:
                 supported = ", ".join((*COPY_REMOTE_SCHEMES, *COPY_LOCAL_SCHEMES))
                 raise ValueError(f"unsupported copy target scheme {scheme!r}; supported: {supported}")
             if transport == "local-directory":
-                # A directory projection must never overwrite unrelated data:
-                # Hauler replaces same-named artifacts inside the target, so
-                # the target is validated create-only/empty before Hauler runs.
-                empty_destination(_local_directory_target(target), haul)
-            with self._loaded_capsule(haul, _operation_runtime_directory(), "copy") as (stage, store, temp, inventory):
-                self.hauler.copy(
-                    store,
-                    temp,
-                    target,
-                    retries=request.retries,
-                    plain_http=request.plain_http,
-                    insecure=request.insecure,
-                )
+                # A directory projection must never overwrite unrelated data
+                # and must never leave a partial target: Hauler writes with
+                # create/truncate semantics, so the projection is staged in an
+                # owned directory adjacent to the destination and promoted
+                # atomically only after Hauler succeeds. The create-only
+                # destination check also stays in src/jat/.
+                destination = empty_destination(_local_directory_target(target), haul)
+                stage_parent = destination.parent
+                effective_retries = 1  # Hauler's directory branch does not retry
+            else:
+                stage_parent = _operation_runtime_directory()
+                effective_retries = request.retries  # per-artifact retry-wrapped pushes
+            with self._loaded_capsule(haul, stage_parent, "copy") as (stage, store, temp, inventory):
+                if transport == "local-directory":
+                    projected = stage.path / "projection"
+                    projected.mkdir()
+                    self.hauler.copy(
+                        store,
+                        temp,
+                        f"dir://{projected}",
+                        retries=request.retries,
+                        plain_http=request.plain_http,
+                        insecure=request.insecure,
+                    )
+                    _promote_restore(projected, destination)
+                else:
+                    self.hauler.copy(
+                        store,
+                        temp,
+                        target,
+                        retries=request.retries,
+                        plain_http=request.plain_http,
+                        insecure=request.insecure,
+                    )
             return OperationResult(
                 format_version=2,
                 operation="copy",
@@ -505,7 +537,7 @@ class JATService:
                     destination=target,
                     transport=transport,
                     requested_retries=request.retries,
-                    effective_retries=request.retries,
+                    effective_retries=effective_retries,
                 ),
                 complete=True,
             )

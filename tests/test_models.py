@@ -279,3 +279,22 @@ def test_copy_request_rejects_credential_bearing_targets():
         assert "credentials" in str(raised.value) or "query or fragment" in str(raised.value)
     assert CopyRequest(haul="h.tar.zst", to="registry://registry.example.test").to.endswith("example.test")
     assert CopyRequest(haul="h.tar.zst", to="dir:///tmp/exported").to.startswith("dir://")
+
+
+def test_capture_sources_reject_credential_bearing_and_signed_urls():
+    for source in (
+        "https://user:token@example.test/images.txt",
+        "https://user@example.test/images.txt",
+        "https://example.test/images.txt?X-Amz-Signature=abc123",
+        "https://example.test/manifest.yaml#fragment",
+    ):
+        with pytest.raises(ValidationError) as raised:
+            BuildRequest(folder="s", output="o", images_files=[source])
+        assert "credentials" in str(raised.value) or "query or fragment" in str(raised.value)
+    accepted = BuildRequest(
+        folder="s",
+        output="o",
+        images_files=["https://example.test/images.txt"],
+        hauler_manifests=["https://example.test/product.yaml"],
+    )
+    assert accepted.images_files == ["https://example.test/images.txt"]
