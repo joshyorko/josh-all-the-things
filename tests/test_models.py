@@ -4,11 +4,20 @@ import pytest
 from pydantic import ValidationError
 
 from jat.models import (
+    ANCHOR_KINDS,
+    ArtifactOutput,
     BuildRequest,
+    ContentEntry,
+    CopyRequest,
     EnvironmentArtifactMetadata,
+    ExportRequest,
+    ExtractRequest,
+    InspectRequest,
     OperationResult,
     RestoreRequest,
+    ServeEndpoints,
     ServeRequest,
+    TransferReceipt,
 )
 
 
@@ -91,3 +100,201 @@ def test_operation_result_can_carry_environment_artifact_metadata():
         environment_artifact=metadata,
     )
     assert result.environment_artifact == metadata
+
+
+def test_build_request_accepts_and_bounds_new_capture_contract():
+    request = BuildRequest(
+        folder="src",
+        output="out.tar.zst",
+        images_files=["./images.txt", "https://example.test/images.txt"],
+        hauler_manifests=["./airgap.yaml"],
+        exclude_extras=True,
+        chunk_size="500MB",
+        retries=1,
+    )
+    assert request.images_files[1].startswith("https://")
+    assert request.chunk_size == "500MB"
+    assert request.retries == 1
+    for accepted in ("1M", "1G", "500mb", "1048576", "2TB"):
+        assert BuildRequest(folder="s", output="o", chunk_size=accepted).chunk_size == accepted
+    for bad_retries in (0, -2):
+        with pytest.raises(ValidationError):
+            BuildRequest(folder="s", output="o", retries=bad_retries)
+    for bad_chunk_size in ("five-hundred", "1B", "1Mi", "1MiB", "1KiB", "0", "-1G"):
+        with pytest.raises(ValidationError):
+            BuildRequest(folder="s", output="o", chunk_size=bad_chunk_size)
+    with pytest.raises(ValidationError):
+        BuildRequest(folder="s", output="o", images_files=["./images.txt", "ftp://example.test/images.txt"])
+
+
+def test_serve_request_modes_and_ports_are_strict():
+    serve = ServeRequest(haul="haul.tar.zst", mode="both", fileserver_port=8081, registry_port=5001)
+    assert serve.mode == "both"
+    assert serve.fileserver_port == 8081
+    assert ServeRequest(haul="h").mode == "auto"
+    with pytest.raises(ValidationError):
+        ServeRequest(haul="h", mode="cluster")
+    with pytest.raises(ValidationError):
+        ServeRequest(haul="h", registry_port=0)
+
+
+def test_inspect_extract_export_copy_requests_are_strict():
+    inspect = InspectRequest(haul="haul.tar.zst")
+    extract = ExtractRequest(haul="haul.tar.zst", reference="hauler/x:latest", destination="out")
+    export = ExportRequest(haul="haul.tar.zst", output="images.tar")
+    copy = CopyRequest(haul="haul.tar.zst", to="registry://reg.example.test", retries=1)
+    assert extract.reference == "hauler/x:latest"
+    assert export.format == "containerd"
+    with pytest.raises(ValidationError):
+        ExtractRequest(haul="haul.tar.zst", reference="two tokens", destination="out")
+    with pytest.raises(ValidationError):
+        ExtractRequest(haul="haul.tar.zst", reference="", destination="out")
+    with pytest.raises(ValidationError):
+        ExportRequest(haul="haul.tar.zst", output="o.tar", format="docker")
+    with pytest.raises(ValidationError):
+        CopyRequest(haul="haul.tar.zst", to="s3://bucket")
+    with pytest.raises(ValidationError):
+        CopyRequest(haul="haul.tar.zst", to="registry://reg", retries=0)
+
+
+def test_content_entry_normalizes_and_bounds_hauler_metadata():
+    entry = ContentEntry.from_hauler(
+        {
+            "Reference": "hauler/probe.txt:latest",
+            "Type": "file",
+            "Platform": "-",
+            "Digest": "sha256:" + "a" * 64,
+            "Layers": 1,
+            "Size": 14,
+            "Extra": {"nested": "value"},
+        }
+    )
+    assert entry.reference == "hauler/probe.txt:latest"
+    assert entry.metadata == {"Extra": '{"nested": "value"}'}
+    bloated = ContentEntry(
+        reference="r",
+        type="file",
+        metadata={f"key{index}": "x" * 600 for index in range(40)},
+    )
+    assert len(bloated.metadata) == 32
+    assert all(len(value) <= 512 for value in bloated.metadata.values())
+
+
+def test_operation_result_v2_requires_explicit_version_transition(tmp_path):
+    structured = OperationResult(
+        format_version=2,
+        operation="inspect",
+        success=True,
+        exit_status=0,
+        producer_version="synthetic",
+        inventory=[ContentEntry(reference="hauler/x:latest", type="image")],
+        anchors=dict.fromkeys(ANCHOR_KINDS, False),
+        complete=True,
+    )
+    assert structured.anchors == {
+        "workspace": False,
+        "brew": False,
+        "rcc_environment": False,
+        "rcc_metadata": False,
+    }
+    with pytest.raises(ValidationError):
+        OperationResult(
+            operation="build",
+            success=True,
+            exit_status=0,
+            producer_version="synthetic",
+            payloads=[ArtifactOutput(path=tmp_path / "haul.tar.zst", size=4, sha256="a" * 64)],
+        )
+    legacy = OperationResult(
+        operation="build",
+        success=True,
+        exit_status=0,
+        payload_path=tmp_path / "haul.tar.zst",
+        payload_size=4,
+        sha256="a" * 64,
+        producer_version="synthetic",
+    )
+    body = json.loads(legacy.model_dump_json(exclude_none=True))
+    assert body["format_version"] == 1
+    assert "payloads" not in body and "complete" not in body and "inventory" not in body
+
+
+def test_operation_result_v2_represents_multi_output_serve_and_transfer(tmp_path):
+    chunked = OperationResult(
+        format_version=2,
+        operation="build",
+        success=True,
+        exit_status=0,
+        producer_version="synthetic",
+        payloads=[
+            ArtifactOutput(path=tmp_path / "haul_0.tar.zst", size=10, sha256="a" * 64),
+            ArtifactOutput(path=tmp_path / "haul_1.tar.zst", size=10, sha256="b" * 64),
+        ],
+        complete=True,
+    )
+    assert [output.path.name for output in chunked.payloads] == ["haul_0.tar.zst", "haul_1.tar.zst"]
+    served = OperationResult(
+        format_version=2,
+        operation="serve",
+        success=True,
+        exit_status=0,
+        producer_version="synthetic",
+        serve=ServeEndpoints(
+            mode="both",
+            fileserver_url="http://127.0.0.1:8080",
+            registry_url="http://127.0.0.1:5000",
+            fileserver_bind="all-interfaces",
+            registry_bind="loopback",
+        ),
+        complete=True,
+    )
+    assert served.serve.registry_bind == "loopback"
+    copied = OperationResult(
+        format_version=2,
+        operation="copy",
+        success=True,
+        exit_status=0,
+        producer_version="synthetic",
+        transfer=TransferReceipt(
+            destination="registry://reg.example.test",
+            transport="remote-registry",
+            requested_retries=2,
+            effective_retries=2,
+        ),
+        complete=True,
+    )
+    assert copied.transfer.requested_retries == 2
+
+
+def test_copy_request_rejects_credential_bearing_targets():
+    for target in (
+        "registry://user:token@registry.example.test",
+        "registry://user@registry.example.test",
+        "reg://token@reg.example.test",
+        "registry://registry.example.test/path?token=secret",
+        "registry://registry.example.test#fragment",
+    ):
+        with pytest.raises(ValidationError) as raised:
+            CopyRequest(haul="h.tar.zst", to=target)
+        assert "credentials" in str(raised.value) or "query or fragment" in str(raised.value)
+    assert CopyRequest(haul="h.tar.zst", to="registry://registry.example.test").to.endswith("example.test")
+    assert CopyRequest(haul="h.tar.zst", to="dir:///tmp/exported").to.startswith("dir://")
+
+
+def test_capture_sources_reject_credential_bearing_and_signed_urls():
+    for source in (
+        "https://user:token@example.test/images.txt",
+        "https://user@example.test/images.txt",
+        "https://example.test/images.txt?X-Amz-Signature=abc123",
+        "https://example.test/manifest.yaml#fragment",
+    ):
+        with pytest.raises(ValidationError) as raised:
+            BuildRequest(folder="s", output="o", images_files=[source])
+        assert "credentials" in str(raised.value) or "query or fragment" in str(raised.value)
+    accepted = BuildRequest(
+        folder="s",
+        output="o",
+        images_files=["https://example.test/images.txt"],
+        hauler_manifests=["https://example.test/product.yaml"],
+    )
+    assert accepted.images_files == ["https://example.test/images.txt"]
