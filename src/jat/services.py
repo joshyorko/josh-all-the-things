@@ -791,6 +791,15 @@ def _validate_inventory(inventory: list[dict], expect_brew: bool, expect_rcc: bo
         raise ValueError("validated Hauler store is missing the RCC environment artifact")
     if expect_rcc and RCC_METADATA_REFERENCE not in references:
         raise ValueError("validated Hauler store is missing the RCC environment metadata artifact")
+    # Optional anchors are reserved even when omitted: a build that never
+    # requested Brew or RCC content must not accept it from user composition,
+    # or restore would treat injected content as a JAT-owned payload. Restore
+    # derives its expectations from the haul itself, so legitimate hauls with
+    # optional anchors stay restorable.
+    if not expect_brew and BREW_REFERENCE in references:
+        raise ValueError("validated Hauler store contains a Homebrew recovery artifact but none was requested")
+    if not expect_rcc and RCC_REFERENCE in references:
+        raise ValueError("validated Hauler store contains an RCC environment artifact but none was requested")
 
 
 def _promote_restore(assembled: Path, destination: Path) -> None:
@@ -861,30 +870,38 @@ validation:
 
 
 def _anchor_snapshot(inventory: list[dict]) -> dict[str, list[tuple]]:
-    """Identity rows for the reserved JAT anchor references, sorted."""
-    reserved = (WORKSPACE_REFERENCE, BREW_REFERENCE, RCC_REFERENCE, RCC_METADATA_REFERENCE)
-    snapshot: dict[str, list[tuple]] = {}
+    """Identity rows for every reserved JAT anchor reference, sorted.
+
+    The complete reserved set is always present in the snapshot — including
+    optional anchors as an explicit empty row list — so composition cannot
+    inject an anchor that the build never requested.
+    """
+    snapshot: dict[str, list[tuple]] = {
+        reference: []
+        for reference in (WORKSPACE_REFERENCE, BREW_REFERENCE, RCC_REFERENCE, RCC_METADATA_REFERENCE)
+    }
     for item in inventory:
         reference = item["Reference"]
-        if reference in reserved:
-            snapshot.setdefault(reference, []).append((item.get("Digest"), item.get("Size")))
+        if reference in snapshot:
+            snapshot[reference].append((item.get("Digest"), item.get("Size")))
     return {reference: sorted(rows) for reference, rows in snapshot.items()}
 
 
 def _verify_anchors_unchanged(inventory: list[dict], snapshot: dict[str, list[tuple]]) -> None:
-    """Reject composition that replaced or duplicated a reserved anchor.
+    """Reject composition that replaced, duplicated, or injected an anchor.
 
     A user manifest or image list that adds content under a reserved anchor
     reference changes that reference's identity rows (digest, size, or row
-    count); either outcome would silently break restore of the intended
-    workspace, so the build fails before save.
+    count) — including optional anchors that were absent from the core build —
+    and any outcome would silently break restore of the intended workspace, so
+    the build fails before save.
     """
     current = _anchor_snapshot(inventory)
     for reference, expected in snapshot.items():
         if current.get(reference) != expected:
             raise ValueError(
                 "user-provided Hauler content collides with the reserved JAT anchor "
-                f"reference {reference!r}; JAT anchors cannot be replaced or duplicated"
+                f"reference {reference!r}; JAT anchors cannot be replaced, duplicated, or injected"
             )
 
 
@@ -902,12 +919,18 @@ def _require_chunkable_output_name(name: str, chunk_size: str | None) -> None:
 
     Hauler derives chunk names by stripping every extension of the output
     filename, but its unarchiver can only load tar/tar.zst containers (a zip
-    chunk set fails on load with an io.ReaderAt/io.Seeker constraint). JAT
-    rejects any other output name before capture instead of producing a haul
-    no consumer operation can open.
+    chunk set fails on load with an io.ReaderAt/io.Seeker constraint), and a
+    hidden base (leading dot, chunks like _0.capsule.tar.zst) fails reassembly
+    with a truncated-blob error. JAT rejects both before capture instead of
+    producing a haul no consumer operation can open.
     """
     if chunk_size is None:
         return
+    if name.startswith("."):
+        raise ValueError(
+            f"chunked output must not start with a dot (pinned v2.0.3 cannot "
+            f"reload hidden-base chunk sets): {name!r}"
+        )
     lowered = name.lower()
     if not lowered.endswith((".tar", ".tar.zst")):
         raise ValueError(
@@ -921,16 +944,17 @@ def _chunk_files(staged: Path) -> list[Path]:
 
     Hauler derives <ext> by stripping every extension of the requested output
     filename (capsule.zip -> capsule_0.zip; haul.tar.zst -> haul_0.tar.zst),
-    so the matcher mirrors that derivation for any accepted output name.
+    mirroring Go's filepath.Ext loop. A leading-dot name strips down to an
+    empty base (.capsule.tar.zst -> _0.capsule.tar.zst), which is a legitimate
+    chunk set, not an absence of chunks.
     """
-    name = staged.name
-    if "." in name:
-        base, ext = name.split(".", 1)
-        ext = f".{ext}"
-    else:
-        base, ext = name, ""
-    if not base:
-        return []
+    base, ext = staged.name, ""
+    while True:
+        dot = base.rfind(".")
+        if dot == -1:
+            break
+        ext = base[dot:] + ext
+        base = base[:dot]
     pattern = re.compile(rf"^{re.escape(base)}_(?P<index>[0-9]+){re.escape(ext)}$")
     candidates = []
     for candidate in staged.parent.iterdir():

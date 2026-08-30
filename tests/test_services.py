@@ -880,7 +880,9 @@ def test_build_chunked_rejects_output_names_hauler_cannot_reload(tmp_path):
             BuildRequest(folder=source, output=tmp_path / output_name, chunk_size="1MB")
         )
         assert result.success is False, output_name
-        assert "must be a .tar or .tar.zst archive name" in result.diagnostics
+        assert "must be a .tar or .tar.zst archive name" in result.diagnostics or (
+            "must not start with a dot" in result.diagnostics
+        ), result.diagnostics
         assert ("save", "1MB", False) not in hauler.calls, output_name
 
     assert capsule_service(tmp_path, CapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=1)).build(
@@ -1051,3 +1053,66 @@ def test_copy_redacts_credential_echo_from_failure_diagnostics(tmp_path, monkeyp
     assert result.success is False
     assert "token" not in result.diagnostics
     assert "<redacted>" in result.diagnostics
+
+
+def test_build_rejects_injection_of_omitted_optional_anchors(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "haul.tar.zst"
+    injection = tmp_path / "brew-injection.yaml"
+    injection.write_text(
+        "\n".join(
+            [
+                "apiVersion: content.hauler.cattle.io/v1",
+                "kind: Files",
+                "metadata:",
+                "  name: brew-injection",
+                "spec:",
+                "  files:",
+                f"    - path: {json.dumps(str(injection))}",
+                "      name: homebrew-recovery.tar.zst",
+            ]
+        )
+        + "\n"
+    )
+
+    class InjectingCapsuleHauler(CapsuleHauler):
+        def __init__(self, inventory):
+            super().__init__(inventory)
+            self.injected = False
+
+        def sync(self, store, temp, *manifests, retries=None, exclude_extras=False):
+            super().sync(store, temp, *manifests, retries=retries, exclude_extras=exclude_extras)
+            for manifest in manifests:
+                if Path(manifest).name == "manifest.yaml":
+                    continue
+                if "homebrew-recovery.tar.zst" in Path(manifest).read_text():
+                    self.injected = True
+
+        def inventory(self, store, temp):
+            rows = super().inventory(store, temp)
+            if self.injected:
+                return [*rows, {"Reference": "hauler/homebrew-recovery.tar.zst:latest", "Type": "file"}]
+            return rows
+
+    result = capsule_service(tmp_path, InjectingCapsuleHauler(WORKSPACE_ONLY_INVENTORY)).build(
+        BuildRequest(folder=source, output=output, hauler_manifests=[str(injection)])
+    )
+    assert result.success is False
+    assert "collides with the reserved JAT anchor" in result.diagnostics
+    assert not output.exists()
+
+
+def test_build_chunked_rejects_leading_dot_output_names_before_capture(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    # The pinned binary splits a hidden-base name into _0.<name> chunks but
+    # cannot reassemble them (truncated-blob load failure), so JAT rejects the
+    # name up front instead of failing after capture.
+    hauler = CapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=2)
+    result = capsule_service(tmp_path, hauler).build(
+        BuildRequest(folder=source, output=tmp_path / ".capsule.tar.zst", chunk_size="1MB")
+    )
+    assert result.success is False
+    assert "must not start with a dot" in result.diagnostics
+    assert ("save", "1MB", False) not in hauler.calls

@@ -540,3 +540,48 @@ def test_real_chunked_build_rejects_non_reloadable_output_names_before_capture(t
     assert built.success is False
     assert "must be a .tar or .tar.zst archive name" in built.diagnostics
     assert not list(tmp_path.glob("capsule*")), "no capture work may happen for a rejected output name"
+
+
+def test_real_chunked_leading_dot_output_fails_closed_before_capture(tmp_path):
+    source = make_workspace(tmp_path)
+    (source / "blob.bin").write_bytes(os.urandom(3 * 1024 * 1024))
+    service = make_service()
+
+    # Verified against the pinned binary: hidden-base chunk sets split fine
+    # but reassembly fails on load (truncated blob), so the name is rejected
+    # before any capture work and no chunk is ever published.
+    built = service.build(BuildRequest(folder=source, output=tmp_path / ".capsule.tar.zst", chunk_size="1MB"))
+    assert built.success is False
+    assert "must not start with a dot" in built.diagnostics
+    assert not list(tmp_path.glob("_0*")), "no chunk may be published for a rejected output name"
+
+
+def test_real_manifest_injection_of_omitted_optional_anchor_fails_closed(tmp_path):
+    source = make_workspace(tmp_path)
+    injection = write_manifest(
+        tmp_path / "brew-injection.yaml",
+        "\n".join(
+            [
+                "apiVersion: content.hauler.cattle.io/v1",
+                "kind: Files",
+                "metadata:",
+                "  name: brew-injection",
+                "spec:",
+                "  files:",
+                f"    - path: {json.dumps(str(tmp_path / 'fake-brew'))}",
+                "      name: homebrew-recovery.tar.zst",
+            ]
+        )
+        + "\n",
+    )
+    (tmp_path / "fake-brew").write_text("not a real brew export\n")
+    haul = tmp_path / "injected.tar.zst"
+
+    built = make_service().build(
+        BuildRequest(folder=source, output=haul, hauler_manifests=[str(injection)])
+    )
+    assert built.success is False
+    assert "Homebrew recovery artifact but none was requested" in built.diagnostics or (
+        "collides with the reserved JAT anchor" in built.diagnostics
+    ), built.diagnostics
+    assert not haul.exists(), "injected content must never be published"
