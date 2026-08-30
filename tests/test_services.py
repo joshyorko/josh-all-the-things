@@ -586,9 +586,12 @@ class CapsuleHauler:
             Path(haul).write_bytes(b"containerd-tar")
             return
         if chunk_size:
-            base = str(haul)[: -len(".tar.zst")]
+            name = Path(haul).name
+            base = name.split(".", 1)[0]
+            ext = name[len(base):]
+            parent = Path(haul).parent
             for index in range(self.chunk_count):
-                Path(f"{base}_{index}.tar.zst").write_bytes(f"chunk{index}".encode())
+                (parent / f"{base}_{index}{ext}").write_bytes(f"chunk{index}".encode())
             return
         Path(haul).write_bytes(b"synthetic-haul")
 
@@ -862,3 +865,65 @@ def test_registry_config_accepts_port_override():
     config = _registry_config(Path("D:/josh room/registry"), 5001)
     assert 'addr: "127.0.0.1:5001"' in config
     assert 'rootdirectory: "D:/josh room/registry"' in config
+
+
+def test_build_chunked_rejects_output_names_hauler_cannot_reload(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    # Hauler v2.0.3 can split any container, but its own store load cannot
+    # re-consume anything but tar/tar.zst chunk sets; JAT rejects the rest
+    # before capture instead of producing an unreadable capsule.
+    for output_name in ("capsule.zip", "haul", ".hidden-haul", "capsule.tar.gz"):
+        hauler = CapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=2)
+        result = capsule_service(tmp_path, hauler).build(
+            BuildRequest(folder=source, output=tmp_path / output_name, chunk_size="1MB")
+        )
+        assert result.success is False, output_name
+        assert "must be a .tar or .tar.zst archive name" in result.diagnostics
+        assert ("save", "1MB", False) not in hauler.calls, output_name
+
+    assert capsule_service(tmp_path, CapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=1)).build(
+        BuildRequest(folder=source, output=tmp_path / "capsule.TAR.ZST", chunk_size="1MB")
+    ).success is True, "case-insensitive tar.zst names stay acceptable"
+
+
+def test_build_chunked_publication_is_all_or_nothing(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "haul.tar.zst"
+    # A stale sibling from an interrupted previous attempt must not produce a
+    # partial public set on a failing retry.
+    competitor = tmp_path / "haul_1.tar.zst"
+    competitor.write_bytes(b"pre-existing")
+    hauler = CapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=2)
+
+    result = capsule_service(tmp_path, hauler).build(
+        BuildRequest(folder=source, output=output, chunk_size="1MB")
+    )
+
+    assert result.success is False
+    assert "already exists" in result.diagnostics
+    assert not (tmp_path / "haul_0.tar.zst").exists(), "failed promotion must roll back created links"
+    assert competitor.read_bytes() == b"pre-existing"
+
+
+def test_build_chunked_rolls_back_when_a_competing_output_appears_mid_promotion(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = tmp_path / "haul.tar.zst"
+
+    class RacingCapsuleHauler(CapsuleHauler):
+        def save(self, store, temp, haul, chunk_size=None, containerd=False):
+            super().save(store, temp, haul, chunk_size=chunk_size, containerd=containerd)
+            if chunk_size:
+                # Materialize after save, before promotion: a mid-promotion
+                # competitor collides with the second chunk target.
+                    (Path(haul).parent.parent / "haul_1.tar.zst").write_bytes(b"raced")
+
+    result = capsule_service(tmp_path, RacingCapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=2)).build(
+        BuildRequest(folder=source, output=output, chunk_size="1MB")
+    )
+    assert result.success is False
+    assert not (tmp_path / "haul_0.tar.zst").exists(), "created links must be rolled back"
+    competitor = tmp_path / "haul_1.tar.zst"
+    assert competitor.read_bytes() == b"raced", "data JAT did not create is never deleted"

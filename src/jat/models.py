@@ -14,7 +14,7 @@ class RequestModel(BaseModel):
 
 ServeMode = Literal["auto", "files", "registry", "both"]
 
-_CHUNK_SIZE_PATTERN = re.compile(r"^[1-9][0-9]*(?:[KMG]i?B?)?$", re.IGNORECASE)
+_CHUNK_SIZE_PATTERN = re.compile(r"^[1-9][0-9]*(?:[KMGT](?:B)?)?$", re.IGNORECASE)
 _REMOTE_URL_PATTERN = re.compile(r"^https?://", re.IGNORECASE)
 
 
@@ -46,11 +46,18 @@ class BuildRequest(RequestModel):
     @field_validator("chunk_size")
     @classmethod
     def chunk_size_has_hauler_shape(cls, value):
-        """Validate the user value before it reaches Hauler's chunk parser."""
+        """Only units pinned v2.0.3 parses: K/KB/M/MB/G/GB/T/TB or bare bytes.
+
+        Hauler treats suffixes as binary multiples (1K = 1024) and rejects
+        forms like 1B, 1Mi, or 1KiB; JAT rejects those before any capture work.
+        """
         if value is None:
             return value
         if not _CHUNK_SIZE_PATTERN.fullmatch(value):
-            raise ValueError("chunk_size must look like 500M, 1G, or 500MB")
+            raise ValueError(
+                "chunk_size must be a positive byte count with an optional "
+                "Hauler unit (K, KB, M, MB, G, GB, T, TB), e.g. 500M, 1G, or 500MB"
+            )
         return value
 
     @field_validator("images_files", "hauler_manifests")

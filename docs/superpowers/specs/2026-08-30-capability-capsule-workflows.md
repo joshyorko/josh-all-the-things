@@ -42,8 +42,17 @@ Receipts never carry credentials.
   multi-platform images legitimately repeat a reference per platform variant
   (plus referrer attestations), so inventory uniqueness is per
   `(Reference, Platform, Digest)`.
-- Chunked `store save --chunk-size` produces `<base>_<index>.tar.zst` starting
-  at zero; `store load --filename <base>_0.tar.zst` reassembles automatically.
+- Chunked `store save --chunk-size` produces `<base>_<index><ext>` starting at
+  zero, with `<ext>` derived by stripping every extension of the requested
+  output filename (`capsule.zip` -> `capsule_0.zip`); `store load --filename
+  <base>_0<ext>` reassembles tar/tar.zst chunk sets automatically. Hauler can
+  split any container but its unarchiver cannot reload non-tar chunk sets
+  (zip fails with an `io.ReaderAt`/`io.Seeker` constraint), so JAT restricts
+  chunked output names to `.tar`/`.tar.zst` and rejects others up front.
+- `parseChunkSize` accepts only a positive byte count with an optional
+  `K|KB|M|MB|G|GB|T|TB` suffix (binary multiples, case-insensitive) or a bare
+  byte count; forms like `1B`, `1Mi`, or `1KiB` fail in Hauler, so the JAT
+  contract rejects them before any capture work.
 - `--containerd` removes `oci-layout` from the haul; chunking and `--containerd`
   are mutually exclusive (JAT rejects the combination in the adapter).
 - `store serve fileserver` copies file artifacts into its backend directory and
@@ -56,6 +65,17 @@ Receipts never carry credentials.
 - Image acquisition from loopback registries uses plain HTTP
   (go-containerregistry behavior), which the test suite uses to prove remote
   transfer paths hermetically.
+- `store save --chunk-size` happily splits a `.zip` container, but
+  `store load` cannot re-consume it (`input type must be an io.ReaderAt and
+  io.Seeker because of zip format constraints`); only tar/tar.zst chunk sets
+  round-trip, which is why JAT restricts chunked output names before capture.
+- Absolute `repoURL` paths for local charts fail inside Hauler
+  (`could not find protocol handler`); only cwd-relative `repoURL: .` chart
+  references work.
+- `valuesFiles` are only read when a chart entry enables `add-images`; they are
+  not validated otherwise.
+- A chunk set smaller than one chunk still emits a single `_0` chunk file (no
+  bare base file).
 
 ## Supervision and progress
 

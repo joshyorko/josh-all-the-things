@@ -527,3 +527,16 @@ def test_real_retry_policy_requests_one_attempt_on_a_retry_capable_path(tmp_path
     assert built.success is False
     assert any("attempt 1/1" in line for line in lines), lines[:20]
     assert not any("/3" in line for line in lines), "JAT retries=1 must not widen to hauler's default 3"
+
+
+def test_real_chunked_build_rejects_non_reloadable_output_names_before_capture(tmp_path):
+    source = make_workspace(tmp_path)
+    (source / "blob.bin").write_bytes(os.urandom(3 * 1024 * 1024))
+    service = make_service()
+
+    # The pinned binary splits any container but cannot reload zip chunk sets
+    # (io.ReaderAt/io.Seeker constraint), so JAT rejects the name up front.
+    built = service.build(BuildRequest(folder=source, output=tmp_path / "capsule.zip", chunk_size="1MB"))
+    assert built.success is False
+    assert "must be a .tar or .tar.zst archive name" in built.diagnostics
+    assert not list(tmp_path.glob("capsule*")), "no capture work may happen for a rejected output name"

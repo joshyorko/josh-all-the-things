@@ -352,14 +352,21 @@ rcc task script -r robot.yaml -- ./jat build \
   --output ./chunked-haul.tar.zst
 ```
 
-Hauler v2.0.3 splits the haul into chunks named `<base>_<index>.tar.zst`
-starting at zero (`chunked-haul_0.tar.zst`, `chunked-haul_1.tar.zst`, ...). The
-build promotes **all** chunks atomically — a failed build never leaves a partial
-set — and the receipt lists every chunk with path, size, and SHA-256. Consumers
-(`inspect`, `restore`, `serve`, `export`, `copy`) accept the `_0` entrypoint and
-Hauler reassembles the set automatically. Chunking and containerd export are
-mutually exclusive in Hauler v2.0.3; JAT rejects the combination instead of
-guessing.
+Hauler v2.0.3 splits the haul into chunks named `<base>_<index><ext>` starting
+at zero (`chunked-haul_0.tar.zst`, `chunked-haul_1.tar.zst`, ...). Chunked
+output must therefore be a `.tar` or `.tar.zst` archive name: the pinned binary
+can split any container, but its own loader cannot reload other chunk
+containers, so JAT rejects other output names before any capture work. Only
+Hauler's own size units are accepted — a positive byte count with an optional
+`K`, `KB`, `M`, `MB`, `G`, `GB`, `T`, or `TB` suffix (binary multiples,
+case-insensitive, e.g. `500M`, `1G`, `500MB`, `1048576`); forms like `1B`,
+`1Mi`, or `1KiB` are rejected before any capture work. The build promotes **all** chunks atomically —
+every sibling name is reserved create-only and a failed promotion rolls back the
+links it created, so a failed build never leaves a partial set — and the receipt
+lists every chunk with path, size, and SHA-256. Consumers (`inspect`, `restore`,
+`serve`, `export`, `copy`) accept the `_0` entrypoint and Hauler reassembles the
+set automatically. Chunking and containerd export are mutually exclusive in
+Hauler v2.0.3; JAT rejects the combination instead of guessing.
 
 ### Inspect a Capsule
 

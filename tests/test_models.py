@@ -115,11 +115,14 @@ def test_build_request_accepts_and_bounds_new_capture_contract():
     assert request.images_files[1].startswith("https://")
     assert request.chunk_size == "500MB"
     assert request.retries == 1
+    for accepted in ("1M", "1G", "500mb", "1048576", "2TB"):
+        assert BuildRequest(folder="s", output="o", chunk_size=accepted).chunk_size == accepted
     for bad_retries in (0, -2):
         with pytest.raises(ValidationError):
             BuildRequest(folder="s", output="o", retries=bad_retries)
-    with pytest.raises(ValidationError):
-        BuildRequest(folder="s", output="o", chunk_size="five-hundred")
+    for bad_chunk_size in ("five-hundred", "1B", "1Mi", "1MiB", "1KiB", "0", "-1G"):
+        with pytest.raises(ValidationError):
+            BuildRequest(folder="s", output="o", chunk_size=bad_chunk_size)
     with pytest.raises(ValidationError):
         BuildRequest(folder="s", output="o", images_files=["./images.txt", "ftp://example.test/images.txt"])
 

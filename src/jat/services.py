@@ -185,6 +185,7 @@ class JATService:
                         build_store, temp, images_files, retries=retries, exclude_extras=exclude_extras
                     )
                 staged = stage.path / output.name
+                _require_chunkable_output_name(output.name, request.chunk_size)
                 self.hauler.save(build_store, temp, staged, chunk_size=request.chunk_size)
                 if request.chunk_size:
                     chunks = _chunk_files(staged)
@@ -197,13 +198,7 @@ class JATService:
                 self.hauler.load(validation_store, validation_temp, entrypoint)
                 inventory = self.hauler.inventory(validation_store, validation_temp)
                 _validate_inventory(inventory, brew is not None, rcc_archive is not None)
-                outputs = []
-                for chunk in chunks:
-                    promoted = output.parent / chunk.name
-                    os.link(chunk, promoted)
-                    outputs.append(
-                        ArtifactOutput(path=promoted, size=promoted.stat().st_size, sha256=_sha256(promoted))
-                    )
+                outputs = _promote_all_or_nothing(chunks, output.parent)
             if request.chunk_size:
                 return OperationResult(
                     format_version=2,
@@ -845,23 +840,70 @@ def _validate_capture_sources(sources: list[str], label: str) -> list[str]:
     return list(sources)
 
 
-_CHUNK_BASE_PATTERN = re.compile(r"^(?P<base>.+)(?P<ext>\.tar\.zst|\.tar)$")
+def _require_chunkable_output_name(name: str, chunk_size: str | None) -> None:
+    """Restrict chunked output names to archives pinned v2.0.3 can reload.
+
+    Hauler derives chunk names by stripping every extension of the output
+    filename, but its unarchiver can only load tar/tar.zst containers (a zip
+    chunk set fails on load with an io.ReaderAt/io.Seeker constraint). JAT
+    rejects any other output name before capture instead of producing a haul
+    no consumer operation can open.
+    """
+    if chunk_size is None:
+        return
+    lowered = name.lower()
+    if not lowered.endswith((".tar", ".tar.zst")):
+        raise ValueError(
+            f"chunked output must be a .tar or .tar.zst archive name "
+            f"(Hauler v2.0.3 cannot reload other chunk containers): {name!r}"
+        )
 
 
 def _chunk_files(staged: Path) -> list[Path]:
-    """Observed Hauler v2.0.3 chunk naming: <base>_<index><ext>, from 0."""
-    match = _CHUNK_BASE_PATTERN.match(staged.name)
-    if match is None:
+    """Observed Hauler v2.0.3 chunk naming: <base>_<index><ext>, from 0.
+
+    Hauler derives <ext> by stripping every extension of the requested output
+    filename (capsule.zip -> capsule_0.zip; haul.tar.zst -> haul_0.tar.zst),
+    so the matcher mirrors that derivation for any accepted output name.
+    """
+    name = staged.name
+    if "." in name:
+        base, ext = name.split(".", 1)
+        ext = f".{ext}"
+    else:
+        base, ext = name, ""
+    if not base:
         return []
-    pattern = re.compile(
-        rf"^{re.escape(match.group('base'))}_(?P<index>[0-9]+){re.escape(match.group('ext'))}$"
-    )
+    pattern = re.compile(rf"^{re.escape(base)}_(?P<index>[0-9]+){re.escape(ext)}$")
     candidates = []
     for candidate in staged.parent.iterdir():
         chunk_match = pattern.match(candidate.name)
         if chunk_match is not None and candidate.is_file():
             candidates.append((int(chunk_match.group("index")), candidate))
     return [candidate for _, candidate in sorted(candidates)]
+
+
+def _promote_all_or_nothing(chunks: list[Path], destination_directory: Path) -> list[ArtifactOutput]:
+    """Link every chunk to its public name, or leave nothing behind.
+
+    Every sibling name is reserved create-only before promotion; if any link
+    fails (pre-existing or racing target), the links created so far are rolled
+    back so a failed build never leaves a misleading partial set.
+    """
+    promoted: list[Path] = []
+    try:
+        for chunk in chunks:
+            target = new_output_path(destination_directory / chunk.name)
+            os.link(chunk, target)
+            promoted.append(target)
+    except BaseException:
+        for target in promoted:
+            target.unlink(missing_ok=True)
+        raise
+    return [
+        ArtifactOutput(path=target, size=target.stat().st_size, sha256=_sha256(target))
+        for target in promoted
+    ]
 
 
 def _normalize_inventory_entry(item: dict) -> ContentEntry:
