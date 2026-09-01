@@ -64,11 +64,18 @@ class _WindowsArchiveBackend:
                     kind = "device"
                 else:
                     kind = "other"
-                result.append(ArchiveMember(member.name, kind))
+                target = member.linkname if member.issym() else None
+                result.append(ArchiveMember(member.name, kind, target))
         return result
 
     def extract(self, archive: Path, destination: Path, strip_components: int = 0) -> None:
-        validate_archive_members(self.members(archive))
+        members = self.members(archive)
+        validate_archive_members(members)
+        for member in members:
+            if member.kind == "symlink":
+                raise ValueError(
+                    f"archive member {member.name} cannot be extracted by the Windows backend: symbolic link"
+                )
         destination.mkdir(parents=True, exist_ok=True)
         with self._open_reader(archive) as tar:
             for member in tar:
@@ -82,7 +89,7 @@ class _WindowsArchiveBackend:
                     target.mkdir(parents=True, exist_ok=True)
                     continue
                 if not member.isfile():
-                    raise ValueError(f"archive member has unsupported member type: {member.name}")
+                    raise ValueError(f"archive member {member.name} has unsupported member type: {member.kind}")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if target.is_symlink() or target.is_dir():
                     raise ValueError(f"archive extraction target is not a regular file: {target}")
@@ -227,5 +234,10 @@ def parse_verbose_listing(listing: str) -> list[ArchiveMember]:
         if len(fields) < 6 or not fields[0]:
             raise ValueError("GNU tar returned an unrecognized archive listing")
         kind = kinds.get(fields[0][0], "other")
-        members.append(ArchiveMember(fields[5], kind))
+        target = None
+        if kind == "symlink":
+            if len(fields) < 8 or fields[6] != "->" or not fields[7]:
+                raise ValueError(f"GNU tar returned an unrecognized symbolic link listing: {fields[5]}")
+            target = fields[7]
+        members.append(ArchiveMember(fields[5], kind, target))
     return members

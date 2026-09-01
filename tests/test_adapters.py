@@ -158,10 +158,12 @@ def test_archive_uses_exact_create_extract_and_list_argv(tmp_path):
 
 def test_verbose_listing_exposes_links_for_fail_closed_validation():
     members = parse_verbose_listing(
-        "lrwxrwxrwx 0/0 0 2026-01-01 00:00:00 'root/link' -> '../outside'\n"
+        "lrwxrwxrwx 0/0 0 2026-01-01 00:00:00 'root/link name' -> '../target name'\n"
         "hrw-r--r-- 0/0 0 2026-01-01 00:00:00 'root/hard' link to 'root/file'\n"
     )
     assert [member.kind for member in members] == ["symlink", "hardlink"]
+    assert members[0].name == "root/link name"
+    assert members[0].target == "../target name"
 
 
 def test_real_gnu_tar_round_trip_and_member_contract(tmp_path):
@@ -170,6 +172,8 @@ def test_real_gnu_tar_round_trip_and_member_contract(tmp_path):
     original = source / "file name.txt"
     original.write_text("synthetic\n")
     original.chmod(0o640)
+    link = source / "current.txt"
+    link.symlink_to(original.name)
     archive = tmp_path / "workspace.tar.zst"
     restored = tmp_path / "restored"
     restored.mkdir()
@@ -182,6 +186,108 @@ def test_real_gnu_tar_round_trip_and_member_contract(tmp_path):
     restored_file = restored / "project" / "file name.txt"
     assert restored_file.read_bytes() == original.read_bytes()
     assert restored_file.stat().st_mode & 0o777 == 0o640
+    restored_link = restored / "project" / "current.txt"
+    assert restored_link.is_symlink()
+    assert restored_link.read_text() == original.read_text()
+    assert restored_link.readlink().as_posix() == original.name
+
+
+def test_real_gnu_tar_round_trips_a_safe_symlink_chain(tmp_path):
+    source = tmp_path / "project"
+    (source / "sub").mkdir(parents=True)
+    (source / "sub" / "file.txt").write_text("synthetic\n")
+    (source / "a").symlink_to("sub", target_is_directory=True)
+    (source / "b").symlink_to("a/file.txt")
+    archive = tmp_path / "workspace.tar.zst"
+    restored = tmp_path / "restored"
+    restored.mkdir()
+
+    adapter = ArchiveAdapter(ProcessRunner())
+    adapter.create(source, archive)
+    members = adapter.members(archive)
+    validate_archive_members(members)
+    adapter.extract(archive, restored)
+
+    restored_link = restored / "project" / "b"
+    assert restored_link.is_symlink()
+    assert restored_link.read_text() == "synthetic\n"
+
+
+def test_real_gnu_tar_round_trips_a_path_scoped_symlink_revisit(tmp_path):
+    source = tmp_path / "project"
+    (source / "sub").mkdir(parents=True)
+    (source / "sub" / "file.txt").write_text("synthetic\n")
+    (source / "a").symlink_to("sub", target_is_directory=True)
+    (source / "link").symlink_to("a/../a", target_is_directory=True)
+    archive = tmp_path / "workspace.tar.zst"
+    restored = tmp_path / "restored"
+    restored.mkdir()
+
+    adapter = ArchiveAdapter(ProcessRunner())
+    adapter.create(source, archive)
+    validate_archive_members(adapter.members(archive))
+    adapter.extract(archive, restored)
+
+    restored_link = restored / "project" / "link"
+    assert restored_link.is_symlink()
+    assert restored_link.resolve() == (restored / "project" / "sub").resolve()
+
+
+def test_real_gnu_tar_round_trips_trailing_directory_symlink_target(tmp_path):
+    source = tmp_path / "project"
+    (source / "sub").mkdir(parents=True)
+    (source / "link").symlink_to("sub/")
+    archive = tmp_path / "workspace.tar.zst"
+    restored = tmp_path / "restored"
+    restored.mkdir()
+
+    adapter = ArchiveAdapter(ProcessRunner())
+    adapter.create(source, archive)
+    validate_archive_members(adapter.members(archive))
+    adapter.extract(archive, restored)
+
+    restored_link = restored / "project" / "link"
+    assert restored_link.is_symlink()
+    assert restored_link.resolve() == (restored / "project" / "sub").resolve()
+
+
+@pytest.mark.parametrize("target", ["file/", "file/.."])
+def test_real_gnu_tar_rejects_posix_non_directory_symlink_targets(tmp_path, target):
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "file").write_text("synthetic\n")
+    (source / "link").symlink_to(target)
+    archive = tmp_path / "workspace.tar.zst"
+
+    adapter = ArchiveAdapter(ProcessRunner())
+    adapter.create(source, archive)
+    with pytest.raises(ValueError, match="project/link.*(directory|non-directory)"):
+        validate_archive_members(adapter.members(archive))
+
+
+def test_windows_archive_backend_stays_fail_closed_for_symlinks(tmp_path):
+    zstandard = pytest.importorskip("zstandard")
+    archive = tmp_path / "symlink.tar.zst"
+    with archive.open("wb") as raw:
+        with zstandard.ZstdCompressor(level=3).stream_writer(raw, closefd=False) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w|") as tar:
+                root = tarfile.TarInfo("project")
+                root.type = tarfile.DIRTYPE
+                tar.addfile(root)
+                payload = tarfile.TarInfo("project/file.txt")
+                payload.size = 0
+                tar.addfile(payload, io.BytesIO())
+                member = tarfile.TarInfo("project/link")
+                member.type = tarfile.SYMTYPE
+                member.linkname = "file.txt"
+                tar.addfile(member)
+    destination = tmp_path / "restored"
+    destination.mkdir()
+
+    adapter = ArchiveAdapter(RecordingRunner(), platform_name="windows")
+    with pytest.raises(ValueError, match="project/link.*Windows.*symbolic link"):
+        adapter.extract(archive, destination)
+    assert not (destination / "project").exists()
 
 
 def test_windows_archive_backend_is_contained_deterministic_and_round_trips(tmp_path):
