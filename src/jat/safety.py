@@ -11,6 +11,7 @@ from typing import Literal
 class ArchiveMember:
     name: str
     kind: Literal["file", "directory", "symlink", "hardlink", "device", "other"]
+    target: str | None = None
 
 
 def _absolute(path: Path) -> Path:
@@ -73,39 +74,114 @@ def empty_destination(path: Path, haul: Path) -> Path:
     return absolute
 
 
-def validate_archive_members(members: Iterable[ArchiveMember]) -> None:
-    seen: dict[tuple[str, ...], str] = {}
-    top_level: str | None = None
-    count = 0
+def _member_kind(path: tuple[str, ...], member_map: dict[tuple[str, ...], ArchiveMember]) -> str | None:
+    member = member_map.get(path)
+    if member is not None:
+        return member.kind
+    if any(candidate[: len(path)] == path for candidate in member_map if len(candidate) > len(path)):
+        return "directory"
+    return None
 
+
+def _resolve_symlink(
+    member: ArchiveMember,
+    parts: tuple[str, ...],
+    member_map: dict[tuple[str, ...], ArchiveMember],
+    top_level: str,
+) -> None:
+    def target_parts(owner: ArchiveMember) -> tuple[str, ...]:
+        target = owner.target
+        if not target:
+            reason = "symlink target is missing" if owner is member else "dangling symlink target"
+            raise ValueError(f"archive member {member.name} has a {reason}")
+        if "\\" in target or any(character in target for character in "\n\r\x00"):
+            raise ValueError(f"archive member {member.name} has a symlink target with an unsafe separator")
+        path = PurePosixPath(target)
+        if path.is_absolute():
+            raise ValueError(f"archive member {member.name} has an absolute symlink target")
+        return path.parts
+
+    directory_intent = bool(member.target and (member.target.endswith("/") or member.target.endswith("/.")))
+    resolved: list[str] = []
+
+    def resolve_components(components: tuple[str, ...], active: list[tuple[str, ...]]) -> None:
+        for index, part in enumerate(components):
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if not resolved or (len(resolved) == 1 and resolved[0] == top_level):
+                    raise ValueError(f"archive member {member.name} has a symlink target that escapes the archive root")
+                if _member_kind(tuple(resolved), member_map) != "directory":
+                    raise ValueError(f"archive member {member.name} traverses a non-directory target")
+                resolved.pop()
+                continue
+
+            candidate = tuple([*resolved, part])
+            candidate_member = member_map.get(candidate)
+            if candidate_member is not None and candidate_member.kind == "symlink":
+                if candidate in active:
+                    raise ValueError(f"archive member {member.name} has a symlink cycle")
+                active.append(candidate)
+                resolve_components(target_parts(candidate_member), active)
+                active.pop()
+                continue
+
+            kind = _member_kind(candidate, member_map)
+            if kind is None:
+                raise ValueError(f"archive member {member.name} has a dangling symlink target")
+            if index < len(components) - 1 and kind != "directory":
+                raise ValueError(f"archive member {member.name} traverses a non-directory target")
+            resolved.append(part)
+            if resolved[0] != top_level:
+                raise ValueError(f"archive member {member.name} has a symlink target that escapes the archive root")
+
+    resolve_components(tuple(parts[:-1]) + target_parts(member), [])
+
+    if not resolved or resolved[0] != top_level:
+        raise ValueError(f"archive member {member.name} has a symlink target that escapes the archive root")
+    if directory_intent and _member_kind(tuple(resolved), member_map) != "directory":
+        raise ValueError(f"archive member {member.name} has a symlink target that must resolve to a directory")
+
+
+def validate_archive_members(members: Iterable[ArchiveMember]) -> None:
+    member_map: dict[tuple[str, ...], ArchiveMember] = {}
     for member in members:
         name = member.name
         if "\n" in name or "\r" in name:
-            raise ValueError("archive member contains a line break")
+            raise ValueError(f"archive member contains a line break: {name}")
         path = PurePosixPath(name)
         raw_parts = name.split("/")
         if not name or name == "." or path.is_absolute() or ".." in raw_parts:
             raise ValueError(f"archive member contains an unsafe path: {name}")
-        if member.kind not in {"file", "directory"}:
-            raise ValueError(f"archive member has unsupported member type: {member.kind}")
-
+        if member.kind not in {"file", "directory", "symlink"}:
+            raise ValueError(f"archive member {name} has unsupported member type: {member.kind}")
         parts = tuple(part for part in path.parts if part not in {"", "."})
         if not parts:
             raise ValueError(f"archive member contains an unsafe path: {name}")
-        if top_level is None:
-            top_level = parts[0]
-        elif parts[0] != top_level:
-            raise ValueError("archive must contain exactly one top-level entry")
-        if parts in seen:
+        if parts in member_map:
             raise ValueError(f"archive contains a duplicate member: {name}")
+        member_map[parts] = member
+
+    if not member_map:
+        raise ValueError("archive is empty")
+    top_levels = [parts for parts in member_map if len(parts) == 1]
+    if len(top_levels) != 1:
+        raise ValueError("archive must contain exactly one top-level entry")
+    top_level = top_levels[0][0]
+    root = member_map[top_levels[0]]
+    if root.kind != "directory":
+        raise ValueError(f"archive member {root.name} top-level entry must be a directory")
+    for parts, member in member_map.items():
+        if parts[0] != top_level:
+            raise ValueError(f"archive member {member.name} is outside the top-level entry")
         for index in range(1, len(parts)):
             parent = parts[:index]
-            if parent in seen and seen[parent] != "directory":
-                raise ValueError(f"archive member has a collision with a non-directory parent: {name}")
-        if member.kind != "directory" and any(existing[: len(parts)] == parts for existing in seen):
-            raise ValueError(f"archive member has a collision with an existing child: {name}")
-        seen[parts] = member.kind
-        count += 1
-
-    if count == 0:
-        raise ValueError("archive is empty")
+            parent_member = member_map.get(parent)
+            if parent_member is not None and parent_member.kind != "directory":
+                parent_name = "/".join(parent)
+                raise ValueError(
+                    f"archive member {member.name} has a collision with a non-directory parent {parent_name}"
+                )
+    for parts, member in member_map.items():
+        if member.kind == "symlink":
+            _resolve_symlink(member, parts, member_map, top_level)

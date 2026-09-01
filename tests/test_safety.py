@@ -73,10 +73,22 @@ def test_restore_destination_must_be_absent_or_known_empty(tmp_path):
         ([ArchiveMember("root/../../escape", "file")], "unsafe path"),
         ([ArchiveMember("root/file\nname", "file")], "line break"),
         ([ArchiveMember("one/file", "file"), ArchiveMember("two/file", "file")], "one top-level"),
-        ([ArchiveMember("root/link", "symlink")], "unsupported member type"),
-        ([ArchiveMember("root/link", "hardlink")], "unsupported member type"),
-        ([ArchiveMember("root/file", "file"), ArchiveMember("root/file", "file")], "duplicate"),
-        ([ArchiveMember("root/file", "file"), ArchiveMember("root/file/child", "file")], "collision"),
+        (
+            [ArchiveMember("root", "directory"), ArchiveMember("root/link", "symlink")],
+            "root/link.*target is missing",
+        ),
+        (
+            [ArchiveMember("root", "directory"), ArchiveMember("root/hard", "hardlink")],
+            "root/hard.*unsupported member type",
+        ),
+        (
+            [ArchiveMember("root", "directory"), ArchiveMember("root/file", "file"), ArchiveMember("root/file", "file")],
+            "duplicate",
+        ),
+        (
+            [ArchiveMember("root", "directory"), ArchiveMember("root/file", "file"), ArchiveMember("root/file/child", "file")],
+            "collision",
+        ),
     ],
 )
 def test_archive_members_fail_closed(members, message):
@@ -93,6 +105,159 @@ def test_archive_members_allow_one_regular_tree():
             ArchiveMember("project/src/main.py", "file"),
         ]
     )
+
+
+def test_archive_members_allow_safe_internal_symlink():
+    validate_archive_members(
+        [
+            ArchiveMember("project", "directory"),
+            ArchiveMember("project/file.txt", "file"),
+            ArchiveMember("project/link", "symlink", "file.txt"),
+        ]
+    )
+
+
+def test_archive_members_allow_safe_chained_symlinks():
+    validate_archive_members(
+        [
+            ArchiveMember("project", "directory"),
+            ArchiveMember("project/sub", "directory"),
+            ArchiveMember("project/sub/file.txt", "file"),
+            ArchiveMember("project/a", "symlink", "sub"),
+            ArchiveMember("project/b", "symlink", "a/file.txt"),
+        ]
+    )
+
+
+def test_archive_members_allow_a_path_scoped_symlink_revisit():
+    validate_archive_members(
+        [
+            ArchiveMember("project", "directory"),
+            ArchiveMember("project/sub", "directory"),
+            ArchiveMember("project/a", "symlink", "sub"),
+            ArchiveMember("project/link", "symlink", "a/../a"),
+        ]
+    )
+
+
+def test_archive_members_allow_directory_intent_for_a_trailing_target_separator():
+    validate_archive_members(
+        [
+            ArchiveMember("project", "directory"),
+            ArchiveMember("project/sub", "directory"),
+            ArchiveMember("project/link", "symlink", "sub/"),
+        ]
+    )
+
+
+def test_archive_members_reject_trailing_directory_target_to_regular_file():
+    with pytest.raises(ValueError, match="project/link.*directory"):
+        validate_archive_members(
+            [
+                ArchiveMember("project", "directory"),
+                ArchiveMember("project/file.txt", "file"),
+                ArchiveMember("project/link", "symlink", "file.txt/"),
+            ]
+        )
+
+
+def test_archive_members_reject_parent_traversal_through_regular_file():
+    with pytest.raises(ValueError, match="project/link.*non-directory"):
+        validate_archive_members(
+            [
+                ArchiveMember("project", "directory"),
+                ArchiveMember("project/file.txt", "file"),
+                ArchiveMember("project/link", "symlink", "file.txt/.."),
+            ]
+        )
+
+
+def test_archive_members_require_a_regular_directory_top_level_root():
+    with pytest.raises(ValueError, match="project.*top-level.*directory"):
+        validate_archive_members([ArchiveMember("project", "file")])
+
+
+def test_archive_members_reject_dangling_symlink_target_with_member_name():
+    with pytest.raises(ValueError, match="project/link.*dangling"):
+        validate_archive_members(
+            [
+                ArchiveMember("project", "directory"),
+                ArchiveMember("project/link", "symlink", "missing.txt"),
+            ]
+        )
+
+
+def test_archive_members_reject_symlink_traversal_through_non_directory():
+    with pytest.raises(ValueError, match="project/link.*non-directory"):
+        validate_archive_members(
+            [
+                ArchiveMember("project", "directory"),
+                ArchiveMember("project/file.txt", "file"),
+                ArchiveMember("project/link", "symlink", "file.txt/child"),
+            ]
+        )
+
+
+def test_archive_members_reject_symlink_cycle_with_member_name():
+    with pytest.raises(ValueError, match="project/a.*cycle"):
+        validate_archive_members(
+            [
+                ArchiveMember("project", "directory"),
+                ArchiveMember("project/a", "symlink", "b"),
+                ArchiveMember("project/b", "symlink", "a"),
+            ]
+        )
+
+
+def test_archive_members_rejects_transitive_symlink_escape_with_member_name():
+    with pytest.raises(ValueError, match="project/b.*escapes the archive root"):
+        validate_archive_members(
+            [
+                ArchiveMember("project", "directory"),
+                ArchiveMember("project/sub", "directory"),
+                ArchiveMember("project/a", "symlink", "sub/.."),
+                ArchiveMember("project/b", "symlink", "a/.."),
+                ArchiveMember("project/c", "symlink", "b/.."),
+                ArchiveMember("project/link", "symlink", "c/../outside"),
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("target", "message"),
+    [
+        ("/etc/passwd", "absolute"),
+        ("../../outside", "escapes"),
+    ],
+)
+def test_archive_members_reject_unsafe_symlink_targets_with_member_name(target, message):
+    with pytest.raises(ValueError, match=rf"project/link.*{message}"):
+        validate_archive_members(
+            [ArchiveMember("project", "directory"), ArchiveMember("project/link", "symlink", target)]
+        )
+
+
+def test_archive_members_rejects_top_level_symlink_target_outside_root():
+    with pytest.raises(ValueError, match="project.*top-level entry must be a directory"):
+        validate_archive_members([ArchiveMember("project", "symlink", ".")])
+
+
+def test_archive_members_reject_symlink_target_with_unsafe_separator():
+    with pytest.raises(ValueError, match="project/link.*unsafe separator"):
+        validate_archive_members(
+            [ArchiveMember("project", "directory"), ArchiveMember("project/link", "symlink", r"file\name")]
+        )
+
+
+def test_archive_members_reject_symlink_as_parent_with_member_name():
+    with pytest.raises(ValueError, match="project/link.*non-directory parent"):
+        validate_archive_members(
+            [
+                ArchiveMember("project", "directory"),
+                ArchiveMember("project/link", "symlink", "file.txt"),
+                ArchiveMember("project/link/child.txt", "file"),
+            ]
+        )
 
 
 def test_owned_stage_cleans_only_its_root_on_error_and_interrupt(tmp_path):

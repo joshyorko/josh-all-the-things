@@ -1,9 +1,11 @@
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
+from jat.archive import ArchiveAdapter
 from jat.models import (
     BuildRequest,
     CopyRequest,
@@ -14,7 +16,7 @@ from jat.models import (
     RestoreRequest,
     ServeRequest,
 )
-from jat.process import ProcessResult
+from jat.process import ProcessResult, ProcessRunner
 from pydantic import ValidationError
 from jat.safety import ArchiveMember
 from jat.services import (
@@ -389,6 +391,42 @@ def test_build_is_create_only_and_validates_before_publication(tmp_path):
     assert "already exists" in second.diagnostics
 
 
+def test_build_accepts_workspace_with_safe_internal_symlink(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "file.txt").write_text("source")
+    (source / "current.txt").symlink_to("file.txt")
+    output = tmp_path / "haul.tar.zst"
+    hauler = FakeHauler()
+
+    result = service(tmp_path, archive=ArchiveAdapter(ProcessRunner()), hauler=hauler).build(
+        BuildRequest(folder=source, output=output)
+    )
+
+    assert result.success, result.diagnostics
+    assert hauler.calls == ["sync", "save", "load", "inventory"]
+
+
+@pytest.mark.parametrize("target", ["/etc/passwd", "../outside.txt"])
+def test_build_rejects_unsafe_workspace_symlink_before_hauler_publication(tmp_path, target):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "file.txt").write_text("source")
+    (tmp_path / "outside.txt").write_text("outside")
+    (source / "current.txt").symlink_to(target)
+    output = tmp_path / "haul.tar.zst"
+    hauler = FakeHauler()
+
+    result = service(tmp_path, archive=ArchiveAdapter(ProcessRunner()), hauler=hauler).build(
+        BuildRequest(folder=source, output=output)
+    )
+
+    assert result.success is False
+    assert "current.txt" in result.diagnostics
+    assert hauler.calls == []
+    assert not output.exists()
+
+
 def test_build_race_never_overwrites_competing_output(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -457,13 +495,65 @@ def test_restore_rejects_unsafe_archive_before_destination_promotion(tmp_path):
     haul = tmp_path / "haul.tar.zst"
     haul.write_bytes(b"haul")
     destination = tmp_path / "restored"
-    archive = FakeArchive(members=[ArchiveMember("project/link", "symlink")])
+    archive = FakeArchive(
+        members=[ArchiveMember("project", "directory"), ArchiveMember("project/link", "symlink")]
+    )
     result = service(tmp_path, archive=archive, hauler=FakeHauler(extracted_workspace=True)).restore(
         RestoreRequest(haul=haul, destination=destination)
     )
     assert result.success is False
     assert not destination.exists()
-    assert "unsupported member type" in result.diagnostics
+    assert "project/link" in result.diagnostics
+    assert "symlink target is missing" in result.diagnostics
+
+
+def test_restore_rejects_transitive_symlink_escape_without_external_write(tmp_path):
+    source = tmp_path / "project"
+    (source / "sub").mkdir(parents=True)
+    (source / "a").symlink_to("sub/..", target_is_directory=True)
+    (source / "b").symlink_to("a/..", target_is_directory=True)
+    (source / "c").symlink_to("b/..", target_is_directory=True)
+    (source / "link").symlink_to("c/../outside", target_is_directory=True)
+    archive_path = tmp_path / "workspace.tar.zst"
+    ArchiveAdapter(ProcessRunner()).create(source, archive_path)
+
+    class ArchiveHauler(FakeHauler):
+        def extract(self, reference, store, temp, output):
+            self.calls.append("extract")
+            output.mkdir(parents=True, exist_ok=True)
+            target = output / "workspace" / WORKSPACE_ARTIFACT_NAME
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(archive_path, target)
+
+    class TrackingArchive(ArchiveAdapter):
+        def members(self, archive):
+            self.outside = archive.parent / "outside"
+            self.outside.mkdir()
+            self.victim = self.outside / "victim.txt"
+            self.victim.write_text("keep")
+            result = super().members(archive)
+            self.victim_after = self.victim.read_text()
+            return result
+
+        def extract(self, archive, destination, strip_components=0):
+            try:
+                return super().extract(archive, destination, strip_components)
+            finally:
+                self.victim_after = self.victim.read_text() if self.victim.exists() else None
+
+    adapter = TrackingArchive(ProcessRunner())
+    destination = tmp_path / "restored"
+    haul = tmp_path / "haul.tar.zst"
+    haul.write_bytes(b"haul")
+    result = service(tmp_path, archive=adapter, hauler=ArchiveHauler()).restore(
+        RestoreRequest(haul=haul, destination=destination)
+    )
+
+    assert result.success is False
+    assert "project/link" in result.diagnostics
+    assert "escapes the archive root" in result.diagnostics
+    assert not destination.exists()
+    assert adapter.victim_after == "keep"
 
 
 def test_serve_uses_explicit_runtime_stage_directory_instead_of_cwd(tmp_path, monkeypatch):

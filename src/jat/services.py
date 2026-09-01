@@ -141,10 +141,12 @@ class JATService:
             with OwnedStage(output.parent, "build") as stage:
                 workspace_archive = stage.path / WORKSPACE_ARTIFACT
                 self.archive.create(folder, workspace_archive)
+                validate_archive_members(self.archive.members(workspace_archive))
                 brew_archive = None
                 if brew:
                     brew_archive = stage.path / BREW_ARTIFACT
                     self.archive.create(brew, brew_archive)
+                    validate_archive_members(self.archive.members(brew_archive))
                 rcc_archive = None
                 rcc_metadata = None
                 rcc_metadata_path = None
