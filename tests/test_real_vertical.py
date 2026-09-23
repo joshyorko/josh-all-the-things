@@ -322,7 +322,7 @@ def test_real_helm_manifest_valuesfiles_and_image_closure(tmp_path, monkeypatch)
         # Hauler resolves local chart repoURL relative to its own working
         # directory, while valuesFiles resolve relative to the manifest file:
         # chdir to the fixture root and keep the manifest in a subdirectory so
-        # both semantics are exercised exactly as pinned v2.0.3 implements them.
+        # both semantics are exercised against the pinned Hauler runtime.
         monkeypatch.chdir(tmp_path)
         built = service.build(
             BuildRequest(folder=source, output=haul, hauler_manifests=[str(manifest)])
@@ -333,7 +333,7 @@ def test_real_helm_manifest_valuesfiles_and_image_closure(tmp_path, monkeypatch)
         references = {entry.reference for entry in inspected.inventory}
         assert any("jat-synthetic" in reference for reference in references), sorted(references)
         assert any("busybox" in reference for reference in references), (
-            "pinned v2.0.3 must discover chart-declared images during acquisition",
+            "Hauler must discover chart-declared images during acquisition",
             sorted(references),
         )
 
@@ -357,8 +357,8 @@ def test_real_chunked_build_round_trip_through_documented_entrypoint(tmp_path):
         assert payload.path.is_file()
         assert payload.size > 0 and len(payload.sha256) == 64
 
-    entrypoint = tmp_path / "chunked_0.tar.zst"
-    assert entrypoint.is_file(), "v2.0.3 names chunks <base>_<index><ext> from zero"
+    entrypoint = tmp_path / "chunked.tar.zst.001"
+    assert entrypoint.is_file(), "Hauler v2.1 suffixes chunk names with .001, .002, ..."
     inspected = service.inspect(InspectRequest(haul=entrypoint))
     assert inspected.success, inspected.diagnostics
     assert WORKSPACE_REFERENCE in {entry.reference for entry in inspected.inventory}

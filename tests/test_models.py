@@ -13,6 +13,7 @@ from jat.models import (
     ExportRequest,
     ExtractRequest,
     InspectRequest,
+    ManifestRequest,
     OperationResult,
     RestoreRequest,
     ServeEndpoints,
@@ -115,6 +116,7 @@ def test_build_request_accepts_and_bounds_new_capture_contract():
     assert request.images_files[1].startswith("https://")
     assert request.chunk_size == "500MB"
     assert request.retries == 1
+    assert BuildRequest(folder="s", output="o").retries is None
     for accepted in ("1M", "1G", "500mb", "1048576", "2TB"):
         assert BuildRequest(folder="s", output="o", chunk_size=accepted).chunk_size == accepted
     for bad_retries in (0, -2):
@@ -125,6 +127,37 @@ def test_build_request_accepts_and_bounds_new_capture_contract():
             BuildRequest(folder="s", output="o", chunk_size=bad_chunk_size)
     with pytest.raises(ValidationError):
         BuildRequest(folder="s", output="o", images_files=["./images.txt", "ftp://example.test/images.txt"])
+
+
+def test_manifest_request_requires_explicit_local_publish_and_safe_registry_prefix():
+    request = ManifestRequest(
+        output="hauler-manifest.yaml",
+        images=["ghcr.io/acme/api:v1"],
+        registry_prefix="registry.example.internal/team/platform",
+        concurrency=8,
+    )
+    assert request.concurrency == 8
+
+    digest = "sha256:" + "a" * 64
+    digest_request = ManifestRequest(
+        output="hauler-manifest.yaml",
+        images=[f"ghcr.io/acme/api@{digest}"],
+    )
+    assert digest_request.images == [f"ghcr.io/acme/api@{digest}"]
+    with pytest.raises(ValidationError):
+        ManifestRequest(output="out.yaml", images=["ghcr.io/acme/api@sha256:short"])
+    for prefix in ("https://registry.example/acme", "user@registry.example/team", "registry.example//team", "registry.example/../team"):
+        with pytest.raises(ValidationError):
+            ManifestRequest(output="out.yaml", images=["ghcr.io/acme/api:v1"], registry_prefix=prefix)
+    with pytest.raises(ValidationError, match="requires --registry-prefix"):
+        ManifestRequest(output="out.yaml", images=["api:dev"], publish_local=True)
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        ManifestRequest(
+            output="out.yaml",
+            images=["ghcr.io/acme/api:v1"],
+            ca_file="/tmp/ca.pem",
+            insecure_skip_tls_verify=True,
+        )
 
 
 def test_serve_request_modes_and_ports_are_strict():

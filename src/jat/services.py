@@ -13,7 +13,7 @@ from urllib.parse import quote
 from robocorp import log
 
 from .archive import ArchiveAdapter
-from .hauler import HaulerAdapter
+from .hauler import HaulerAdapter, hauler_subprocess_environment
 from .models import (
     ANCHOR_KINDS,
     ArtifactOutput,
@@ -24,6 +24,9 @@ from .models import (
     ExportRequest,
     ExtractRequest,
     InspectRequest,
+    ManifestMapping,
+    ManifestReceipt,
+    ManifestRequest,
     OperationResult,
     RestoreRequest,
     ServeEndpoints,
@@ -56,6 +59,35 @@ COPY_REMOTE_SCHEMES = ("registry://", "reg://", "oci://")
 COPY_LOCAL_SCHEMES = ("dir://", "directory://")
 
 _CREDENTIAL_IN_TARGET = re.compile(r"//[^/\s:@]+:[^/\s@]+@")
+
+def _is_registry_image(reference: str) -> bool:
+    name = reference.split("@", 1)[0]
+    final_component = name.rsplit("/", 1)[-1]
+    repository = name.rsplit(":", 1)[0] if ":" in final_component else name
+    authority = repository.split("/", 1)[0]
+    return "." in authority or ":" in authority or authority == "localhost"
+
+
+def _map_local_image(reference: str, prefix: str) -> str:
+    if "@" in reference or reference.startswith("<") or reference.endswith(":<none>"):
+        raise ValueError(f"local image reference must be tagged and unambiguous: {reference}")
+    final_component = reference.rsplit("/", 1)[-1]
+    if ":" not in final_component:
+        raise ValueError(f"local image reference must include an explicit tag: {reference}")
+    return f"{prefix}/{reference}"
+
+def _image_digest(inventory: list[dict], reference: str, source: str) -> str:
+    matches = [
+        item
+        for item in inventory
+        if item.get("Reference") == reference and str(item.get("Type", "")).lower() == "image"
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"{source} Hauler store did not contain exactly one image entry for {reference!r}")
+    digest = matches[0].get("Digest")
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ValueError(f"{source} Hauler inventory has no valid resolved digest for {reference!r}")
+    return digest
 
 
 def _local_directory_target(target: str) -> Path:
@@ -181,30 +213,42 @@ class JATService:
                     artifact_files.append((rcc_metadata_path, RCC_METADATA_ARTIFACT))
                 retries = request.retries
                 exclude_extras = request.exclude_extras
+                concurrency_policy = {"concurrency": request.concurrency} if request.concurrency is not None else {}
                 if os.name == "nt" and hasattr(self.hauler, "sync_files"):
                     self.hauler.sync_files(
-                        build_store, temp, artifact_files, images, retries=retries, exclude_extras=exclude_extras
+                        build_store,
+                        temp,
+                        artifact_files,
+                        images,
+                        retries=retries,
+                        exclude_extras=exclude_extras,
                     )
                 else:
                     self.hauler.sync(
-                        build_store, temp, manifest, retries=retries, exclude_extras=exclude_extras
+                        build_store, temp, manifest, retries=retries, exclude_extras=exclude_extras, **concurrency_policy
                     )
                 # JAT owns its anchors: user-provided content must never
-                # replace or duplicate a reserved anchor reference. Snapshot
-                # the anchor identities after the core sync and re-verify
-                # after composition (works for local and remote manifests
-                # alike, without parsing user manifests).
+                # replace or duplicate a reserved anchor reference.
                 anchor_snapshot = None
                 if hauler_manifests or images_files:
                     anchor_snapshot = _anchor_snapshot(self.hauler.inventory(build_store, temp))
-                # User Hauler manifests are passed exactly as provided: pinned
-                # v2.0.3 resolves chart valuesFiles relative to the manifest
-                # file, so JAT must not relocate or rewrite them.
                 for source in hauler_manifests:
-                    self.hauler.sync(build_store, temp, source, retries=retries, exclude_extras=exclude_extras)
+                    self.hauler.sync(
+                        build_store,
+                        temp,
+                        source,
+                        retries=retries,
+                        exclude_extras=exclude_extras,
+                        **concurrency_policy,
+                    )
                 if images_files:
                     self.hauler.sync_image_txt(
-                        build_store, temp, images_files, retries=retries, exclude_extras=exclude_extras
+                        build_store,
+                        temp,
+                        images_files,
+                        retries=retries,
+                        exclude_extras=exclude_extras,
+                        **concurrency_policy,
                     )
                 if anchor_snapshot is not None:
                     _verify_anchors_unchanged(self.hauler.inventory(build_store, temp), anchor_snapshot)
@@ -248,6 +292,146 @@ class JATService:
         except (OSError, RuntimeError, ValueError) as error:
             log.warn(f"JAT build failed: {error}")
             return self._failure("build", error)
+
+    def manifest(self, request: ManifestRequest) -> OperationResult:
+        """Use Hauler's registry pull and manifest reconstruction as one owned operation."""
+        if request.insecure_skip_tls_verify:
+            self._announce("WARNING: registry TLS verification is disabled (--insecure-skip-tls-verify)")
+        try:
+            output = new_output_path(request.output)
+            if request.ca_file is not None:
+                existing_file(request.ca_file)
+            with OwnedStage(output.parent, "manifest") as stage:
+                temp = stage.path / "hauler-temp"
+                temp.mkdir()
+                final_store = stage.path / "remote-store"
+                local_images = [image for image in request.images if not _is_registry_image(image)]
+                remote_images = [image for image in request.images if _is_registry_image(image)]
+                mappings: list[ManifestMapping] = []
+                remote_mappings: list[tuple[str, str]] = []
+                staging_digests: dict[str, str] = {}
+                if local_images:
+                    if not request.publish_local or not request.registry_prefix:
+                        raise ValueError(
+                            "local-only images require --registry-prefix and explicit --publish-local; "
+                            "use a registry-qualified remote reference to pull without publishing"
+                        )
+                    docker = self.which("docker")
+                    if not docker or not self._docker_ready(docker, required=True):
+                        raise ValueError("Docker is required to publish selected local images")
+                    staging_store = stage.path / "staging-store"
+                    staging_temp = stage.path / "staging-temp"
+                    staging_temp.mkdir()
+                    seen = set()
+                    for image in local_images:
+                        remote = _map_local_image(image, request.registry_prefix)
+                        if remote in seen:
+                            raise ValueError("selected local images map to colliding registry references")
+                        seen.add(remote)
+                        inspected = self.runner.run([docker, "image", "inspect", image], timeout=60)
+                        if not inspected.success:
+                            raise ValueError(f"local Docker image not found: {image}")
+                        self.hauler.add_local_image(staging_store, staging_temp, image, remote)
+                        remote_mappings.append((image, remote))
+                    staging_inventory = self.hauler.inventory(staging_store, staging_temp)
+                    staging_digests = {
+                        remote: _image_digest(staging_inventory, remote, "staging")
+                        for _, remote in remote_mappings
+                    }
+                    self.hauler.copy(
+                        staging_store,
+                        staging_temp,
+                        f"registry://{request.registry_prefix.split('/', 1)[0]}",
+                        retries=request.retries,
+                        insecure=request.insecure_skip_tls_verify,
+                    )
+                    remote_images.extend(remote for _, remote in remote_mappings)
+                images_txt = stage.path / "images.txt"
+                images_txt.write_text("".join(f"{image}\n" for image in remote_images))
+                sources = [str(images_txt)] if remote_images else []
+                sources.extend(_validate_capture_sources(request.images_files, "images-file"))
+                if not sources:
+                    raise ValueError("manifest acquisition has no registry image references")
+                self.hauler.sync_image_txt(
+                    final_store,
+                    temp,
+                    sources,
+                    retries=request.retries,
+                    concurrency=request.concurrency,
+                    ca_file=request.ca_file,
+                    insecure_skip_tls_verify=request.insecure_skip_tls_verify,
+                    platform=request.platform,
+                )
+                inventory = self.hauler.inventory(final_store, temp)
+                if request.check:
+                    check_inventory = self.hauler.inventory(final_store, temp, check=True)
+                    if check_inventory:
+                        issues = []
+                        for entry in check_inventory[:3]:
+                            problems = entry.get("Problems")
+                            if not isinstance(problems, list) or not problems:
+                                problems = ["integrity check failed"]
+                            issues.append(
+                                {
+                                    "reference": str(entry.get("Reference", "<unknown>"))[:96],
+                                    "problems": [str(problem)[:128] for problem in problems[:2]],
+                                }
+                            )
+                        detail = {"issues": issues, "truncated": len(check_inventory) > 3}
+                        raise ValueError("Hauler integrity check failed: " + json.dumps(detail, sort_keys=True))
+                for entry in inventory:
+                    if str(entry.get("Type", "")).lower() == "image":
+                        digest = entry.get("Digest")
+                        if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                            raise ValueError(
+                                f"fresh remote Hauler inventory has no valid resolved digest for {entry.get('Reference')!r}"
+                            )
+                pulled_references = {item["Reference"] for item in inventory}
+                missing = [reference for reference in remote_images if reference not in pulled_references]
+                if missing:
+                    raise ValueError(
+                        "fresh registry pull is missing requested image reference(s): " + ", ".join(missing[:10])
+                    )
+                for local, remote in remote_mappings:
+                    digest = _image_digest(inventory, remote, "fresh remote")
+                    if digest != staging_digests[remote]:
+                        raise ValueError(
+                            f"fresh registry pull for {remote!r} resolved to a different digest than the pushed image"
+                        )
+                    mappings.append(ManifestMapping(source_local=local, published_remote=remote, digest=digest))
+                staged_manifest = stage.path / "hauler-manifest.yaml"
+                self.hauler.create_manifest(final_store, temp, staged_manifest)
+                if not staged_manifest.is_file() or staged_manifest.is_symlink():
+                    raise ValueError("Hauler did not produce a regular manifest file")
+                os.link(staged_manifest, output)
+                artifact = ArtifactOutput(path=output, size=output.stat().st_size, sha256=_sha256(output))
+                receipt = ManifestReceipt(
+                    output=artifact,
+                    store_id=getattr(self.hauler, "store_id", None),
+                    registry_prefix=request.registry_prefix,
+                    tls_verification=(
+                        "disabled"
+                        if request.insecure_skip_tls_verify
+                        else "custom-ca" if request.ca_file is not None else "default"
+                    ),
+                    mappings=mappings,
+                    concurrency=request.concurrency,
+                    retries=request.retries,
+                    integrity_checked=request.check,
+                    integrity_passed=True if request.check else None,
+                )
+                return OperationResult(
+                    format_version=2,
+                    operation="manifest",
+                    success=True,
+                    exit_status=0,
+                    producer_version=self.producer_version,
+                    inventory=[_normalize_inventory_entry(item) for item in inventory],
+                    manifest=receipt,
+                    complete=True,
+                )
+        except (OSError, RuntimeError, ValueError) as error:
+            return self._failure("manifest", error)
 
     def restore(self, request: RestoreRequest) -> OperationResult:
         log.info("Starting JAT restore service")
@@ -364,14 +548,15 @@ class JATService:
                     self.hauler.serve(store, temp, registry, config)
                 elif mode == "both":
                     # One loaded capsule backs both read-only servers; the real
-                    # vertical test proves concurrent read access on v2.0.3.
+                    # vertical test proves concurrent read access with the pinned Hauler contract.
                     completed = self.runner.supervise(
                         [
                             self.hauler.serve_fileserver_command(
                                 store, temp, files_directory, request.fileserver_port
                             ),
                             self.hauler.serve_registry_command(store, temp, registry, config),
-                        ]
+                        ],
+                        env=hauler_subprocess_environment(),
                     )
                     if not completed.success:
                         raise RuntimeError(completed.diagnostics or "a served endpoint exited unexpectedly")
@@ -420,11 +605,9 @@ class JATService:
                     raise ValueError(
                         f"haul does not contain reference {reference!r}; known references: {known}"
                     )
-                # Pinned v2.0.3 matches extract references with substring
-                # containment, so hauler/foo.txt:latest would also extract
-                # myhauler/foo.txt:latest. The operation promises exactly one
-                # selected reference: reject any additional substring match
-                # before delegating to Hauler.
+                # Hauler matches extract references by substring, so
+                # hauler/foo.txt:latest also matches myhauler/foo.txt:latest.
+                # Reject ambiguous names to preserve exact-reference semantics.
                 substring_matches = sorted(candidate for candidate in references if reference in candidate)
                 if len(substring_matches) > 1:
                     raise ValueError(
@@ -949,39 +1132,18 @@ def _validate_capture_sources(sources: list[str], label: str) -> list[str]:
 
 
 def _require_chunkable_output_name(name: str, chunk_size: str | None) -> None:
-    """Restrict chunked output names to archives pinned v2.0.3 can reload.
-
-    Hauler derives chunk names by stripping every extension of the output
-    filename, but its unarchiver can only load tar/tar.zst containers (a zip
-    chunk set fails on load with an io.ReaderAt/io.Seeker constraint), and a
-    hidden base (leading dot, chunks like _0.capsule.tar.zst) fails reassembly
-    with a truncated-blob error. JAT rejects both before capture instead of
-    producing a haul no consumer operation can open.
-    """
+    """Reject chunk containers that Hauler cannot reload safely."""
     if chunk_size is None:
         return
     if name.startswith("."):
-        raise ValueError(
-            f"chunked output must not start with a dot (pinned v2.0.3 cannot "
-            f"reload hidden-base chunk sets): {name!r}"
-        )
-    lowered = name.lower()
-    if not lowered.endswith((".tar", ".tar.zst")):
-        raise ValueError(
-            f"chunked output must be a .tar or .tar.zst archive name "
-            f"(Hauler v2.0.3 cannot reload other chunk containers): {name!r}"
-        )
+        raise ValueError(f"chunked output must not start with a dot: {name!r}")
+    if not name.lower().endswith((".tar", ".tar.zst")):
+        raise ValueError(f"chunked output must be a .tar or .tar.zst archive name: {name!r}")
 
 
 def _chunk_files(staged: Path) -> list[Path]:
-    """Observed Hauler v2.0.3 chunk naming: <base>_<index><ext>, from 0.
-
-    Hauler derives <ext> by stripping every extension of the requested output
-    filename (capsule.zip -> capsule_0.zip; haul.tar.zst -> haul_0.tar.zst),
-    mirroring Go's filepath.Ext loop. A leading-dot name strips down to an
-    empty base (.capsule.tar.zst -> _0.capsule.tar.zst), which is a legitimate
-    chunk set, not an absence of chunks.
-    """
+    """Discover Hauler v2.1 suffix chunks and legacy v2.0.3 underscore chunks."""
+    current_pattern = re.compile(rf"^{re.escape(staged.name)}\.(?P<index>[0-9]+)$")
     base, ext = staged.name, ""
     while True:
         dot = base.rfind(".")
@@ -989,13 +1151,23 @@ def _chunk_files(staged: Path) -> list[Path]:
             break
         ext = base[dot:] + ext
         base = base[:dot]
-    pattern = re.compile(rf"^{re.escape(base)}_(?P<index>[0-9]+){re.escape(ext)}$")
-    candidates = []
+    legacy_pattern = re.compile(rf"^{re.escape(base)}_(?P<index>[0-9]+){re.escape(ext)}$")
+    current, legacy = [], []
     for candidate in staged.parent.iterdir():
-        chunk_match = pattern.match(candidate.name)
-        if chunk_match is not None and candidate.is_file():
-            candidates.append((int(chunk_match.group("index")), candidate))
-    return [candidate for _, candidate in sorted(candidates)]
+        if not candidate.is_file():
+            continue
+        if match := current_pattern.match(candidate.name):
+            current.append((int(match.group("index")), candidate))
+        elif match := legacy_pattern.match(candidate.name):
+            legacy.append((int(match.group("index")), candidate))
+    if current and legacy:
+        raise ValueError("Hauler produced conflicting current and legacy chunk naming sets")
+    selected = current or legacy
+    indices = [index for index, _ in sorted(selected)]
+    expected = list(range(1, len(indices) + 1)) if current else list(range(len(indices)))
+    if indices != expected:
+        raise ValueError("Hauler produced an incomplete or duplicate chunk sequence")
+    return [path for _, path in sorted(selected)]
 
 
 def _promote_all_or_nothing(chunks: list[Path], destination_directory: Path) -> list[ArtifactOutput]:

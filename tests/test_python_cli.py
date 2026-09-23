@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from jat.cli import main
-from jat.models import ContentEntry, OperationResult, ServeEndpoints, TransferReceipt
+from jat.models import ArtifactOutput, ContentEntry, ManifestReceipt, OperationResult, ServeEndpoints, TransferReceipt
 
 
 class RecordingService:
@@ -71,6 +71,21 @@ class RecordingService:
     def doctor(self):
         self.calls.append(("doctor", None))
         return OperationResult(operation="doctor", success=True, exit_status=0, producer_version="synthetic")
+
+    def manifest(self, request):
+        self.calls.append(("manifest", request))
+        return OperationResult(
+            format_version=2,
+            operation="manifest",
+            success=True,
+            exit_status=0,
+            producer_version="synthetic",
+            manifest=ManifestReceipt(
+                output=ArtifactOutput(path=request.output, size=123, sha256="a" * 64),
+                tls_verification="disabled" if request.insecure_skip_tls_verify else "default",
+            ),
+            complete=True,
+        )
 
 
 def test_build_cli_calls_shared_service_and_prints_stable_json(capsys):
@@ -201,6 +216,52 @@ def test_build_cli_forwards_the_full_capture_contract(capsys):
     assert payload["format_version"] == 1
 
 
+
+def test_manifest_cli_forwards_transfer_and_publication_policy(capsys):
+    service = RecordingService()
+    status = main(
+        [
+            "manifest",
+            "--image",
+            "ghcr.io/acme/api:v1",
+            "--image",
+            "ghcr.io/acme/worker:v1",
+            "--output",
+            "hauler-manifest.yaml",
+            "--concurrency",
+            "8",
+            "--ca-file",
+            "ca.pem",
+            "--check",
+            "--json",
+        ],
+        service=service,
+    )
+    assert status == 0
+    request = service.calls[0][1]
+    assert request.images == ["ghcr.io/acme/api:v1", "ghcr.io/acme/worker:v1"]
+    assert request.concurrency == 8 and request.ca_file == Path("ca.pem") and request.check
+    assert request.retries is None
+    assert json.loads(capsys.readouterr().out)["operation"] == "manifest"
+
+def test_manifest_human_output_displays_artifact_and_disabled_tls(capsys):
+    service = RecordingService()
+    status = main(
+        [
+            "manifest",
+            "--image",
+            "ghcr.io/acme/api:v1",
+            "--output",
+            "hauler-manifest.yaml",
+            "--insecure-skip-tls-verify",
+        ],
+        service=service,
+    )
+
+    assert status == 0
+    output = capsys.readouterr().out
+    assert "manifest: hauler-manifest.yaml (123 bytes" in output
+    assert "registry TLS verification: disabled" in output
 def test_inspect_extract_export_copy_cli_contracts(capsys):
     service = RecordingService()
     assert main(["inspect", "--haul", "h.tar.zst", "--json"], service=service) == 0

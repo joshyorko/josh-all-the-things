@@ -36,7 +36,8 @@ class BuildRequest(RequestModel):
     hauler_manifests: list[str] = Field(default_factory=list)
     exclude_extras: bool = False
     chunk_size: str | None = None
-    retries: int = Field(default=3, ge=1)
+    retries: int | None = Field(default=None, ge=1)
+    concurrency: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def image_modes_are_exclusive(self):
@@ -47,11 +48,7 @@ class BuildRequest(RequestModel):
     @field_validator("chunk_size")
     @classmethod
     def chunk_size_has_hauler_shape(cls, value):
-        """Only units pinned v2.0.3 parses: K/KB/M/MB/G/GB/T/TB or bare bytes.
-
-        Hauler treats suffixes as binary multiples (1K = 1024) and rejects
-        forms like 1B, 1Mi, or 1KiB; JAT rejects those before any capture work.
-        """
+        """Hauler v2.1 accepts binary K/KB/M/MB/G/GB/T/TB units or byte counts."""
         if value is None:
             return value
         if not _CHUNK_SIZE_PATTERN.fullmatch(value):
@@ -91,6 +88,70 @@ class BuildRequest(RequestModel):
 class RestoreRequest(RequestModel):
     haul: Path
     destination: Path
+
+class ManifestRequest(RequestModel):
+    output: Path
+    images: list[str] = Field(default_factory=list)
+    images_files: list[str] = Field(default_factory=list)
+    platform: str | None = None
+    registry_prefix: str | None = None
+    publish_local: bool = False
+    concurrency: int | None = Field(default=None, ge=1)
+    retries: int | None = Field(default=None, ge=1)
+    ca_file: Path | None = None
+    insecure_skip_tls_verify: bool = False
+    check: bool = False
+
+    @field_validator("images")
+    @classmethod
+    def image_refs_are_safe(cls, values):
+        for value in values:
+            if not value or value.strip() != value or any(char.isspace() for char in value):
+                raise ValueError("image references must be non-empty and contain no whitespace")
+            if "://" in value:
+                raise ValueError("image references must not contain URL schemes")
+            if "@" in value and not re.fullmatch(r".+@sha256:[0-9a-f]{64}", value):
+                raise ValueError("digest-qualified image references must use a sha256 digest without credentials")
+        return values
+
+    @field_validator("images_files")
+    @classmethod
+    def image_sources_are_safe(cls, values):
+        return BuildRequest.capture_sources_are_local_or_https(values)
+
+    @field_validator("registry_prefix")
+    @classmethod
+    def registry_prefix_is_safe(cls, value):
+        if value is None:
+            return value
+        if (
+            not value
+            or value.strip() != value
+            or any(char.isspace() for char in value)
+            or "://" in value
+            or "@" in value
+            or "?" in value
+            or "#" in value
+        ):
+            raise ValueError("registry prefix must be registry-authority[/namespace/path], without credentials or URL components")
+        parts = value.split("/")
+        authority = parts[0]
+        if not authority or ":" in authority and authority.endswith(":"):
+            raise ValueError("registry prefix has an invalid authority")
+        if any(not part or part in {".", ".."} for part in parts[1:]):
+            raise ValueError("registry prefix must not contain empty or traversal path components")
+        return value
+
+    @model_validator(mode="after")
+    def manifest_inputs_are_consistent(self):
+        if not self.images and not self.images_files:
+            raise ValueError("at least one --image or --images-file is required")
+        if self.publish_local and not self.registry_prefix:
+            raise ValueError("--publish-local requires --registry-prefix")
+        if self.ca_file is not None and self.insecure_skip_tls_verify:
+            raise ValueError("--ca-file and --insecure-skip-tls-verify are mutually exclusive")
+        return self
+
 
 
 class ServeRequest(RequestModel):
@@ -221,6 +282,27 @@ class ContentEntry(BaseModel):
         bounded = {str(key)[:256]: str(item)[:512] for key, item in value.items()}
         return dict(list(bounded.items())[:32])
 
+class ManifestMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_local: str
+    published_remote: str
+    digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class ManifestReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    output: ArtifactOutput
+    store_id: str | None = None
+    registry_prefix: str | None = None
+    tls_verification: Literal["default", "custom-ca", "disabled"] = "default"
+    mappings: list[ManifestMapping] = Field(default_factory=list)
+    concurrency: int | None = Field(default=None, ge=1)
+    retries: int | None = Field(default=None, ge=1)
+    integrity_checked: bool = False
+    integrity_passed: bool | None = None
+
 
 class ServeEndpoints(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -248,7 +330,7 @@ class OperationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     format_version: Literal[1, 2] = 1
-    operation: Literal["build", "restore", "serve", "doctor", "inspect", "extract", "export", "copy"]
+    operation: Literal["build", "restore", "serve", "doctor", "inspect", "extract", "export", "copy", "manifest"]
     success: bool
     exit_status: int
     payload_path: Path | None = None
@@ -262,6 +344,7 @@ class OperationResult(BaseModel):
     anchors: dict[Literal["workspace", "brew", "rcc_environment", "rcc_metadata"], bool] | None = None
     serve: ServeEndpoints | None = None
     transfer: TransferReceipt | None = None
+    manifest: ManifestReceipt | None = None
     complete: bool | None = None
 
     @model_validator(mode="after")
@@ -273,6 +356,7 @@ class OperationResult(BaseModel):
                 self.anchors is not None,
                 self.serve is not None,
                 self.transfer is not None,
+                self.manifest is not None,
                 self.complete is not None,
             )
         )
