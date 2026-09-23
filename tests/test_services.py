@@ -1549,3 +1549,12 @@ def test_manifest_integrity_check_failure_returns_bounded_structured_evidence(tm
     assert '"digest-mismatch: sha256:bad"' in result.diagnostics
     assert not output.exists()
     assert not any(call[0] == "manifest" for call in hauler.calls)
+
+
+def test_registry_reference_matching_accepts_hauler_canonicalization():
+    from jat.services import _canonical_image_reference
+
+    assert _canonical_image_reference("docker.io/library/alpine") == "index.docker.io/library/alpine:latest"
+    assert _canonical_image_reference("index.docker.io/library/alpine:latest") == "index.docker.io/library/alpine:latest"
+    digest = "sha256:" + "a" * 64
+    assert _canonical_image_reference(f"ghcr.io/acme/api@{digest}") == f"ghcr.io/acme/api@{digest}"

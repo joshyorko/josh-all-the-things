@@ -76,11 +76,25 @@ def _map_local_image(reference: str, prefix: str) -> str:
         raise ValueError(f"local image reference must include an explicit tag: {reference}")
     return f"{prefix}/{reference}"
 
+def _canonical_image_reference(reference: str) -> str:
+    name, separator, digest = reference.partition("@")
+    if separator:
+        suffix = f"@{digest}"
+    else:
+        final = name.rsplit("/", 1)[-1]
+        suffix = "" if ":" in final else ":latest"
+    if name.startswith("docker.io/"):
+        name = "index.docker.io/" + name.removeprefix("docker.io/")
+    return name + suffix
+
+
 def _image_digest(inventory: list[dict], reference: str, source: str) -> str:
+    expected = _canonical_image_reference(reference)
     matches = [
         item
         for item in inventory
-        if item.get("Reference") == reference and str(item.get("Type", "")).lower() == "image"
+        if _canonical_image_reference(str(item.get("Reference", ""))) == expected
+        and str(item.get("Type", "")).lower() == "image"
     ]
     if len(matches) != 1:
         raise ValueError(f"{source} Hauler store did not contain exactly one image entry for {reference!r}")
@@ -88,7 +102,6 @@ def _image_digest(inventory: list[dict], reference: str, source: str) -> str:
     if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise ValueError(f"{source} Hauler inventory has no valid resolved digest for {reference!r}")
     return digest
-
 
 def _local_directory_target(target: str) -> Path:
     """Resolve the filesystem path of a dir://|directory:// target."""
@@ -386,8 +399,16 @@ class JATService:
                             raise ValueError(
                                 f"fresh remote Hauler inventory has no valid resolved digest for {entry.get('Reference')!r}"
                             )
-                pulled_references = {item["Reference"] for item in inventory}
-                missing = [reference for reference in remote_images if reference not in pulled_references]
+                pulled_references = {
+                    _canonical_image_reference(str(item["Reference"]))
+                    for item in inventory
+                    if isinstance(item.get("Reference"), str)
+                }
+                missing = [
+                    reference
+                    for reference in remote_images
+                    if _canonical_image_reference(reference) not in pulled_references
+                ]
                 if missing:
                     raise ValueError(
                         "fresh registry pull is missing requested image reference(s): " + ", ".join(missing[:10])
