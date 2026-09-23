@@ -1458,6 +1458,30 @@ def test_local_manifest_rejects_remote_digest_drift_before_manifest_output(tmp_p
     assert not any(call[0] == "manifest" for call in hauler.calls)
 
 
+def test_manifest_rejects_plain_http_before_any_registry_side_effects(tmp_path):
+    hauler = ManifestHauler()
+    service = JATService(
+        hauler=hauler,
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda command: "/tools/docker" if command == "docker" else None,
+    )
+    result = service.manifest(
+        ManifestRequest(
+            output=tmp_path / "hauler-manifest.yaml",
+            images=["backend/api:dev"],
+            registry_prefix="ghcr.io/acme",
+            publish_local=True,
+            plain_http=True,
+        )
+    )
+
+    assert not result.success
+    assert "--plain-http is unsupported for manifest acquisition with Hauler 2.1.1" in result.diagnostics
+    assert not hauler.calls
+    assert not (tmp_path / "hauler-manifest.yaml").exists()
+
+
 def test_manifest_insecure_transport_is_announced_and_receipted(tmp_path):
     announcements = []
     service = JATService(

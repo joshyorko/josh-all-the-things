@@ -360,6 +360,10 @@ credentials, then creates a **fresh store** and pulls the published remote ref
 before generating the final manifest. Without `--publish-local`, JAT never
 pushes local images. JAT does not accept credentials; configure Docker,
 Podman/`REGISTRY_AUTH_FILE`, credential helpers, or `hauler login` directly.
+Hauler v2.1.1 supports `--plain-http` for registry copy, but not `store sync`;
+because manifest creation requires a fresh pull, `jat manifest --plain-http`
+fails before any registry operation. Use an HTTPS registry for manifest
+acquisition.
 `--ca-file` and the visually explicit `--insecure-skip-tls-verify` are mutually
 exclusive; `--check` requests Hauler's more expensive full store integrity
 check. Receipts never contain CA contents or credentials.

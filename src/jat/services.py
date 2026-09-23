@@ -311,6 +311,11 @@ class JATService:
         if request.insecure_skip_tls_verify:
             self._announce("WARNING: registry TLS verification is disabled (--insecure-skip-tls-verify)")
         try:
+            if request.plain_http:
+                raise ValueError(
+                    "--plain-http is unsupported for manifest acquisition with Hauler 2.1.1; "
+                    "manifest creation requires a fresh registry pull over HTTPS"
+                )
             output = new_output_path(request.output)
             if request.ca_file is not None:
                 existing_file(request.ca_file)
