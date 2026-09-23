@@ -1,6 +1,7 @@
 """Shared JAT build, restore, serve, and doctor service layer."""
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -8,7 +9,7 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from shutil import which as system_which
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from robocorp import log
 
@@ -66,6 +67,19 @@ def _is_registry_image(reference: str) -> bool:
     repository = name.rsplit(":", 1)[0] if ":" in final_component else name
     authority = repository.split("/", 1)[0]
     return "." in authority or ":" in authority or authority == "localhost"
+
+
+def _is_loopback_registry(reference: str) -> bool:
+    authority = reference.split("/", 1)[0]
+    hostname = urlsplit(f"//{authority}").hostname
+    if hostname is None:
+        return False
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def _map_local_image(reference: str, prefix: str) -> str:
@@ -311,11 +325,6 @@ class JATService:
         if request.insecure_skip_tls_verify:
             self._announce("WARNING: registry TLS verification is disabled (--insecure-skip-tls-verify)")
         try:
-            if request.plain_http:
-                raise ValueError(
-                    "--plain-http is unsupported for manifest acquisition with Hauler 2.1.1; "
-                    "manifest creation requires a fresh registry pull over HTTPS"
-                )
             output = new_output_path(request.output)
             if request.ca_file is not None:
                 existing_file(request.ca_file)
@@ -325,6 +334,25 @@ class JATService:
                 final_store = stage.path / "remote-store"
                 local_images = [image for image in request.images if not _is_registry_image(image)]
                 remote_images = [image for image in request.images if _is_registry_image(image)]
+                if request.plain_http:
+                    if request.images_files:
+                        raise ValueError(
+                            "--plain-http cannot be combined with --images-file because Hauler 2.1.1 "
+                            "does not support plain HTTP for registry sync"
+                        )
+                    registry_targets = list(remote_images)
+                    if local_images:
+                        if not request.registry_prefix:
+                            raise ValueError(
+                                "--plain-http manifest publication requires a loopback registry prefix "
+                                "because Hauler 2.1.1 only auto-detects HTTP for loopback pulls"
+                            )
+                        registry_targets.append(request.registry_prefix)
+                    if any(not _is_loopback_registry(target) for target in registry_targets):
+                        raise ValueError(
+                            "--plain-http manifest acquisition is supported only for loopback registries "
+                            "with Hauler 2.1.1"
+                        )
                 mappings: list[ManifestMapping] = []
                 remote_mappings: list[tuple[str, str]] = []
                 staging_digests: dict[str, str] = {}
