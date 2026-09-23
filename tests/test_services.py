@@ -79,8 +79,8 @@ class ManifestHauler:
             }
         )
 
-    def copy(self, store, temp, target, retries=None, insecure=False):
-        self.calls.append(("copy", store.name, target, retries, insecure))
+    def copy(self, store, temp, target, retries=None, plain_http=False, insecure=False):
+        self.calls.append(("copy", store.name, target, retries, plain_http, insecure))
 
     def create_manifest(self, store, temp, output):
         self.calls.append(("manifest", store.name))
@@ -1403,7 +1403,7 @@ def test_local_manifest_publication_requires_opt_in_and_fresh_remote_store(tmp_p
     )
     assert result.success and result.complete is True
     assert ("add-local", "staging-store", "backend/api:dev", "ghcr.io/acme/backend/api:dev") in hauler.calls
-    assert ("copy", "staging-store", "registry://ghcr.io", None, False) in hauler.calls
+    assert ("copy", "staging-store", "registry://ghcr.io", None, False, False) in hauler.calls
     sync = next(call for call in hauler.calls if call[0] == "sync")
     assert sync[1] == "remote-store"
     assert sync[2] == ["ghcr.io/acme/backend/api:dev\n"]

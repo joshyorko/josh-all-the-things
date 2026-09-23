@@ -337,7 +337,7 @@ def test_real_images_file_and_http_manifest_are_hauler_native(tmp_path):
 def test_real_manifest_local_publish_fresh_pull_and_multi_image_bootstrap(tmp_path, monkeypatch):
     source = make_workspace(tmp_path)
     with authenticated_local_registry(monkeypatch) as registry_port:
-        seed_local_image(registry_port, "seed/busybox:1.36")
+        seed_local_image(registry_port)
         subprocess.run([DOCKER, "tag", "busybox:1.36", "jat-api:dev"], check=True, capture_output=True)
         subprocess.run([DOCKER, "tag", "busybox:1.36", "jat-worker:dev"], check=True, capture_output=True)
         output = tmp_path / "hauler-manifest.yaml"

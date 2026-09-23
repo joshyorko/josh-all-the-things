@@ -418,13 +418,16 @@ jobs:
           export JAT_TEST_DOCKER="$(command -v docker)"
           export JAT_TEST_HTPASSWD="$(command -v htpasswd)"
           export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"
-          "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --json -- bash -lc '
-            set -euo pipefail
-            python -m pip install --quiet pytest
-            test_log="$RUNNER_TEMP/registry-first-manifest.log"
-            PYTHONPATH=src python -m pytest -q tests/test_real_vertical.py -k manifest_local_publish | tee "$test_log"
-            grep -Eq "1 passed" "$test_log"
-          '
+          "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --json -- python -m pip install --quiet pytest
+          test_receipt="$RUNNER_TEMP/registry-first-manifest-receipt.json"
+          "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$test_receipt" -- \
+            python -m pytest -q tests/test_real_vertical.py -k manifest_local_publish
+          python3 - "$test_receipt" <<'PY'
+          import json
+          import sys
+          receipt = json.load(open(sys.argv[1]))
+          assert receipt["exitCode"] == 0, receipt
+          PY
 
       - name: Upload Linux artifact and runtime evidence
         if: always()
