@@ -375,6 +375,7 @@ class JATService:
                     ca_file=request.ca_file,
                     insecure_skip_tls_verify=request.insecure_skip_tls_verify,
                     platform=request.platform,
+                    plain_http=request.plain_http,
                 )
                 inventory = self.hauler.inventory(final_store, temp)
                 if request.check:
