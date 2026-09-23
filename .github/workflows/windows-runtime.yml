@@ -408,6 +408,24 @@ jobs:
           done
           [[ "$ready" == true ]] || { cat "$serve_log"; echo "JAT Serve fileserver did not serve a non-empty workspace artifact" >&2; exit 1; }
 
+      - name: Run real registry-first manifest bootstrap
+        run: |
+          set -euo pipefail
+          command -v docker
+          command -v htpasswd
+          docker info >/dev/null
+          artifact=$(python3 -c 'import json; print(json.load(open("dist/jat-runtime.json"))["artifact_digest"])')
+          export JAT_TEST_DOCKER="$(command -v docker)"
+          export JAT_TEST_HTPASSWD="$(command -v htpasswd)"
+          export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"
+          "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --json -- bash -lc '
+            set -euo pipefail
+            python -m pip install --quiet pytest
+            test_log="$RUNNER_TEMP/registry-first-manifest.log"
+            PYTHONPATH=src python -m pytest -q tests/test_real_vertical.py -k manifest_local_publish | tee "$test_log"
+            grep -Eq "1 passed" "$test_log"
+          '
+
       - name: Upload Linux artifact and runtime evidence
         if: always()
         uses: actions/upload-artifact@v4

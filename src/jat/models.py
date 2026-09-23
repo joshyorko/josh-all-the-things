@@ -100,6 +100,7 @@ class ManifestRequest(RequestModel):
     retries: int | None = Field(default=None, ge=1)
     ca_file: Path | None = None
     insecure_skip_tls_verify: bool = False
+    plain_http: bool = False
     check: bool = False
 
     @field_validator("images")

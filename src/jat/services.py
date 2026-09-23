@@ -356,6 +356,7 @@ class JATService:
                         staging_temp,
                         f"registry://{request.registry_prefix.split('/', 1)[0]}",
                         retries=request.retries,
+                        plain_http=request.plain_http,
                         insecure=request.insecure_skip_tls_verify,
                     )
                     remote_images.extend(remote for _, remote in remote_mappings)

@@ -78,6 +78,7 @@ def parser() -> argparse.ArgumentParser:
     manifest.add_argument("--retries", type=int)
     manifest.add_argument("--ca-file")
     manifest.add_argument("--insecure-skip-tls-verify", action="store_true")
+    manifest.add_argument("--plain-http", action="store_true")
     manifest.add_argument("--check", action="store_true")
     manifest.add_argument("--json", action="store_true")
 
@@ -204,6 +205,7 @@ def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:
                 retries=parsed.retries,
                 ca_file=parsed.ca_file,
                 insecure_skip_tls_verify=parsed.insecure_skip_tls_verify,
+                plain_http=parsed.plain_http,
                 check=parsed.check,
             )
         )
