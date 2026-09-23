@@ -1,11 +1,14 @@
+import base64
 import json
 import os
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
+import urllib.error
 from contextlib import contextmanager
 from pathlib import Path
 from shutil import which
@@ -17,6 +20,7 @@ from jat.models import (
     CopyRequest,
     ExportRequest,
     ExtractRequest,
+    ManifestRequest,
     InspectRequest,
     RestoreRequest,
     ServeRequest,
@@ -32,7 +36,7 @@ pytestmark = pytest.mark.skipif(
     reason="real Hauler and GNU tar are required",
 )
 
-DOCKER = which("docker")
+DOCKER = os.environ.get("JAT_TEST_DOCKER") or which("docker")
 
 
 def docker_available():
@@ -45,6 +49,11 @@ def docker_available():
 
 
 requires_docker = pytest.mark.skipif(not docker_available(), reason="local Docker daemon required")
+HTPASSWD = os.environ.get("JAT_TEST_HTPASSWD") or which("htpasswd")
+requires_authenticated_registry = pytest.mark.skipif(
+    not docker_available() or not HTPASSWD,
+    reason="Docker daemon and htpasswd are required for authenticated registry gate",
+)
 
 
 def make_workspace(root: Path) -> Path:
@@ -103,8 +112,69 @@ def local_registry():
             registry.kill()
 
 
+
+@contextmanager
+def authenticated_local_registry(monkeypatch):
+    port = free_port()
+    with tempfile.TemporaryDirectory(prefix="jat-registry-auth-") as directory:
+        auth_dir = Path(directory)
+        auth_file = auth_dir / "htpasswd"
+        auth_file.write_bytes(
+            subprocess.check_output([HTPASSWD, "-Bbn", "jat", "jat-password"])
+        )
+        config_dir = auth_dir / "docker"
+        config_dir.mkdir()
+        auth = base64.b64encode(b"jat:jat-password").decode()
+        (config_dir / "config.json").write_text(
+            json.dumps({"auths": {f"127.0.0.1:{port}": {"auth": auth}}})
+        )
+        monkeypatch.setenv("DOCKER_CONFIG", str(config_dir))
+        registry = subprocess.Popen(
+            [
+                DOCKER,
+                "run",
+                "--rm",
+                "-p",
+                f"127.0.0.1:{port}:5000",
+                "-v",
+                f"{auth_dir}:/auth:ro",
+                "-e",
+                "REGISTRY_AUTH=htpasswd",
+                "-e",
+                "REGISTRY_AUTH_HTPASSWD_REALM=JAT",
+                "-e",
+                "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd",
+                "registry:2",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            deadline = time.monotonic() + 60
+            while True:
+                try:
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/v2/", timeout=2)
+                    break
+                except urllib.error.HTTPError as error:
+                    if error.code == 401:
+                        break
+                except OSError:
+                    pass
+                if time.monotonic() > deadline:
+                    pytest.fail("authenticated local registry fixture did not become ready")
+                time.sleep(0.5)
+            yield port
+        finally:
+            registry.terminate()
+            try:
+                registry.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                registry.kill()
+
 def seed_local_image(port: int, image: str = "busybox:1.36") -> str:
-    """Publish a locally cached image into the loopback registry."""
+    """Pull a deterministic seed image, then publish it into the loopback registry."""
+    if subprocess.run([DOCKER, "image", "inspect", image], capture_output=True).returncode != 0:
+        subprocess.run([DOCKER, "pull", image], check=True, capture_output=True)
     reference = f"127.0.0.1:{port}/{image}"
     subprocess.run([DOCKER, "tag", image, reference], check=True, capture_output=True)
     subprocess.run([DOCKER, "push", reference], check=True, capture_output=True)
@@ -263,6 +333,34 @@ def test_real_images_file_and_http_manifest_are_hauler_native(tmp_path):
         assert "hauler/http-note.txt:latest" in references
 
 
+@requires_authenticated_registry
+def test_real_manifest_local_publish_fresh_pull_and_multi_image_bootstrap(tmp_path, monkeypatch):
+    source = make_workspace(tmp_path)
+    with authenticated_local_registry(monkeypatch) as registry_port:
+        seed_image = "ghcr.io/stefanprodan/podinfo:6.7.1"
+        seed_local_image(registry_port, seed_image)
+        subprocess.run([DOCKER, "tag", seed_image, "jat-api:dev"], check=True, capture_output=True)
+        subprocess.run([DOCKER, "tag", seed_image, "jat-worker:dev"], check=True, capture_output=True)
+        output = tmp_path / "hauler-manifest.yaml"
+        result = make_service().manifest(
+            ManifestRequest(
+                output=output,
+                images=["jat-api:dev", "jat-worker:dev"],
+                registry_prefix=f"127.0.0.1:{registry_port}/jat",
+                publish_local=True,
+                plain_http=True,
+                concurrency=2,
+            )
+        )
+
+    assert result.success, result.diagnostics
+    assert result.complete is True
+    assert output.is_file()
+    assert {mapping.source_local for mapping in result.manifest.mappings} == {"jat-api:dev", "jat-worker:dev"}
+    assert all(mapping.digest and mapping.digest.startswith("sha256:") for mapping in result.manifest.mappings)
+    assert result.manifest.registry_prefix == f"127.0.0.1:{registry_port}/jat"
+
+
 @requires_docker
 def test_real_helm_manifest_valuesfiles_and_image_closure(tmp_path, monkeypatch):
     source = make_workspace(tmp_path)
@@ -322,7 +420,7 @@ def test_real_helm_manifest_valuesfiles_and_image_closure(tmp_path, monkeypatch)
         # Hauler resolves local chart repoURL relative to its own working
         # directory, while valuesFiles resolve relative to the manifest file:
         # chdir to the fixture root and keep the manifest in a subdirectory so
-        # both semantics are exercised exactly as pinned v2.0.3 implements them.
+        # both semantics are exercised against the pinned Hauler runtime.
         monkeypatch.chdir(tmp_path)
         built = service.build(
             BuildRequest(folder=source, output=haul, hauler_manifests=[str(manifest)])
@@ -333,7 +431,7 @@ def test_real_helm_manifest_valuesfiles_and_image_closure(tmp_path, monkeypatch)
         references = {entry.reference for entry in inspected.inventory}
         assert any("jat-synthetic" in reference for reference in references), sorted(references)
         assert any("busybox" in reference for reference in references), (
-            "pinned v2.0.3 must discover chart-declared images during acquisition",
+            "Hauler must discover chart-declared images during acquisition",
             sorted(references),
         )
 
@@ -357,8 +455,8 @@ def test_real_chunked_build_round_trip_through_documented_entrypoint(tmp_path):
         assert payload.path.is_file()
         assert payload.size > 0 and len(payload.sha256) == 64
 
-    entrypoint = tmp_path / "chunked_0.tar.zst"
-    assert entrypoint.is_file(), "v2.0.3 names chunks <base>_<index><ext> from zero"
+    entrypoint = tmp_path / "chunked.tar.zst.001"
+    assert entrypoint.is_file(), "Hauler v2.1 suffixes chunk names with .001, .002, ..."
     inspected = service.inspect(InspectRequest(haul=entrypoint))
     assert inspected.success, inspected.diagnostics
     assert WORKSPACE_REFERENCE in {entry.reference for entry in inspected.inventory}

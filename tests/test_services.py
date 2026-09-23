@@ -13,6 +13,7 @@ from jat.models import (
     ExportRequest,
     ExtractRequest,
     InspectRequest,
+    ManifestRequest,
     RestoreRequest,
     ServeRequest,
 )
@@ -25,8 +26,74 @@ from jat.services import (
     WORKSPACE_REFERENCE,
     _local_file_reference,
     _registry_config,
+    _chunk_files,
 )
 
+class ManifestHauler:
+    def __init__(self, remote_digest=None, multi_platform=False):
+        self.calls = []
+        self.store_id = "manifest-store-123"
+        self.staging_digest = "sha256:" + "a" * 64
+        self.remote_digest = remote_digest or self.staging_digest
+        self.multi_platform = multi_platform
+        self.staging_inventory = []
+        self.inventory_data = []
+        self.check_inventory = []
+
+    def sync_image_txt(self, store, temp, sources, **options):
+        contents = [Path(item).read_text() for item in sources]
+        self.calls.append(("sync", store.name, contents, options))
+        references = [line for content in contents for line in content.splitlines() if line and not line.startswith("#")]
+        self.inventory_data = [
+            {
+                "Reference": reference,
+                "Type": "image",
+                "Platform": "linux/amd64",
+                "Digest": reference.split("@", 1)[1] if "@sha256:" in reference else self.remote_digest,
+            }
+            for reference in references
+        ]
+        if self.multi_platform and store.name == "remote-store" and self.inventory_data:
+            self.inventory_data.append(
+                {
+                    **self.inventory_data[0],
+                    "Platform": "linux/arm64",
+                    "Digest": "sha256:" + "b" * 64,
+                }
+            )
+
+    def inventory(self, store, temp, check=False):
+        self.calls.append(("inventory", store.name, check))
+        if check:
+            return self.check_inventory
+        return self.staging_inventory if store.name == "staging-store" else self.inventory_data
+
+    def add_local_image(self, store, temp, reference, rewrite):
+        self.calls.append(("add-local", store.name, reference, rewrite))
+        self.staging_inventory.append(
+            {
+                "Reference": rewrite,
+                "Type": "image",
+                "Platform": "linux/amd64",
+                "Digest": self.staging_digest,
+            }
+        )
+
+    def copy(self, store, temp, target, retries=None, plain_http=False, insecure=False):
+        self.calls.append(("copy", store.name, target, retries, plain_http, insecure))
+
+    def create_manifest(self, store, temp, output):
+        self.calls.append(("manifest", store.name))
+        output.write_text("apiVersion: content.hauler.cattle.io/v1\\nkind: Images\\n")
+
+
+class ManifestRunner:
+    def __init__(self):
+        self.calls = []
+
+    def run(self, argv, **kwargs):
+        self.calls.append(argv)
+        return ProcessResult(argv=argv, exit_status=0)
 
 class FakeArchive:
     def __init__(self, members=None, fail_extract=False):
@@ -643,11 +710,17 @@ def test_serve_rejects_runtime_stage_directory_inside_conda_prefix(tmp_path, mon
 class CapsuleRunner:
     def __init__(self, supervise_result=None):
         self.supervised = None
+        self.supervise_env = None
         self.supervise_result = supervise_result
 
-    def supervise(self, argvs, timeout=None, secrets=()):
+    def supervise(self, argvs, timeout=None, secrets=(), env=None):
         self.supervised = argvs
-        return self.supervise_result or ProcessResult(argv=[a for argv in argvs for a in argv], exit_status=0)
+        self.supervise_env = env
+        return (
+            self.supervise_result
+            if self.supervise_result is not None
+            else ProcessResult(argv=[a for argv in argvs for a in argv], exit_status=0)
+        )
 
 
 class CapsuleHauler:
@@ -678,11 +751,9 @@ class CapsuleHauler:
             return
         if chunk_size:
             name = Path(haul).name
-            base = name.split(".", 1)[0]
-            ext = name[len(base):]
             parent = Path(haul).parent
             for index in range(self.chunk_count):
-                (parent / f"{base}_{index}{ext}").write_bytes(f"chunk{index}".encode())
+                (parent / f"{name}.{index + 1:03d}").write_bytes(f"chunk{index}".encode())
             return
         Path(haul).write_bytes(b"synthetic-haul")
 
@@ -851,6 +922,7 @@ def test_serve_both_supervises_two_children_from_one_capsule(tmp_path, monkeypat
     haul = tmp_path / "haul.tar.zst"
     haul.write_bytes(b"haul")
     monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("HAULER_IGNORE_ERRORS", "true")
     runner = CapsuleRunner()
     hauler = CapsuleHauler(MIXED_INVENTORY)
     result = capsule_service(tmp_path, hauler, runner=runner).serve(
@@ -858,6 +930,8 @@ def test_serve_both_supervises_two_children_from_one_capsule(tmp_path, monkeypat
     )
     assert result.success, result.diagnostics
     assert runner.supervised == [["hauler", "fileserver", "8081"], ["hauler", "registry"]]
+    assert runner.supervise_env is not None
+    assert "HAULER_IGNORE_ERRORS" not in runner.supervise_env
     assert result.serve.mode == "both"
     assert result.serve.fileserver_url == "http://127.0.0.1:8081"
     assert result.serve.registry_url == "http://127.0.0.1:5001"
@@ -926,13 +1000,13 @@ def test_build_chunked_promotes_all_chunks_or_none(tmp_path):
     assert result.format_version == 2
     assert result.payload_path is None, "one path must never silently mean a set"
     names = [chunk.path.name for chunk in result.payloads]
-    assert names == ["haul_0.tar.zst", "haul_1.tar.zst", "haul_2.tar.zst"]
+    assert names == ["haul.tar.zst.001", "haul.tar.zst.002", "haul.tar.zst.003"]
     for chunk in result.payloads:
         assert chunk.size == len(f"chunk{names.index(chunk.path.name)}")
         assert chunk.sha256 == hashlib.sha256(f"chunk{names.index(chunk.path.name)}".encode()).hexdigest()
     assert ("save", "1MB", False) in hauler.calls
     loads = [call for call in hauler.calls if call[0] == "load"]
-    assert loads[-1] == ("load", "haul_0.tar.zst"), "validation reloads the documented chunk entrypoint"
+    assert loads[-1] == ("load", "haul.tar.zst.001"), "validation reloads the documented chunk entrypoint"
     assert result.complete is True
 
 
@@ -961,7 +1035,7 @@ def test_registry_config_accepts_port_override():
 def test_build_chunked_rejects_output_names_hauler_cannot_reload(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
-    # Hauler v2.0.3 can split any container, but its own store load cannot
+    # Hauler can split any container, but its own store load cannot
     # re-consume anything but tar/tar.zst chunk sets; JAT rejects the rest
     # before capture instead of producing an unreadable capsule.
     for output_name in ("capsule.zip", "haul", ".hidden-haul", "capsule.tar.gz"):
@@ -986,7 +1060,7 @@ def test_build_chunked_publication_is_all_or_nothing(tmp_path):
     output = tmp_path / "haul.tar.zst"
     # A stale sibling from an interrupted previous attempt must not produce a
     # partial public set on a failing retry.
-    competitor = tmp_path / "haul_1.tar.zst"
+    competitor = tmp_path / "haul.tar.zst.002"
     competitor.write_bytes(b"pre-existing")
     hauler = CapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=2)
 
@@ -996,7 +1070,7 @@ def test_build_chunked_publication_is_all_or_nothing(tmp_path):
 
     assert result.success is False
     assert "already exists" in result.diagnostics
-    assert not (tmp_path / "haul_0.tar.zst").exists(), "failed promotion must roll back created links"
+    assert not (tmp_path / "haul.tar.zst.001").exists(), "failed promotion must roll back created links"
     assert competitor.read_bytes() == b"pre-existing"
 
 
@@ -1011,14 +1085,14 @@ def test_build_chunked_rolls_back_when_a_competing_output_appears_mid_promotion(
             if chunk_size:
                 # Materialize after save, before promotion: a mid-promotion
                 # competitor collides with the second chunk target.
-                    (Path(haul).parent.parent / "haul_1.tar.zst").write_bytes(b"raced")
+                    (Path(haul).parent.parent / "haul.tar.zst.002").write_bytes(b"raced")
 
     result = capsule_service(tmp_path, RacingCapsuleHauler(WORKSPACE_ONLY_INVENTORY, chunk_count=2)).build(
         BuildRequest(folder=source, output=output, chunk_size="1MB")
     )
     assert result.success is False
-    assert not (tmp_path / "haul_0.tar.zst").exists(), "created links must be rolled back"
-    competitor = tmp_path / "haul_1.tar.zst"
+    assert not (tmp_path / "haul.tar.zst.001").exists(), "created links must be rolled back"
+    competitor = tmp_path / "haul.tar.zst.002"
     assert competitor.read_bytes() == b"raced", "data JAT did not create is never deleted"
 
 
@@ -1266,3 +1340,269 @@ def test_copy_dir_projection_is_staged_and_promoted_atomically(tmp_path, monkeyp
     assert (destination / WORKSPACE_ARTIFACT_NAME).read_bytes() == b"workspace"
     leftovers = [path.name for path in tmp_path.iterdir() if path.name.startswith(".jat-copy-")]
     assert not leftovers, "the staging area is cleaned up after promotion"
+
+def test_manifest_remote_images_use_hauler_native_sync_and_receipt(tmp_path):
+    hauler = ManifestHauler()
+    service = JATService(
+        hauler=hauler,
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda _command: None,
+    )
+    output = tmp_path / "hauler-manifest.yaml"
+    result = service.manifest(
+        ManifestRequest(
+            output=output,
+            images=[
+                "ghcr.io/acme/api:v1",
+                "ghcr.io/acme/worker:v1",
+                "ghcr.io/acme/hashed@sha256:" + "b" * 64,
+            ],
+            concurrency=8,
+            check=True,
+        )
+    )
+    assert result.success and result.complete is True
+    assert result.operation == "manifest" and result.format_version == 2
+    assert result.manifest.output.sha256 == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert result.manifest.store_id == "manifest-store-123"
+    assert result.manifest.integrity_checked and result.manifest.integrity_passed
+    sync = next(call for call in hauler.calls if call[0] == "sync")
+    assert sync[0:2] == ("sync", "remote-store")
+    assert sync[2] == [
+        "ghcr.io/acme/api:v1\nghcr.io/acme/worker:v1\nghcr.io/acme/hashed@sha256:"
+        + "b" * 64
+        + "\n"
+    ]
+    assert sync[3]["concurrency"] == 8
+    assert [call for call in hauler.calls if call[0] == "manifest"] == [("manifest", "remote-store")]
+
+
+def test_local_manifest_publication_requires_opt_in_and_fresh_remote_store(tmp_path):
+    hauler = ManifestHauler()
+    service = JATService(
+        hauler=hauler,
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda command: "/tools/docker" if command == "docker" else None,
+    )
+    output = tmp_path / "hauler-manifest.yaml"
+    rejected = service.manifest(
+        ManifestRequest(output=output, images=["backend/api:dev"], registry_prefix="ghcr.io/acme")
+    )
+    assert not rejected.success and "explicit --publish-local" in rejected.diagnostics
+    assert not output.exists() and not hauler.calls
+
+    result = service.manifest(
+        ManifestRequest(
+            output=output,
+            images=["backend/api:dev"],
+            registry_prefix="ghcr.io/acme",
+            publish_local=True,
+        )
+    )
+    assert result.success and result.complete is True
+    assert ("add-local", "staging-store", "backend/api:dev", "ghcr.io/acme/backend/api:dev") in hauler.calls
+    assert ("copy", "staging-store", "registry://ghcr.io", None, False, False) in hauler.calls
+    sync = next(call for call in hauler.calls if call[0] == "sync")
+    assert sync[1] == "remote-store"
+    assert sync[2] == ["ghcr.io/acme/backend/api:dev\n"]
+    assert result.manifest.mappings[0].published_remote == "ghcr.io/acme/backend/api:dev"
+
+def test_chunk_discovery_accepts_v21_and_legacy_v203_but_rejects_mixed_sets(tmp_path):
+    staged = tmp_path / "haul.tar.zst"
+    (tmp_path / "haul.tar.zst.002").write_bytes(b"two")
+    (tmp_path / "haul.tar.zst.001").write_bytes(b"one")
+    assert [item.name for item in _chunk_files(staged)] == ["haul.tar.zst.001", "haul.tar.zst.002"]
+    (tmp_path / "haul.tar.zst.004").write_bytes(b"gap")
+    with pytest.raises(ValueError, match="incomplete or duplicate"):
+        _chunk_files(staged)
+    (tmp_path / "haul.tar.zst.004").unlink()
+    (tmp_path / "haul.tar.zst.001").unlink()
+    (tmp_path / "haul.tar.zst.002").unlink()
+    (tmp_path / "haul_0.tar.zst").write_bytes(b"old one")
+    (tmp_path / "haul_1.tar.zst").write_bytes(b"old two")
+    assert [item.name for item in _chunk_files(staged)] == ["haul_0.tar.zst", "haul_1.tar.zst"]
+    (tmp_path / "haul_1.tar.zst").unlink()
+    (tmp_path / "haul_2.tar.zst").write_bytes(b"gap")
+    with pytest.raises(ValueError, match="incomplete or duplicate"):
+        _chunk_files(staged)
+    (tmp_path / "haul_2.tar.zst").unlink()
+    (tmp_path / "haul_1.tar.zst").write_bytes(b"old two")
+    (tmp_path / "haul.tar.zst.001").write_bytes(b"new")
+    with pytest.raises(ValueError, match="conflicting"):
+        _chunk_files(staged)
+
+
+def test_local_manifest_rejects_remote_digest_drift_before_manifest_output(tmp_path):
+    hauler = ManifestHauler(remote_digest="sha256:" + "b" * 64)
+    service = JATService(
+        hauler=hauler,
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda command: "/tools/docker" if command == "docker" else None,
+    )
+    output = tmp_path / "hauler-manifest.yaml"
+    result = service.manifest(
+        ManifestRequest(
+            output=output,
+            images=["backend/api:dev"],
+            registry_prefix="ghcr.io/acme",
+            publish_local=True,
+        )
+    )
+
+    assert not result.success
+    assert "different digest than the pushed image" in result.diagnostics
+    assert not output.exists()
+    assert not any(call[0] == "manifest" for call in hauler.calls)
+
+
+def test_manifest_rejects_plain_http_for_non_loopback_registry_before_side_effects(tmp_path):
+    hauler = ManifestHauler()
+    service = JATService(
+        hauler=hauler,
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda command: "/tools/docker" if command == "docker" else None,
+    )
+    result = service.manifest(
+        ManifestRequest(
+            output=tmp_path / "hauler-manifest.yaml",
+            images=["backend/api:dev"],
+            registry_prefix="ghcr.io/acme",
+            publish_local=True,
+            plain_http=True,
+        )
+    )
+
+    assert not result.success
+    assert "--plain-http manifest acquisition is supported only for loopback registries" in result.diagnostics
+    assert not hauler.calls
+    assert not (tmp_path / "hauler-manifest.yaml").exists()
+
+def test_manifest_plain_http_allows_loopback_publish_and_fresh_pull(tmp_path):
+    hauler = ManifestHauler()
+    service = JATService(
+        hauler=hauler,
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda command: "/tools/docker" if command == "docker" else None,
+    )
+    output = tmp_path / "hauler-manifest.yaml"
+    result = service.manifest(
+        ManifestRequest(
+            output=output,
+            images=["backend/api:dev"],
+            registry_prefix="127.0.0.1:5000/acme",
+            publish_local=True,
+            plain_http=True,
+        )
+    )
+
+    assert result.success, result.diagnostics
+    assert ("copy", "staging-store", "registry://127.0.0.1:5000", None, True, False) in hauler.calls
+    assert any(call[0] == "sync" and call[1] == "remote-store" for call in hauler.calls)
+
+
+
+def test_manifest_insecure_transport_is_announced_and_receipted(tmp_path):
+    announcements = []
+    service = JATService(
+        hauler=ManifestHauler(),
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda _command: None,
+        announce=announcements.append,
+    )
+    result = service.manifest(
+        ManifestRequest(
+            output=tmp_path / "hauler-manifest.yaml",
+            images=["ghcr.io/acme/api:v1"],
+            insecure_skip_tls_verify=True,
+        )
+    )
+
+    assert result.success, result.diagnostics
+    assert result.manifest.tls_verification == "disabled"
+    assert any("TLS verification is disabled" in message for message in announcements)
+
+
+def test_local_digest_only_image_is_not_treated_as_a_registry_reference(tmp_path):
+    hauler = ManifestHauler()
+    service = JATService(
+        hauler=hauler,
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda command: "/tools/docker" if command == "docker" else None,
+    )
+    output = tmp_path / "hauler-manifest.yaml"
+    result = service.manifest(
+        ManifestRequest(
+            output=output,
+            images=["api@sha256:" + "a" * 64],
+            registry_prefix="ghcr.io/acme",
+            publish_local=True,
+        )
+    )
+
+    assert not result.success
+    assert "tagged and unambiguous" in result.diagnostics
+    assert not output.exists()
+    assert not any(call[0] == "add-local" for call in hauler.calls)
+
+
+def test_manifest_receipt_preserves_multi_platform_image_inventory(tmp_path):
+    hauler = ManifestHauler(multi_platform=True)
+    service = JATService(
+        hauler=hauler,
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda _command: None,
+    )
+    result = service.manifest(
+        ManifestRequest(
+            output=tmp_path / "hauler-manifest.yaml",
+            images=["ghcr.io/acme/api:v1"],
+        )
+    )
+
+    assert result.success, result.diagnostics
+    assert {entry.platform for entry in result.inventory} == {"linux/amd64", "linux/arm64"}
+    assert {entry.digest for entry in result.inventory} == {"sha256:" + "a" * 64, "sha256:" + "b" * 64}
+
+
+def test_manifest_integrity_check_failure_returns_bounded_structured_evidence(tmp_path):
+    hauler = ManifestHauler()
+    hauler.check_inventory = [
+        {
+            "Reference": "ghcr.io/acme/api:v1",
+            "Type": "image",
+            "Problems": ["digest-mismatch: sha256:bad"],
+        }
+    ]
+    service = JATService(
+        hauler=hauler,
+        runner=ManifestRunner(),
+        producer_version="synthetic-version",
+        which=lambda _command: None,
+    )
+    output = tmp_path / "hauler-manifest.yaml"
+    result = service.manifest(
+        ManifestRequest(output=output, images=["ghcr.io/acme/api:v1"], check=True)
+    )
+
+    assert not result.success
+    assert "Hauler integrity check failed" in result.diagnostics
+    assert '"digest-mismatch: sha256:bad"' in result.diagnostics
+    assert not output.exists()
+    assert not any(call[0] == "manifest" for call in hauler.calls)
+
+
+def test_registry_reference_matching_accepts_hauler_canonicalization():
+    from jat.services import _canonical_image_reference
+
+    assert _canonical_image_reference("docker.io/library/alpine") == "index.docker.io/library/alpine:latest"
+    assert _canonical_image_reference("index.docker.io/library/alpine:latest") == "index.docker.io/library/alpine:latest"
+    digest = "sha256:" + "a" * 64
+    assert _canonical_image_reference(f"ghcr.io/acme/api@{digest}") == f"ghcr.io/acme/api@{digest}"

@@ -15,11 +15,13 @@ class RecordingRunner:
     def __init__(self, responses=None):
         self.calls = []
         self.cwds = []
+        self.environments = []
         self.responses = list(responses or [])
 
-    def run(self, argv, timeout=None, foreground=False, secrets=(), cwd=None):
+    def run(self, argv, timeout=None, foreground=False, secrets=(), cwd=None, on_line=None, env=None):
         self.calls.append((argv, timeout, foreground, secrets))
         self.cwds.append(cwd)
+        self.environments.append(env)
         if self.responses:
             return self.responses.pop(0)
         return ProcessResult(argv=argv, exit_status=0)
@@ -625,8 +627,9 @@ def test_hauler_serve_commands_include_executable_and_optional_log_level(tmp_pat
 
 def test_hauler_long_operations_stream_progress_when_a_sink_is_attached(tmp_path):
     class StreamingRunner(RecordingRunner):
-        def run(self, argv, timeout=None, foreground=False, secrets=(), cwd=None, on_line=None):
+        def run(self, argv, timeout=None, foreground=False, secrets=(), cwd=None, on_line=None, env=None):
             self.calls.append((argv, timeout, foreground, secrets))
+            self.environments.append(env)
             if on_line is not None:
                 on_line("transferring blob 1/2")
             return result(argv=argv)
@@ -639,3 +642,100 @@ def test_hauler_long_operations_stream_progress_when_a_sink_is_attached(tmp_path
     quiet = HaulerAdapter(RecordingRunner(), executable="/tools/hauler")
     quiet.sync(tmp_path / "store", tmp_path / "temp", "manifest.yaml")
     assert all("on_line" not in str(call) for call in quiet.runner.calls)
+
+def test_hauler_v21_inventory_manifest_policy_and_hostile_environment(tmp_path, monkeypatch):
+    digest = "sha256:" + "a" * 64
+    runner = RecordingRunner(
+        [
+            result(
+                stdout=(
+                    f'{{"store-id":"store-123","artifacts":[{{"reference":"ghcr.io/acme/api:v1",'
+                    f'"type":"image","platform":"linux/amd64","digest":"{digest}","layers":7,"size":23}}]}}'
+                )
+            )
+        ]
+    )
+    monkeypatch.setenv("HAULER_IGNORE_ERRORS", "true")
+    adapter = HaulerAdapter(runner, executable="/tools/hauler")
+    store, temp, output = tmp_path / "store", tmp_path / "temp", tmp_path / "hauler-manifest.yaml"
+    assert adapter.inventory(store, temp) == [
+        {
+            "Reference": "ghcr.io/acme/api:v1",
+            "Type": "image",
+            "Platform": "linux/amd64",
+            "Digest": digest,
+            "Layers": 7,
+            "Size": 23,
+        }
+    ]
+    assert adapter.store_id == "store-123"
+    adapter.create_manifest(store, temp, output)
+    adapter.sync_image_txt(
+        store,
+        temp,
+        ["./images.txt"],
+        retries=4,
+        concurrency=8,
+        ca_file=tmp_path / "ca.pem",
+        platform="linux/amd64",
+    )
+    assert runner.calls[1][0] == [
+        "/tools/hauler",
+        "store",
+        "create",
+        "manifest",
+        "--store",
+        str(store),
+        "--tempdir",
+        str(temp),
+        "--output",
+        str(output),
+    ]
+    assert runner.calls[2][0][-10:] == [
+        "--platform",
+        "linux/amd64",
+        "--image-txt",
+        "./images.txt",
+        "--retries",
+        "4",
+        "--concurrency",
+        "8",
+        "--ca-file",
+        str(tmp_path / "ca.pem"),
+    ]
+    assert all("HAULER_IGNORE_ERRORS" not in environment for environment in runner.environments)
+
+
+def test_hauler_inventory_check_and_tls_policy_are_fail_closed(tmp_path):
+    runner = RecordingRunner([result(stdout='{"store-id":"store-456","artifacts":[]}'), result()])
+    adapter = HaulerAdapter(runner, executable="/tools/hauler")
+    adapter.inventory(tmp_path / "store", tmp_path / "temp", check=True)
+    assert "--check" in runner.calls[0][0]
+    adapter.sync_image_txt(
+        tmp_path / "store",
+        tmp_path / "temp",
+        ["./images.txt"],
+        insecure_skip_tls_verify=True,
+    )
+    assert "--insecure-skip-tls-verify" in runner.calls[1][0]
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        adapter.sync_image_txt(
+            tmp_path / "store",
+            tmp_path / "temp",
+            ["./images.txt"],
+            ca_file=tmp_path / "ca.pem",
+            insecure_skip_tls_verify=True,
+        )
+
+
+def test_hauler_inventory_accepts_legacy_v20_array_shape(tmp_path):
+    digest = "sha256:" + "a" * 64
+    runner = RecordingRunner(
+        [result(stdout=f'[{{"Reference":"ghcr.io/acme/api:v1","Type":"image","Digest":"{digest}"}}]')]
+    )
+    adapter = HaulerAdapter(runner, executable="/tools/hauler")
+
+    inventory = adapter.inventory(tmp_path / "store", tmp_path / "temp")
+
+    assert inventory == [{"Reference": "ghcr.io/acme/api:v1", "Type": "image", "Digest": digest}]
+    assert adapter.store_id is None

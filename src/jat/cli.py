@@ -12,6 +12,7 @@ from .models import (
     ExportRequest,
     ExtractRequest,
     InspectRequest,
+    ManifestRequest,
     OperationResult,
     RestoreRequest,
     ServeRequest,
@@ -19,7 +20,7 @@ from .models import (
 from .runtime import configure_runtime
 from .services import JATService
 
-_OPERATIONS = frozenset(("build", "restore", "inspect", "extract", "serve", "export", "copy", "doctor"))
+_OPERATIONS = frozenset(("build", "restore", "inspect", "extract", "serve", "export", "copy", "manifest", "doctor"))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -58,12 +59,28 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--retries",
         type=int,
-        default=3,
+        default=None,
         help="Transfer reliability policy for retry-capable Hauler operations (minimum 1)",
     )
+    build.add_argument("--concurrency", type=int)
     build.add_argument("--rcc-environment", choices=("off", "auto", "required"), default="off")
     build.add_argument("--rcc-robot")
     build.add_argument("--json", action="store_true")
+
+    manifest = subcommands.add_parser("manifest", help="Acquire images and generate a Hauler composition manifest")
+    manifest.add_argument("--image", action="append", default=[], dest="images")
+    manifest.add_argument("--images-file", action="append", default=[], dest="images_files")
+    manifest.add_argument("--output", required=True)
+    manifest.add_argument("--platform")
+    manifest.add_argument("--registry-prefix")
+    manifest.add_argument("--publish-local", action="store_true")
+    manifest.add_argument("--concurrency", type=int)
+    manifest.add_argument("--retries", type=int)
+    manifest.add_argument("--ca-file")
+    manifest.add_argument("--insecure-skip-tls-verify", action="store_true")
+    manifest.add_argument("--plain-http", action="store_true")
+    manifest.add_argument("--check", action="store_true")
+    manifest.add_argument("--json", action="store_true")
 
     restore = subcommands.add_parser("restore", help="Restore a workspace from a capsule")
     restore.add_argument("--haul", required=True)
@@ -172,6 +189,24 @@ def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:
                 retries=parsed.retries,
                 rcc_environment=parsed.rcc_environment,
                 rcc_robot=parsed.rcc_robot,
+                concurrency=parsed.concurrency,
+            )
+        )
+    if parsed.command == "manifest":
+        return service.manifest(
+            ManifestRequest(
+                output=parsed.output,
+                images=parsed.images,
+                images_files=parsed.images_files,
+                platform=parsed.platform,
+                registry_prefix=parsed.registry_prefix,
+                publish_local=parsed.publish_local,
+                concurrency=parsed.concurrency,
+                retries=parsed.retries,
+                ca_file=parsed.ca_file,
+                insecure_skip_tls_verify=parsed.insecure_skip_tls_verify,
+                plain_http=parsed.plain_http,
+                check=parsed.check,
             )
         )
     if parsed.command == "restore":
@@ -262,6 +297,13 @@ def _print_result(result: OperationResult, as_json: bool) -> None:
         print(f"  payload: {result.payload_path}", file=stream)
     for output in result.payloads or []:
         print(f"  output: {output.path} ({output.size} bytes, sha256 {output.sha256[:16]}...)", file=stream)
+    if result.manifest is not None:
+        artifact = result.manifest.output
+        print(
+            f"  manifest: {artifact.path} ({artifact.size} bytes, sha256 {artifact.sha256[:16]}...)",
+            file=stream,
+        )
+        print(f"  registry TLS verification: {result.manifest.tls_verification}", file=stream)
     if result.inventory is not None:
         for entry in result.inventory:
             print(f"  {entry.type}: {entry.reference}", file=stream)

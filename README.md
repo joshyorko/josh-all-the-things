@@ -9,7 +9,7 @@ payload that gives RCC-aware consumers exact environment reconstruction — it i
 not the definition of a JAT.
 
 JAT runs as an RCC robot, from a self-contained RCC bundle, or through the
-standalone Python `jat` command. Hauler (pinned: v2.0.3) owns the OCI content,
+standalone Python `jat` command. Hauler (pinned: v2.1.1) owns the OCI content,
 store, transfer, and serving mechanics; JAT gives the capsule a small, safe,
 human-friendly contract.
 
@@ -311,7 +311,7 @@ Hauler manifests are the **advanced declarative composition boundary**. Simple
 JAT flags cover common use; users and agents who need rich Hauler behavior
 express it in Hauler's own manifest model instead of a parallel JAT DSL.
 
-For the pinned v2.0.3, ordinary manifests support exactly three content kinds:
+For the pinned v2.1.1, ordinary manifests support exactly three content kinds:
 `Files`, `Images`, and `Charts`. (Hauler also has a separate product/collection
 acquisition path via `store sync --products`; that is a different mechanism and
 is not part of `--hauler-manifest`.)
@@ -324,6 +324,51 @@ duplicates a reserved anchor reference (`joshs-all-the-things-workspace.tar.zst`
 `homebrew-recovery.tar.zst`, `rcc-environment.rcca`,
 `rcc-environment-metadata.json`), the build fails instead of producing a capsule
 that cannot restore the intended workspace.
+
+### Bootstrap a Registry-Backed Hauler Manifest
+
+Use `jat manifest` to create a Hauler-authored acquisition recipe before sealing
+a capsule:
+
+```bash
+./jat manifest \
+  --image ghcr.io/acme/api:v1.4.2 \
+  --image ghcr.io/acme/worker:v1.4.2 \
+  --concurrency 8 \
+  --output ./hauler-manifest.yaml \
+  --json
+```
+
+Images are acquired through Hauler's native registry sync (including its auth,
+signature verification, extras/referrers, and concurrency behavior). The output
+is create-only. The format-v2 receipt records its SHA-256, store identity when
+available, and resolved inventory digests; those digests describe this run and
+do not make mutable tags immutable. Use the generated manifest with
+`jat build --folder ./project --hauler-manifest ./hauler-manifest.yaml
+--output ./project-jat.tar.zst`.
+
+For a local-only Docker image, publishing must be explicitly authorized and
+requires a registry prefix:
+
+```bash
+./jat manifest --image api:dev --registry-prefix ghcr.io/acme \
+  --publish-local --output ./hauler-manifest.yaml
+```
+
+JAT asks Hauler to add/rewrite and push through existing Docker/Hauler
+credentials, then creates a **fresh store** and pulls the published remote ref
+before generating the final manifest. Without `--publish-local`, JAT never
+pushes local images. JAT does not accept credentials; configure Docker,
+Podman/`REGISTRY_AUTH_FILE`, credential helpers, or `hauler login` directly.
+Hauler v2.1.1 supports `--plain-http` for registry copy, and automatically
+uses HTTP for loopback registry pulls. Manifest operations with
+`--plain-http` are therefore limited to loopback registry references; JAT
+rejects non-loopback references and `--images-file` combinations before any
+registry operation. The flag does not enable plain HTTP for arbitrary
+non-loopback sync targets.
+`--ca-file` and the visually explicit `--insecure-skip-tls-verify` are mutually
+exclusive; `--check` requests Hauler's more expensive full store integrity
+check. Receipts never contain CA contents or credentials.
 
 ### Slim Acquisition and Transfer Retries
 
@@ -339,13 +384,10 @@ rcc task script -r robot.yaml -- ./jat build \
 - By default remote image/chart acquisition keeps Hauler's associated extras:
   cosign signatures, attestations, SBOMs, and OCI referrers.
 - `--exclude-extras` is an explicit opt-out for smaller/slimmer acquisition.
-- `--retries` is a bounded integer `>= 1` and describes **transfer reliability
-  policy for retry-capable Hauler operations** (remote image pulls, images.txt
-  acquisition, Helm image closure, and registry pushes). Hauler's own default is
-  3 attempts with a 5-second sleep. It is not a magic wrapper around every JAT
-  step: local file ingestion and local Docker `--local` capture are not
-  retry-wrapped remote transfers. JAT has no best-effort/ignore-errors mode; a
-  failed transfer fails the operation.
+- `--retries` is an optional integer `>= 1`. When omitted, Hauler retains its
+  manifest/environment/default retry precedence. An explicit JAT value wins.
+  It describes transfer retries only and does not retry signature verification
+  failures. JAT has no best-effort/ignore-errors mode; a failed transfer fails.
 
 ### Build a Chunked Haul
 
@@ -356,21 +398,19 @@ rcc task script -r robot.yaml -- ./jat build \
   --output ./chunked-haul.tar.zst
 ```
 
-Hauler v2.0.3 splits the haul into chunks named `<base>_<index><ext>` starting
-at zero (`chunked-haul_0.tar.zst`, `chunked-haul_1.tar.zst`, ...). Chunked
-output must therefore be a `.tar` or `.tar.zst` archive name: the pinned binary
-can split any container, but its own loader cannot reload other chunk
-containers, so JAT rejects other output names before any capture work. Only
-Hauler's own size units are accepted — a positive byte count with an optional
-`K`, `KB`, `M`, `MB`, `G`, `GB`, `T`, or `TB` suffix (binary multiples,
-case-insensitive, e.g. `500M`, `1G`, `500MB`, `1048576`); forms like `1B`,
-`1Mi`, or `1KiB` are rejected before any capture work. The build promotes **all** chunks atomically —
-every sibling name is reserved create-only and a failed promotion rolls back the
-links it created, so a failed build never leaves a partial set — and the receipt
-lists every chunk with path, size, and SHA-256. Consumers (`inspect`, `restore`,
-`serve`, `export`, `copy`) accept the `_0` entrypoint and Hauler reassembles the
-set automatically. Chunking and containerd export are mutually exclusive in
-Hauler v2.0.3; JAT rejects the combination instead of guessing.
+Hauler v2.1.1 names new chunk files `<output>.001`, `<output>.002`, and so on
+(`chunked-haul.tar.zst.001`, ...). JAT promotes all chunks atomically and reports
+each path, size, and SHA-256. Existing v2.0.3 underscore chunk entrypoints
+(`<base>_0<ext>`) remain discoverable for loading where Hauler supports them.
+Chunked output must be a `.tar` or `.tar.zst` archive name, since Hauler cannot
+reload other chunk containers. Hauler's binary size units are positive byte
+counts with an optional `K`, `KB`, `M`, `MB`, `G`, `GB`, `T`, or `TB` suffix
+(binary multiples; e.g. `500M`, `1G`, `500MB`, `1048576`). Chunking and
+containerd export are mutually exclusive.
+
+Hauler stores are ephemeral and JAT-owned. Do not hand a store containing
+multiple digest entries for the same repository to an older Hauler and write it
+back: that downgrade can lose inventory entries.
 
 ### Inspect a Capsule
 

@@ -119,3 +119,22 @@ def test_supervise_stops_all_children_on_cancellation(monkeypatch):
 def test_supervise_rejects_an_empty_command_list():
     with pytest.raises(ValueError):
         ProcessRunner().supervise([])
+
+
+def test_supervise_passes_explicit_environment_to_children(tmp_path):
+    destination = tmp_path / "child-env.txt"
+    script = streaming_script(
+        tmp_path,
+        "import os, sys\n"
+        "with open(sys.argv[1], 'w') as output:\n"
+        "    output.write(os.environ['JAT_TEST_VALUE'])\n",
+    )
+
+    completed = ProcessRunner().supervise(
+        [[sys.executable, str(script), str(destination)]],
+        timeout=30,
+        env={"JAT_TEST_VALUE": "scoped"},
+    )
+
+    assert completed.success
+    assert destination.read_text() == "scoped"

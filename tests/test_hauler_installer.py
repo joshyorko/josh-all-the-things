@@ -13,7 +13,7 @@ from scripts.install_hauler import install, resolve_platform
 ROOT = Path(__file__).parents[1]
 
 
-def _archive(path: Path, executable: str = "hauler", version: str = "v2.0.3") -> bytes:
+def _archive(path: Path, executable: str = "hauler", version: str = "v2.1.1") -> bytes:
     payload = f"#!/bin/sh\nprintf 'GitVersion:    {version}\\n'\n".encode()
     with tarfile.open(path, "w:gz") as archive:
         info = tarfile.TarInfo(executable)
@@ -28,7 +28,7 @@ def _archive(path: Path, executable: str = "hauler", version: str = "v2.0.3") ->
     return path.read_bytes()
 
 
-def _manifest(tmp_path: Path, *, platform: str, asset: str, payload: bytes, version: str = "v2.0.3") -> Path:
+def _manifest(tmp_path: Path, *, platform: str, asset: str, payload: bytes, version: str = "v2.1.1") -> Path:
     manifest = tmp_path / "hauler.json"
     manifest.write_text(
         json.dumps(
@@ -70,18 +70,18 @@ def test_canonical_manifest_contains_official_linux_and_windows_pins():
     assert manifest == {
         "schema_version": 1,
         "hauler": {
-            "version": "v2.0.3",
+            "version": "v2.1.1",
             "platforms": {
                 "linux-amd64": {
-                    "asset": "hauler_2.0.3_linux_amd64.tar.gz",
-                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.0.3/hauler_2.0.3_linux_amd64.tar.gz",
-                    "sha256": "6685eb1ba86291566f3694d69a8b7e80c928e5a589853691cccf51b26bc61617",
+                    "asset": "hauler_2.1.1_linux_amd64.tar.gz",
+                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.1.1/hauler_2.1.1_linux_amd64.tar.gz",
+                    "sha256": "faa4d9602fdf92c2cb96eaaa3ba0889a54d2c415ba8806cda394cde5f9355b18",
                     "executable": "hauler",
                 },
                 "windows-amd64": {
-                    "asset": "hauler_2.0.3_windows_amd64.tar.gz",
-                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.0.3/hauler_2.0.3_windows_amd64.tar.gz",
-                    "sha256": "e272b51f8323e6ca9a017f81821294a3cc55019f5e67cca525fa0efb8536b8c0",
+                    "asset": "hauler_2.1.1_windows_amd64.tar.gz",
+                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.1.1/hauler_2.1.1_windows_amd64.tar.gz",
+                    "sha256": "f6f4f524854f8efa9999a33924b93848eaacb12877181677442ebc0fe6d9d67a",
                     "executable": "hauler.exe",
                 },
             },
@@ -97,7 +97,7 @@ def test_windows_installs_exe_into_conda_scripts_without_admin(tmp_path):
     manifest = _manifest(
         tmp_path,
         platform="windows-amd64",
-        asset="hauler_2.0.3_windows_amd64.tar.gz",
+        asset="hauler_2.1.1_windows_amd64.tar.gz",
         payload=payload,
     )
 
@@ -110,7 +110,7 @@ def test_windows_installs_exe_into_conda_scripts_without_admin(tmp_path):
     )
 
     assert target == conda / "Scripts" / "hauler.exe"
-    assert target.read_bytes() == b"#!/bin/sh\nprintf 'GitVersion:    v2.0.3\\n'\n"
+    assert target.read_bytes() == b"#!/bin/sh\nprintf 'GitVersion:    v2.1.1\\n'\n"
     assert stat.S_IMODE(target.stat().st_mode) & 0o111
 
 
@@ -122,7 +122,7 @@ def test_linux_installs_into_conda_bin_and_reuses_matching_target(tmp_path):
     manifest = _manifest(
         tmp_path,
         platform="linux-amd64",
-        asset="hauler_2.0.3_linux_amd64.tar.gz",
+        asset="hauler_2.1.1_linux_amd64.tar.gz",
         payload=payload,
     )
     calls = []
@@ -144,7 +144,7 @@ def test_checksum_mismatch_fails_before_promotion(tmp_path):
     manifest = _manifest(
         tmp_path,
         platform="linux-amd64",
-        asset="hauler_2.0.3_linux_amd64.tar.gz",
+        asset="hauler_2.1.1_linux_amd64.tar.gz",
         payload=payload + b"tampered",
     )
     conda = tmp_path / "conda"
@@ -167,7 +167,7 @@ def test_unsafe_archive_fails_before_promotion(tmp_path):
     manifest = _manifest(
         tmp_path,
         platform="linux-amd64",
-        asset="hauler_2.0.3_linux_amd64.tar.gz",
+        asset="hauler_2.1.1_linux_amd64.tar.gz",
         payload=payload,
     )
     conda = tmp_path / "conda"
@@ -185,9 +185,9 @@ def test_mismatched_existing_installation_fails_closed(tmp_path):
     manifest = _manifest(
         tmp_path,
         platform="linux-amd64",
-        asset="hauler_2.0.3_linux_amd64.tar.gz",
+        asset="hauler_2.1.1_linux_amd64.tar.gz",
         payload=payload,
-        version="v2.0.3",
+        version="v2.1.1",
     )
     conda = tmp_path / "conda"
     target = conda / "bin" / "hauler"
@@ -198,3 +198,21 @@ def test_mismatched_existing_installation_fails_closed(tmp_path):
     with pytest.raises(ValueError, match="does not match"):
         install(manifest, conda, system="Linux", machine="x86_64", download=_download(payload))
     assert target.read_bytes().endswith(b"v1.0.0\\n'\n")
+
+
+def test_unprefixed_hauler_git_version_matches_v_prefixed_release_pin(tmp_path):
+    archive = tmp_path / "archive.tar.gz"
+    payload = _archive(archive, version="2.1.1")
+    manifest = _manifest(
+        tmp_path,
+        platform="linux-amd64",
+        asset="hauler_2.1.1_linux_amd64.tar.gz",
+        payload=payload,
+        version="v2.1.1",
+    )
+    conda = tmp_path / "conda"
+    conda.mkdir()
+
+    target = install(manifest, conda, system="Linux", machine="x86_64", download=_download(payload))
+
+    assert target == conda / "bin" / "hauler"

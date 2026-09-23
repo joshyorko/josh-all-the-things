@@ -105,13 +105,21 @@ def _read_executable(archive_path: Path, executable: str) -> bytes:
 def _version_matches(target: Path, version: str) -> bool:
     try:
         result = subprocess.run(
-            [str(target), "version"], capture_output=True, text=True, encoding="utf-8",
-            errors="replace", check=False, timeout=30
+            [str(target), "version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
         return False
     output = f"{result.stdout}\n{result.stderr}"
-    return result.returncode == 0 and re.search(rf"GitVersion:\s*{re.escape(version)}(?:\s|$)", output) is not None
+    normalized_version = version.removeprefix("v")
+    return result.returncode == 0 and re.search(
+        rf"GitVersion:\s*v?{re.escape(normalized_version)}(?:\s|$)", output
+    ) is not None
 
 
 def install(

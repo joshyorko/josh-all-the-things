@@ -44,14 +44,15 @@ class ProcessRunner:
         cwd: str | os.PathLike[str] | None = None,
         on_line: Callable[[str], None] | None = None,
         line_limit: int = 2000,
+        env: dict[str, str] | None = None,
     ) -> ProcessResult:
         secret_values = tuple(secret for secret in secrets if secret)
         for secret in secret_values:
             log.hide_from_output(secret)
         log.info(f"Starting process: {Path(argv[0]).name}")
         if foreground or on_line is None:
-            return self._run_capturing(argv, timeout, foreground, secret_values, cwd)
-        return self._run_streaming(argv, timeout, secret_values, cwd, on_line, line_limit)
+            return self._run_capturing(argv, timeout, foreground, secret_values, cwd, env)
+        return self._run_streaming(argv, timeout, secret_values, cwd, on_line, line_limit, env)
 
     def _run_capturing(
         self,
@@ -60,6 +61,7 @@ class ProcessRunner:
         foreground: bool,
         secret_values: tuple[str, ...],
         cwd: str | os.PathLike[str] | None,
+        env: dict[str, str] | None,
     ) -> ProcessResult:
         process = subprocess.Popen(
             argv,
@@ -71,6 +73,7 @@ class ProcessRunner:
             errors="replace",
             start_new_session=os.name != "nt",
             cwd=cwd,
+            env=env,
         )
         try:
             stdout, stderr = process.communicate(timeout=timeout)
@@ -95,6 +98,7 @@ class ProcessRunner:
         cwd: str | os.PathLike[str] | None,
         on_line: Callable[[str], None],
         line_limit: int,
+        env: dict[str, str] | None,
     ) -> ProcessResult:
         """Capture bounded output while forwarding each truthful line."""
         process = subprocess.Popen(
@@ -108,6 +112,7 @@ class ProcessRunner:
             bufsize=1,
             start_new_session=os.name != "nt",
             cwd=cwd,
+            env=env,
         )
         state = {"forwarded": 0}
         tails: dict[str, list[str]] = {"stdout": [], "stderr": []}
@@ -187,6 +192,7 @@ class ProcessRunner:
         argvs: list[list[str]],
         timeout: float | None = None,
         secrets: Iterable[str] = (),
+        env: dict[str, str] | None = None,
     ) -> ProcessResult:
         """Run sibling foreground children; failure or cancellation stops all."""
         if not argvs:
@@ -205,6 +211,7 @@ class ProcessRunner:
                         stdout=None,
                         stderr=None,
                         start_new_session=os.name != "nt",
+                        env=env,
                     )
                 )
             deadline = None if timeout is None else time.monotonic() + timeout

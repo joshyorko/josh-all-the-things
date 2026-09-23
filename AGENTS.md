@@ -11,7 +11,7 @@ Hauler content (files, images, charts).
 - The standalone `jat` CLI is the canonical public operation contract; RCC
   tasks are compatibility adapters over the same service layer.
 - Hauler remains the capture/restore engine and the pinned Hauler release
-  (`runtime/hauler.json`, currently v2.0.3) is the implementation authority for
+  (`runtime/hauler.json`, currently v2.1.1) is the implementation authority for
   every Hauler flag and manifest behavior. GNU tar remains the compressed
   archive boundary.
 - Keep the standalone `jat` CLI and RCC tasks on the same Python service layer.
