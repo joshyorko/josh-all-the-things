@@ -506,13 +506,7 @@ def test_hauler_sync_accepts_multiple_manifests_with_retries_and_slim_policy(tmp
 def test_hauler_sync_image_txt_delegates_native_ingestion(tmp_path):
     runner = RecordingRunner()
     adapter = HaulerAdapter(runner, executable="/tools/hauler")
-    adapter.sync_image_txt(
-        tmp_path / "store",
-        tmp_path / "temp",
-        ["./images.txt", "https://example.test/images.txt"],
-        retries=4,
-        plain_http=True,
-    )
+    adapter.sync_image_txt(tmp_path / "store", tmp_path / "temp", ["./images.txt", "https://example.test/images.txt"], retries=4)
     assert runner.calls[0][0] == [
         "/tools/hauler",
         "store",
@@ -525,7 +519,6 @@ def test_hauler_sync_image_txt_delegates_native_ingestion(tmp_path):
         "./images.txt",
         "--image-txt",
         "https://example.test/images.txt",
-        "--plain-http",
         "--retries",
         "4",
     ]

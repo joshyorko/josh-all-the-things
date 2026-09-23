@@ -1360,7 +1360,6 @@ def test_manifest_remote_images_use_hauler_native_sync_and_receipt(tmp_path):
             ],
             concurrency=8,
             check=True,
-            plain_http=True,
         )
     )
     assert result.success and result.complete is True
@@ -1375,7 +1374,6 @@ def test_manifest_remote_images_use_hauler_native_sync_and_receipt(tmp_path):
         + "b" * 64
         + "\n"
     ]
-    assert sync[3]["plain_http"] is True
     assert sync[3]["concurrency"] == 8
     assert [call for call in hauler.calls if call[0] == "manifest"] == [("manifest", "remote-store")]
 

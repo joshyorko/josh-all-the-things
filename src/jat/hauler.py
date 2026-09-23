@@ -109,7 +109,6 @@ class HaulerAdapter:
         ca_file: Path | None = None,
         insecure_skip_tls_verify: bool = False,
         platform: str | None = None,
-        plain_http: bool = False,
     ):
         """Delegate image lists to Hauler's native concurrent acquisition."""
         if not sources:
@@ -121,8 +120,6 @@ class HaulerAdapter:
             arguments.extend(("--platform", platform))
         for source in sources:
             arguments.extend(("--image-txt", str(source)))
-        if plain_http:
-            arguments.append("--plain-http")
         arguments.extend(_policy_arguments(retries, concurrency, ca_file, insecure_skip_tls_verify))
         return self._run(arguments, stream=True)
     def add_local_image(self, store: Path, temp: Path, reference: str, rewrite: str):
