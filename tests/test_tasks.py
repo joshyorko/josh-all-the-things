@@ -115,21 +115,43 @@ def test_rcc_manifest_pins_current_linux_and_windows_assets_without_future_place
     manifest_text = manifest_path.read_text()
     manifest = json.loads(manifest_text)
     assert manifest["schema_version"] == 1
-    assert manifest["version"] == "v18.19.3"
+    assert manifest["version"] == "v18.19.5"
+    assert manifest["source"] == {
+        "repository": "https://github.com/joshyorko/rcc",
+        "tag": "v18.19.5",
+        "commit": "d1aec7d0bb897a81274423c7a6bb747233f9c263",
+    }
     assert manifest["platforms"] == {
         "linux_amd64": {
             "asset": "rcc-linux64",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-linux64",
-            "sha256": "7e588c01751ca2ae15ba13ef67f2f4b7567697a5a8389737059a73936f509428",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.5/rcc-linux64",
+            "sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e",
         },
         "windows_amd64": {
             "asset": "rcc-windows64.exe",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-windows64.exe",
-            "sha256": "523a6be8ad92235fbe0a4e4732699f2cd66f9ef6ad57e045df434257c46112e4",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.5/rcc-windows64.exe",
+            "sha256": "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731",
         },
     }
     for pin in manifest["platforms"].values():
         assert re.fullmatch(r"[0-9a-f]{64}", pin["sha256"])
+
+
+def test_current_artifact_candidate_pins_official_hauler_v211_checksums():
+    manifest = json.loads(Path("runtime/hauler.json").read_text())["hauler"]
+    assert manifest["version"] == "v2.1.1"
+    assert manifest["platforms"]["linux-amd64"] == {
+        "asset": "hauler_2.1.1_linux_amd64.tar.gz",
+        "url": "https://github.com/hauler-dev/hauler/releases/download/v2.1.1/hauler_2.1.1_linux_amd64.tar.gz",
+        "sha256": "faa4d9602fdf92c2cb96eaaa3ba0889a54d2c415ba8806cda394cde5f9355b18",
+        "executable": "hauler",
+    }
+    assert manifest["platforms"]["windows-amd64"] == {
+        "asset": "hauler_2.1.1_windows_amd64.tar.gz",
+        "url": "https://github.com/hauler-dev/hauler/releases/download/v2.1.1/hauler_2.1.1_windows_amd64.tar.gz",
+        "sha256": "f6f4f524854f8efa9999a33924b93848eaacb12877181677442ebc0fe6d9d67a",
+        "executable": "hauler.exe",
+    }
 
 
 def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():

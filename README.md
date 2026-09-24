@@ -53,15 +53,17 @@ its RCC-managed runtime; it is not the haul itself.
 
 ## Build a verified RCC Environment Artifact
 
-Build the canonical JAT runtime artifact with RCC v18.19.3. The builder uses
-isolated producer and verifier homes, publishes and exports through RCC's
-official Environment Artifact commands, acquires the archive into the fresh
-verifier, and proves ordinary `--no-build` resolution before promotion. RCC
-v18.19.3 resolves a relative `env exec` command before applying the child
-environment, so the Hauler check uses the artifact's Python to locate and run
-the `hauler` binary from the acquired Holotree. The launcher also requires the
-resolved executable to be below the acquired `CONDA_PREFIX`, preventing a
-contaminated host PATH from satisfying the proof:
+Build the canonical JAT runtime artifact with the checksum-pinned Josh RCC
+v18.19.5 release. The builder uses separate producer and fresh-verifier homes,
+publishes and exports with RCC's Environment Artifact commands, makes the
+producer unavailable, and proves fresh acquire, no-build resolution, env exec,
+and a second warm execution. Its receipt binds the exact JAT commit and RCC
+release source/asset/checksum to the artifact/specification identities and
+archive hash/size. The Hauler check runs through the acquired environment's
+Python and requires Hauler and Python below its `CONDA_PREFIX`, so host tools
+cannot satisfy the proof. RCC lifecycle adoption, deferred capabilities, and
+the official RCC v21.3.0 comparison are documented in
+[`docs/environment-artifact-lifecycle.md`](docs/environment-artifact-lifecycle.md).
 
 ```bash
 scripts/build_environment_artifact.sh \
@@ -69,12 +71,14 @@ scripts/build_environment_artifact.sh \
   --receipt dist/jat-runtime.json
 ```
 
-Both outputs are create-only. The receipt records RCC's artifact,
-specification, and legacy blueprint identities together with the exact JAT
-commit, RCC version, platform, archive SHA-256 and size, and fresh-home proofs.
-`verified_hauler.command` remains the logical `hauler version` operation;
-`verified_hauler.launcher` records the Python boundary used to prove it without
-a host Hauler.
+Both outputs are create-only. The format-version 3 receipt binds RCC's artifact,
+specification, and legacy blueprint identities to the exact JAT commit, RCC
+source/binary checksum, Hauler release, platform, archive SHA-256/size, and
+fresh-acquire/no-build/Hauler/warm-provider proofs. `verified_hauler.command`
+remains the logical `hauler version` operation; `verified_hauler.launcher`
+records the Python boundary used to prove it without a host Hauler. The publisher
+rejects v2 receipts and emits the v3 receipt media type; the `.rcca` identity
+and RCC artifact archive format are unchanged.
 RCC owns environment inventory and materialization; JAT does not export or
 import raw Holotree state.
 

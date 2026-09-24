@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from jsonschema import validate
 
-from scripts.build_environment_artifact import HAULER_VERSION_COMMAND, _stage_copy, build_parser, main
+from scripts.build_environment_artifact import HAULER_VERSION_COMMAND, RCC_SOURCE, _stage_copy, build_parser, main
 
 
 HAULER_VERSION_CHECK = (
@@ -44,7 +44,7 @@ def write_fake_rcc(path: Path, log: Path) -> None:
         "    exit_code = 127 if command == ['hauler', 'version'] else 0\n"
         "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': exit_code}))\n"
         "elif args == ['version']:\n"
-        "    print(os.environ.get('JAT_FAKE_RCC_VERSION', 'v18.19.3'))\n"
+        "    print(os.environ.get('JAT_FAKE_RCC_VERSION', 'v18.19.5'))\n"
     )
     path.chmod(0o755)
 
@@ -71,7 +71,9 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
     rcc = tmp_path / "rcc"
     log = tmp_path / "rcc.log"
     write_fake_rcc(rcc, log)
-    monkeypatch.setenv("JAT_GIT_SHA", "d" * 40)
+    monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "0" * 64})
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    monkeypatch.setattr("scripts.build_environment_artifact._git_sha", lambda root, env, timeout: "d" * 40)
     output = tmp_path / "dist" / "jat-runtime.rcca"
     receipt = tmp_path / "dist" / "jat-runtime.json"
 
@@ -102,6 +104,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "-c",
         HAULER_VERSION_CHECK,
     ]
+    assert calls[7][:3] == ["--no-build", "env", "exec"]
 
     result = json.loads(receipt.read_text())
     validate(instance=result, schema=json.loads((Path(__file__).parents[1] / "docs/environment-artifact-receipt.schema.json").read_text()))
@@ -113,11 +116,13 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
     assert result == {
         "artifact_digest": "sha256:" + "a" * 64,
         "archive": {"filename": "jat-runtime.rcca", "sha256": hashlib.sha256(b"RCCA").hexdigest(), "size": 4},
-        "format_version": 2,
+        "format_version": 3,
         "jat_git_sha": "d" * 40,
         "legacy_blueprint_key": "c" * 16,
         "platform": result["platform"],
-        "rcc_version": "v18.19.3",
+        "rcc_version": "v18.19.5",
+        "hauler_version": "v2.1.1",
+        "rcc_source": {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "0" * 64},
         "specification_digest": "sha256:" + "b" * 64,
         "operation": "build",
         "success": True,
@@ -132,6 +137,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
             "exit_code": 0,
         },
         "verified_no_build": {"fresh_home": True, "no_build": True},
+        "verified_warm_reuse": {"fresh_home": True, "no_build": True, "provider_unavailable": True},
     }
 
 
@@ -191,7 +197,7 @@ def test_builder_rejects_unsupported_rcc_before_publish(tmp_path, monkeypatch):
     write_fake_rcc(rcc, log)
     monkeypatch.setenv("JAT_FAKE_RCC_VERSION", "v18.19.2")
 
-    with pytest.raises(RuntimeError, match="v18.19.3"):
+    with pytest.raises(RuntimeError, match="v18.19.5"):
         main([
             "--robot",
             str(robot),
@@ -211,7 +217,9 @@ def test_builder_keeps_final_outputs_absent_when_fresh_verification_fails(tmp_pa
     rcc = tmp_path / "rcc"
     log = tmp_path / "rcc.log"
     write_fake_rcc(rcc, log)
-    monkeypatch.setenv("JAT_GIT_SHA", "d" * 40)
+    monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "0" * 64})
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    monkeypatch.setattr("scripts.build_environment_artifact._git_sha", lambda root, env, timeout: "d" * 40)
     output = tmp_path / "dist" / "jat-runtime.rcca"
     receipt = tmp_path / "dist" / "jat-runtime.json"
     monkeypatch.setenv("JAT_FAKE_RCC_FAIL_ACQUIRE", "1")
@@ -247,12 +255,14 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
     receipt.write_text(
         json.dumps(
             {
-                "format_version": 2,
+                "format_version": 3,
                 "operation": "build",
                 "success": True,
-                "jat_git_sha": "0" * 40,
+                "jat_git_sha": subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip(),
                 "rcc_executable": "/synthetic/rcc",
-                "rcc_version": "v18.19.3",
+                "rcc_version": "v18.19.5",
+                "hauler_version": "v2.1.1",
+                "rcc_source": {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e"},
                 "platform": "linux_amd64",
                 "artifact_digest": "sha256:" + "a" * 64,
                 "specification_digest": "sha256:" + "b" * 64,
@@ -264,6 +274,7 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
                 },
                 "verified_acquire": {"fresh_home": True, "no_build": True},
                 "verified_no_build": {"fresh_home": True, "no_build": True},
+                "verified_warm_reuse": {"fresh_home": True, "no_build": True, "provider_unavailable": True},
                 "verified_exec": {"fresh_home": True},
                 "verified_hauler": {
                     "fresh_home": True,
@@ -321,11 +332,12 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
             "--artifact-type",
             "application/vnd.joshyorko.rcc-environment-artifact.v2",
             "jat-runtime.rcca:application/vnd.joshyorko.rcc-environment-artifact.v2+rcca",
-            "jat-runtime.json:application/vnd.joshyorko.rcc-environment-artifact-receipt.v2+json",
+            "jat-runtime.json:application/vnd.joshyorko.rcc-environment-artifact-receipt.v3+json",
         ],
         ["manifest", "fetch", "--descriptor", reference],
     ]
 
+    valid_receipt = json.loads(receipt.read_text())
     weak = json.loads(receipt.read_text())
     weak["verified_hauler"]["launcher"] = [
         "python",
@@ -378,6 +390,27 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
     )
     assert rejected.returncode != 0
     assert not oras_log.exists(), "invalid receipt reached ORAS"
+    stale_source = dict(valid_receipt)
+    stale_source["jat_git_sha"] = "1" * 40
+    receipt.write_text(json.dumps(stale_source) + "\n")
+    stale_rejected = subprocess.run(
+        [
+            str(root / "scripts/publish_environment_artifact.sh"),
+            "--archive",
+            str(archive),
+            "--receipt",
+            str(receipt),
+            "--repository",
+            "ghcr.io/example/jat-runtime",
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert stale_rejected.returncode != 0
+    assert not oras_log.exists(), "stale source receipt reached ORAS"
 
 
 def test_publish_wrapper_accepts_windows_archive_and_keeps_platform_tag(tmp_path):
@@ -390,12 +423,14 @@ def test_publish_wrapper_accepts_windows_archive_and_keeps_platform_tag(tmp_path
     archive.write_bytes(archive_bytes)
     receipt = tmp_path / "jat-runtime-windows.json"
     receipt_data = {
-        "format_version": 2,
+        "format_version": 3,
         "operation": "build",
         "success": True,
-        "jat_git_sha": "1" * 40,
+        "jat_git_sha": subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip(),
         "rcc_executable": "C:/runner/rcc.exe",
-        "rcc_version": "v18.19.3",
+        "rcc_version": "v18.19.5",
+        "rcc_source": {**RCC_SOURCE, "asset": "rcc-windows64.exe", "sha256": "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731"},
+        "hauler_version": "v2.1.1",
         "platform": "windows_amd64",
         "artifact_digest": "sha256:" + "e" * 64,
         "specification_digest": "sha256:" + "f" * 64,
@@ -404,6 +439,7 @@ def test_publish_wrapper_accepts_windows_archive_and_keeps_platform_tag(tmp_path
         "verified_acquire": {"fresh_home": True, "no_build": True},
         "verified_no_build": {"fresh_home": True, "no_build": True},
         "verified_exec": {"fresh_home": True},
+        "verified_warm_reuse": {"fresh_home": True, "no_build": True, "provider_unavailable": True},
         "verified_hauler": {
             "fresh_home": True,
             "command": ["hauler", "version"],
@@ -440,6 +476,7 @@ def test_publish_script_has_canonical_media_types_and_receipt_validation():
     root = Path(__file__).parents[1]
     script = (root / "scripts/publish_environment_artifact.sh").read_text()
     assert "application/vnd.joshyorko.rcc-environment-artifact.v2" in script
+    assert "environment-artifact-receipt.v3+json" in script
     assert "jat-runtime.rcca" in script
     assert "environment-artifact-receipt.schema.json" in script
     assert "GITHUB_TOKEN" in script
@@ -447,7 +484,7 @@ def test_publish_script_has_canonical_media_types_and_receipt_validation():
     assert "--password-stdin" in script
 
 
-def test_legacy_files_are_removed_and_new_receipt_schema_is_version_two():
+def test_legacy_files_are_removed_and_new_receipt_schema_is_version_three():
     root = Path(__file__).parents[1]
     for name in ("build_hololib.py", "build_hololib.sh", "publish_hololib.sh"):
         assert not (root / "scripts" / name).exists()
@@ -455,6 +492,7 @@ def test_legacy_files_are_removed_and_new_receipt_schema_is_version_two():
         assert not (root / name).exists()
     assert not (root / "docs/hololib-receipt.schema.json").exists()
     schema = json.loads((root / "docs/environment-artifact-receipt.schema.json").read_text())
-    assert schema["properties"]["format_version"]["const"] == 2
-    assert schema["properties"]["rcc_version"]["const"] == "v18.19.3"
+    assert schema["properties"]["format_version"]["const"] == 3
+    assert schema["properties"]["rcc_version"]["const"] == "v18.19.5"
+    assert schema["properties"]["hauler_version"]["const"] == "v2.1.1"
     assert "artifact_digest" in schema["required"]

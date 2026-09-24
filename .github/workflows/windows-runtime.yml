@@ -214,13 +214,29 @@ jobs:
             size = [int64](Get-Item -LiteralPath $env:WINDOWS_ARCHIVE).Length
           }
           $haulerVersionCode = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
+          $warmExecutionPath = Join-Path $env:RUNNER_TEMP "windows-warm-reuse.json"
+          $trustCarrier = Join-Path $env:ROBOCORP_HOME "artifacts\v1\content\trust"
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --provider "http://127.0.0.1:1" --trust-carrier $trustCarrier --trust-carrier-type filesystem --json -- python -c "print('jat-warm-reuse-proof')" 1> $warmExecutionPath 2> (Join-Path $env:RUNNER_TEMP "windows-warm-reuse.log")
+          if ($LASTEXITCODE -ne 0) { throw "warm no-build execution with an unreachable provider failed" }
+          $warmExecution = Get-Content -Raw $warmExecutionPath | ConvertFrom-Json
+          if ($warmExecution.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $warmExecution.exitCode -ne 0) { throw "warm no-build execution did not reuse the verified artifact" }
+          $manifest = Get-Content -Raw -LiteralPath (Join-Path $PWD "runtime/rcc.json") | ConvertFrom-Json
+          $haulerManifest = Get-Content -Raw -LiteralPath (Join-Path $PWD "runtime/hauler.json") | ConvertFrom-Json
           $receipt = [ordered]@{
-            format_version = 2
+            format_version = 3
             operation = "build"
             success = $true
             jat_git_sha = (& git rev-parse HEAD).Trim()
             rcc_executable = $env:RCC_PATH
-            rcc_version = "v18.19.3"
+            rcc_version = $manifest.version
+            hauler_version = $haulerManifest.hauler.version
+            rcc_source = [ordered]@{
+              repository = $manifest.source.repository
+              tag = $manifest.source.tag
+              commit = $manifest.source.commit
+              asset = $manifest.platforms.windows_amd64.asset
+              sha256 = $manifest.platforms.windows_amd64.sha256
+            }
             platform = "windows_amd64"
             artifact_digest = $env:WINDOWS_ARTIFACT
             specification_digest = $env:WINDOWS_SPECIFICATION_DIGEST
@@ -229,6 +245,7 @@ jobs:
             verified_acquire = [ordered]@{ fresh_home = $true; no_build = $true }
             verified_no_build = [ordered]@{ fresh_home = $true; no_build = $true }
             verified_exec = [ordered]@{ fresh_home = $true }
+            verified_warm_reuse = [ordered]@{ fresh_home = $true; no_build = $true; provider_unavailable = $true }
             verified_hauler = [ordered]@{
               fresh_home = $true
               command = @("hauler", "version")
@@ -308,9 +325,12 @@ jobs:
 
           receipt = json.loads(Path("dist/jat-runtime.json").read_text())
           assert receipt["platform"] == "linux_amd64"
-          assert receipt["rcc_version"] == "v18.19.3"
+          assert receipt["rcc_version"] == "v18.19.5"
+          assert receipt["rcc_source"]["commit"] == "d1aec7d0bb897a81274423c7a6bb747233f9c263"
+          assert receipt["hauler_version"] == "v2.1.1"
           assert receipt["verified_acquire"] == {"fresh_home": True, "no_build": True}
           assert receipt["verified_no_build"] == {"fresh_home": True, "no_build": True}
+          assert receipt["verified_warm_reuse"]["no_build"] is True
           assert receipt["verified_hauler"]["resolved_under_conda_prefix"] is True
           assert Path("dist/jat-runtime.rcca").is_file()
           print(json.dumps({"artifact_digest": receipt["artifact_digest"], "archive": receipt["archive"]}, sort_keys=True))

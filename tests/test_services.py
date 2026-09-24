@@ -210,7 +210,7 @@ class RccHauler(FakeHauler):
                 "archive": str(target.parent / "rcc-environment.rcca"),
                 "archive_sha256": hashlib.sha256(b"rcca").hexdigest(),
                 "archive_size": 4,
-                "rcc_version": "v18.19.3",
+                "rcc_version": "v18.19.5",
                 "robot": self.metadata_robot,
                 "provider": "local",
                 "acquired": False,
@@ -231,7 +231,7 @@ class FakeRcc:
             archive=archive,
             archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
             archive_size=4,
-            rcc_version="v18.19.3",
+            rcc_version="v18.19.5",
             robot=robot or source / "robot.yaml",
         )
 
@@ -244,7 +244,7 @@ class FakeRcc:
             archive=archive,
             archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
             archive_size=4,
-            rcc_version=rcc_version or "v18.19.3",
+            rcc_version=rcc_version or "v18.19.5",
             robot=robot,
             acquired=True,
         )

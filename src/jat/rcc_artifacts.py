@@ -8,7 +8,7 @@ from pathlib import Path
 from .models import EnvironmentArtifactMetadata
 from .process import ProcessRunner
 
-EXPECTED_RCC_VERSION = "v18.19.3"
+EXPECTED_RCC_VERSION = "v18.19.5"
 
 
 class RCCArtifactAdapter:
