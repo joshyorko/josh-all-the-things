@@ -10,6 +10,8 @@ on:
       - "runtime/hauler.json"
       - "scripts/install_hauler.py"
       - "scripts/build_environment_artifact.py"
+      - "scripts/publish_environment_artifact.sh"
+      - "scripts/publish_environment_artifacts.sh"
       - "src/jat/archive.py"
       - "src/jat/services.py"
       - "tests/**"
@@ -580,6 +582,7 @@ jobs:
           GITHUB_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
+          chmod +x scripts/publish_environment_artifact.sh
           scripts/publish_environment_artifacts.sh \
             --linux-archive dist/publish/linux/jat-runtime.rcca \
             --linux-receipt dist/publish/linux/jat-runtime.json \
