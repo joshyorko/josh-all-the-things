@@ -504,8 +504,10 @@ jobs:
         run: |
           set -euo pipefail
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$JAT_RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release tag already exists: $JAT_RELEASE_TAG" >&2
-            exit 1
+            existing_id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$JAT_RELEASE_TAG\") | .id" | head -n 1)
+            [[ -n "$existing_id" ]] || { echo "Release tag exists without a matching GitHub release" >&2; exit 1; }
+            existing_immutable=$(gh api "repos/$GITHUB_REPOSITORY/releases/$existing_id" --jq .immutable)
+            [[ "$existing_immutable" == true ]] || { echo "Release tag already exists but is not immutable" >&2; exit 1; }
           fi
           mkdir -p dist/publish/linux dist/publish/windows dist/release-assets
           python3 - <<'PY'
@@ -652,34 +654,68 @@ jobs:
           cat > "$notes" <<EOF
           ## JAT v0.1.11 runtime artifacts
 
-          Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source `$JAT_RELEASE_SOURCE_SHA` using Josh RCC v18.19.5 and Hauler v2.1.1.
+          Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source \`$JAT_RELEASE_SOURCE_SHA\` using Josh RCC v18.19.5 and Hauler v2.1.1.
 
           Workflow proof: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
 
-          Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. `SHA256SUMS` covers every attached runtime asset other than itself.
+          Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. \`SHA256SUMS\` covers every attached runtime asset other than itself.
 
           GHCR carriers:
           ```
           $(cat dist/carriers.txt)
           ```
           EOF
-          gh release create "$JAT_RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$JAT_RELEASE_SOURCE_SHA" \
-            --draft --prerelease \
-            --title "JAT v0.1.11 Linux and Windows runtime artifacts" \
-            --notes-file "$notes" \
-            dist/release-assets/environment_linux_amd64_freeze.yaml \
-            dist/release-assets/environment_windows_amd64_freeze.yaml \
-            dist/release-assets/jat-runtime-linux-amd64.json \
-            dist/release-assets/jat-runtime-linux-amd64.rcca \
-            dist/release-assets/jat-runtime-windows-amd64.json \
-            dist/release-assets/jat-runtime-windows-amd64.rcca \
-            dist/release-assets/jat-runtime-provenance.json \
-            dist/release-assets/SHA256SUMS
-          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$JAT_RELEASE_TAG" --jq .id)
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -F prerelease=true >/dev/null
-          immutable=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$JAT_RELEASE_TAG" --jq .immutable)
+          release_list="$RUNNER_TEMP/releases.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$release_list"
+          release_id=$(jq -r --arg tag "$JAT_RELEASE_TAG" '[.[] | select(.tag_name == $tag)] | first | .id // empty' "$release_list")
+          if [[ -z "$release_id" ]]; then
+            gh release create "$JAT_RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$JAT_RELEASE_SOURCE_SHA" \
+              --draft --prerelease \
+              --title "JAT v0.1.11 Linux and Windows runtime artifacts" \
+              --notes-file "$notes" \
+              dist/release-assets/environment_linux_amd64_freeze.yaml \
+              dist/release-assets/environment_windows_amd64_freeze.yaml \
+              dist/release-assets/jat-runtime-linux-amd64.json \
+              dist/release-assets/jat-runtime-linux-amd64.rcca \
+              dist/release-assets/jat-runtime-windows-amd64.json \
+              dist/release-assets/jat-runtime-windows-amd64.rcca \
+              dist/release-assets/jat-runtime-provenance.json \
+              dist/release-assets/SHA256SUMS
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$release_list"
+            release_id=$(jq -r --arg tag "$JAT_RELEASE_TAG" '[.[] | select(.tag_name == $tag)] | first | .id // empty' "$release_list")
+          fi
+          [[ -n "$release_id" ]] || { echo "Release ID was not returned by GitHub" >&2; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release.json"
+          python3 - "$RUNNER_TEMP/release.json" "$JAT_RELEASE_SOURCE_SHA" "$GITHUB_WORKSPACE" <<'PY'
+          import json, sys
+          release = json.load(open(sys.argv[1]))
+          source_sha = sys.argv[2]
+          expected = {
+              "environment_linux_amd64_freeze.yaml", "environment_windows_amd64_freeze.yaml",
+              "jat-runtime-linux-amd64.json", "jat-runtime-linux-amd64.rcca",
+              "jat-runtime-windows-amd64.json", "jat-runtime-windows-amd64.rcca",
+              "jat-runtime-provenance.json", "SHA256SUMS",
+          }
+          if release["tag_name"] != "v0.1.11-jat-runtime" or not release["target_commitish"].startswith(source_sha[:7]):
+              raise SystemExit("draft release tag or source commit does not match the JAT release")
+          assets = {asset["name"] for asset in release["assets"]}
+          if assets != expected:
+              raise SystemExit(f"release assets do not match the eight expected files: {sorted(assets)}")
+          if not release["draft"] and not release.get("immutable", False):
+              raise SystemExit("an existing published release is not immutable")
+          PY
+          if [[ $(jq -r .draft "$RUNNER_TEMP/release.json") == true ]]; then
+            python3 - "$notes" "$RUNNER_TEMP/release-patch.json" <<'PY'
+          import json, pathlib, sys
+          pathlib.Path(sys.argv[2]).write_text(json.dumps({
+              "body": pathlib.Path(sys.argv[1]).read_text(), "draft": False, "prerelease": True
+          }))
+          PY
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" --input "$RUNNER_TEMP/release-patch.json" >/dev/null
+          fi
+          immutable=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" --jq .immutable)
           [[ "$immutable" == true ]] || { echo "GitHub did not lock the published release as immutable" >&2; exit 1; }
 
   verify-published-linux:
