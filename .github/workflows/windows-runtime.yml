@@ -863,7 +863,7 @@ jobs:
           & $rcc --no-build env exec --artifact $artifact --permissive-local -- python -c $variablesCode 1> $variablesPath
           if ($LASTEXITCODE -ne 0) { throw "Windows release no-build artifact variables failed" }
           $runtimeVariables = Get-Content -Raw $variablesPath | ConvertFrom-Json
-          if ([string]::IsNullOrWhiteSpace($runtimeVariables.conda_prefix) -or -not $runtimeVariables.python.StartsWith($runtimeVariables.conda_prefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Windows release variables did not come from the acquired artifact" }
+          if ([string]::IsNullOrWhiteSpace($runtimeVariables.conda_prefix) -or -not $runtimeVariables.python.StartsWith($runtimeVariables.conda_prefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Windows release variables did not come from the acquired artifact" }
           & $rcc --no-build env exec --artifact $artifact --permissive-local --json -- cmd.exe /d /c hauler.exe version 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler.exe.json")
           if ($LASTEXITCODE -ne 0) { throw "Windows release hauler.exe proof failed" }
           $haulerCode = "import os,shutil,subprocess,sys; e=shutil.which('hauler'); p=os.path.realpath(os.environ['CONDA_PREFIX']); r=os.path.realpath(e) if e else ''; result=subprocess.run([r,'version'],check=False,capture_output=True,text=True) if r.startswith(p+os.sep) else None; sys.exit(127 if result is None else (result.returncode if '2.1.1' in result.stdout else 1))"
@@ -878,8 +878,6 @@ jobs:
           $restore = Join-Path $env:RUNNER_TEMP "release-windows-restored"
           & $rcc --no-build env exec --artifact $artifact --permissive-local -- python -m jat.cli restore --haul $haul --destination $restore --json
           if ($LASTEXITCODE -ne 0) { throw "JAT Restore failed from the published Windows artifact" }
-          $serveRequest = Join-Path $env:RUNNER_TEMP "release-windows-serve.json"
-          @{ haul = $haul } | ConvertTo-Json | Out-File $serveRequest -Encoding utf8
           $env:JAT_RUN_DIR = Join-Path $env:RUNNER_TEMP "release-windows-serve-runtime"
           New-Item -ItemType Directory -Force -Path $env:JAT_RUN_DIR | Out-Null
           $serveOut = Join-Path $env:RUNNER_TEMP "release-windows-serve.out"
