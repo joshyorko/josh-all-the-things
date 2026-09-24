@@ -25,12 +25,12 @@ done
 published=0
 if [[ -n $linux_archive || -n $linux_receipt ]]; then
   [[ -n $linux_archive && -n $linux_receipt ]] || { printf 'Linux archive and receipt must be supplied together.\n' >&2; exit 2; }
-  "$publisher" --archive "$linux_archive" --receipt "$linux_receipt" --repository "$repository" --username "$username"
+  bash "$publisher" --archive "$linux_archive" --receipt "$linux_receipt" --repository "$repository" --username "$username"
   published=1
 fi
 if [[ -n $windows_archive || -n $windows_receipt ]]; then
   [[ -n $windows_archive && -n $windows_receipt ]] || { printf 'Windows archive and receipt must be supplied together.\n' >&2; exit 2; }
-  "$publisher" --archive "$windows_archive" --receipt "$windows_receipt" --repository "$repository" --username "$username"
+  bash "$publisher" --archive "$windows_archive" --receipt "$windows_receipt" --repository "$repository" --username "$username"
   published=1
 fi
 ((published == 1)) || { printf 'At least one platform archive and receipt pair is required.\n' >&2; exit 2; }
