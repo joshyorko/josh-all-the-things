@@ -595,13 +595,18 @@ jobs:
           from pathlib import Path
 
           assets = Path("dist/release-assets")
-          carriers = {}
-          for line in Path("dist/carriers.txt").read_text().splitlines():
-              if line.startswith("ghcr.io/joshyorko/josh-all-the-things-jat-runtime:"):
-                  platform = "linux_amd64" if ":linux_amd64-" in line else "windows_amd64"
-                  carriers[platform] = line
-          if set(carriers) != {"linux_amd64", "windows_amd64"}:
-              raise SystemExit("both immutable GHCR carrier references are required")
+          carrier_lines = [
+              line for line in Path("dist/carriers.txt").read_text().splitlines()
+              if line.startswith("ghcr.io/joshyorko/josh-all-the-things-jat-runtime@sha256:")
+          ]
+          if len(carrier_lines) != 2 or any(
+              len(line.rsplit("@sha256:", 1)[-1]) != 64
+              or any(char not in "0123456789abcdef" for char in line.rsplit("@sha256:", 1)[-1])
+              for line in carrier_lines
+          ):
+              raise SystemExit("expected two immutable GHCR repository@sha256 references")
+          # publish_environment_artifacts.sh processes Linux, then Windows.
+          carriers = {"linux_amd64": carrier_lines[0], "windows_amd64": carrier_lines[1]}
           platforms = {}
           for platform, receipt_name, archive_name in (
               ("linux_amd64", "jat-runtime-linux-amd64.json", "jat-runtime-linux-amd64.rcca"),
