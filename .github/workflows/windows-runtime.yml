@@ -652,11 +652,11 @@ jobs:
           cat > "$notes" <<EOF
           ## JAT v0.1.11 runtime artifacts
 
-          Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source `$JAT_RELEASE_SOURCE_SHA` using Josh RCC v18.19.5 and Hauler v2.1.1.
+          Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source \`$JAT_RELEASE_SOURCE_SHA\` using Josh RCC v18.19.5 and Hauler v2.1.1.
 
           Workflow proof: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
 
-          Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. `SHA256SUMS` covers every attached runtime asset other than itself.
+          Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. \`SHA256SUMS\` covers every attached runtime asset other than itself.
 
           GHCR carriers:
           ```
@@ -677,7 +677,9 @@ jobs:
             dist/release-assets/jat-runtime-windows-amd64.rcca \
             dist/release-assets/jat-runtime-provenance.json \
             dist/release-assets/SHA256SUMS
-          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$JAT_RELEASE_TAG" --jq .id)
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$JAT_RELEASE_TAG\") | .id" | head -n 1)
+          [[ -n "$release_id" ]] || { echo "Draft release ID was not returned by GitHub" >&2; exit 1; }
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -F prerelease=true >/dev/null
           immutable=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$JAT_RELEASE_TAG" --jq .immutable)
           [[ "$immutable" == true ]] || { echo "GitHub did not lock the published release as immutable" >&2; exit 1; }
