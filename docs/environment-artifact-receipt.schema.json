@@ -1,14 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["format_version", "operation", "success", "jat_git_sha", "rcc_executable", "rcc_version", "platform", "artifact_digest", "specification_digest", "legacy_blueprint_key", "archive", "verified_acquire", "verified_no_build", "verified_exec", "verified_hauler"],
+  "required": ["format_version", "operation", "success", "jat_git_sha", "rcc_executable", "rcc_version", "hauler_version", "rcc_source", "platform", "artifact_digest", "specification_digest", "legacy_blueprint_key", "archive", "verified_acquire", "verified_no_build", "verified_exec", "verified_warm_reuse", "verified_hauler"],
   "properties": {
-    "format_version": {"const": 2},
+    "format_version": {"const": 3},
     "operation": {"const": "build"},
     "success": {"const": true},
     "jat_git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "rcc_executable": {"type": "string", "minLength": 1},
-    "rcc_version": {"const": "v18.19.3"},
+    "rcc_version": {"const": "v18.19.5"},
+    "hauler_version": {"const": "v2.1.1"},
+    "rcc_source": {
+      "type": "object",
+      "required": ["repository", "tag", "commit", "asset", "sha256"],
+      "properties": {
+        "repository": {"const": "https://github.com/joshyorko/rcc"},
+        "tag": {"const": "v18.19.5"},
+        "commit": {"const": "d1aec7d0bb897a81274423c7a6bb747233f9c263"},
+        "asset": {"enum": ["rcc-linux64", "rcc-windows64.exe"]},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
     "platform": {"type": "string", "minLength": 1},
     "artifact_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "specification_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -16,6 +29,7 @@
     "archive": {"type": "object", "required": ["filename", "sha256", "size"], "properties": {"filename": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "size": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
     "verified_acquire": {"type": "object", "required": ["fresh_home", "no_build"], "properties": {"fresh_home": {"const": true}, "no_build": {"const": true}}, "additionalProperties": false},
     "verified_no_build": {"type": "object", "required": ["fresh_home", "no_build"], "properties": {"fresh_home": {"const": true}, "no_build": {"const": true}}, "additionalProperties": false},
+    "verified_warm_reuse": {"type": "object", "required": ["fresh_home", "no_build", "provider_unavailable"], "properties": {"fresh_home": {"const": true}, "no_build": {"const": true}, "provider_unavailable": {"const": true}}, "additionalProperties": false},
     "verified_exec": {"type": "object", "required": ["fresh_home"], "properties": {"fresh_home": {"const": true}}, "additionalProperties": false},
     "verified_tasks": {"type": "object", "required": ["doctor", "build", "restore", "serve"], "properties": {"doctor": {"const": true}, "build": {"const": true}, "restore": {"const": true}, "serve": {"const": true}}, "additionalProperties": false},
     "verified_hauler": {"type": "object", "required": ["fresh_home", "command", "launcher", "resolved_under_conda_prefix", "exit_code"], "properties": {"fresh_home": {"const": true}, "command": {"const": ["hauler", "version"]}, "launcher": {"type": "array", "const": ["python", "-c", "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"]}, "resolved_under_conda_prefix": {"const": true}, "exit_code": {"const": 0}}, "additionalProperties": false}

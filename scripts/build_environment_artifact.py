@@ -11,7 +11,12 @@ import tempfile
 from pathlib import Path
 
 DEFAULT_RCC = "rcc"
-EXPECTED_RCC_VERSION = "v18.19.3"
+EXPECTED_RCC_VERSION = "v18.19.5"
+RCC_SOURCE = {
+    "repository": "https://github.com/joshyorko/rcc",
+    "tag": "v18.19.5",
+    "commit": "d1aec7d0bb897a81274423c7a6bb747233f9c263",
+}
 HAULER_VERSION_COMMAND = (
     "python",
     "-c",
@@ -73,11 +78,36 @@ def _platform_name() -> str:
     return f"{platform.system().lower()}_{machine}"
 
 
+def _rcc_identity(root: Path, executable: str) -> dict[str, str]:
+    manifest = json.loads((root / "runtime" / "rcc.json").read_text())
+    platform_name = _platform_name()
+    pin = manifest["platforms"].get(platform_name)
+    binary = shutil.which(executable)
+    if not pin or not binary:
+        raise RuntimeError(f"no pinned RCC binary is available for {platform_name}")
+    digest = _sha256(Path(binary))
+    source = manifest.get("source")
+    if (
+        manifest.get("version") != EXPECTED_RCC_VERSION
+        or source != RCC_SOURCE
+        or digest != pin["sha256"]
+    ):
+        raise RuntimeError("RCC executable does not match runtime/rcc.json")
+    return {**source, "asset": pin["asset"], "sha256": digest}
+
+
+def _hauler_version(root: Path) -> str:
+    manifest = json.loads((root / "runtime" / "hauler.json").read_text())
+    version = manifest["hauler"]["version"]
+    if not isinstance(version, str) or not version.startswith("v"):
+        raise ValueError("runtime/hauler.json must pin an exact Hauler release")
+    return version
+
 def _git_sha(root: Path, env: dict[str, str], timeout: int) -> str:
-    value = env.get("JAT_GIT_SHA")
-    if value:
-        return value
-    return _run(["git", "rev-parse", "HEAD"], cwd=root, env=env, timeout=30).stdout.strip()
+    dirty = _run(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=root, env=env, timeout=timeout).stdout
+    if dirty:
+        raise RuntimeError("JAT source checkout must be clean before building its runtime artifact")
+    return _run(["git", "rev-parse", "HEAD"], cwd=root, env=env, timeout=timeout).stdout.strip()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,7 +116,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=Path("dist/jat-runtime.rcca"))
     parser.add_argument("--receipt", type=Path, default=Path("dist/jat-runtime.json"))
     parser.add_argument("--rcc", default=DEFAULT_RCC)
-    parser.add_argument("--jat-git-sha")
     parser.add_argument("--timeout", type=int, default=1800)
     return parser
 
@@ -114,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
         version = _run([args.rcc, "version"], cwd=root, env=producer_env, timeout=30).stdout.splitlines()[0].strip()
         if version != EXPECTED_RCC_VERSION:
             raise RuntimeError(f"RCC {EXPECTED_RCC_VERSION} is required; found {version or 'unknown'}")
+        rcc_source = _rcc_identity(root, args.rcc)
+        hauler_version = _hauler_version(root)
         publish = _json(_run([args.rcc, "env", "publish", "--robot", str(robot), "--provider", "local", "--json"], cwd=root, env=producer_env, timeout=args.timeout))
         artifact = publish["artifactDigest"]
         specification = publish["specificationDigest"]
@@ -153,17 +184,49 @@ def main(argv: list[str] | None = None) -> int:
         )
         if hauler_execution.get("artifactDigest") != artifact or hauler_execution.get("exitCode") != 0:
             raise RuntimeError("Hauler version execution proof failed")
-        jat_sha = args.jat_git_sha or _git_sha(root, producer_env, args.timeout)
+        trust_carrier = Path(verifier_env["ROBOCORP_HOME"]) / "artifacts" / "v1" / "content" / "trust"
+        warm_execution = _json(
+            _run(
+                [
+                    args.rcc,
+                    "--no-build",
+                    "env",
+                    "exec",
+                    "--artifact",
+                    artifact,
+                    "--permissive-local",
+                    "--provider",
+                    "http://127.0.0.1:1",
+                    "--trust-carrier",
+                    str(trust_carrier),
+                    "--trust-carrier-type",
+                    "filesystem",
+                    "--json",
+                    "--",
+                    "python",
+                    "-c",
+                    "print('jat-warm-reuse-proof')",
+                ],
+                cwd=root,
+                env=verifier_env,
+                timeout=args.timeout,
+            )
+        )
+        if warm_execution.get("artifactDigest") != artifact or warm_execution.get("exitCode") != 0:
+            raise RuntimeError("warm no-build execution with an unreachable provider failed")
+        jat_sha = _git_sha(root, producer_env, args.timeout)
         if len(jat_sha) != 40 or any(character not in "0123456789abcdef" for character in jat_sha):
             raise ValueError("JAT git SHA must be a full lowercase commit digest")
         archive_info = {"filename": output.name, "sha256": _sha256(archive), "size": archive.stat().st_size}
         receipt = {
-            "format_version": 2,
+            "format_version": 3,
             "operation": "build",
             "success": True,
             "jat_git_sha": jat_sha,
             "rcc_executable": args.rcc,
             "rcc_version": version,
+            "hauler_version": hauler_version,
+            "rcc_source": rcc_source,
             "platform": _platform_name(),
             "artifact_digest": artifact,
             "specification_digest": specification,
@@ -171,6 +234,11 @@ def main(argv: list[str] | None = None) -> int:
             "archive": archive_info,
             "verified_acquire": {"fresh_home": True, "no_build": True},
             "verified_no_build": {"fresh_home": True, "no_build": True},
+            "verified_warm_reuse": {
+                "fresh_home": True,
+                "no_build": True,
+                "provider_unavailable": True,
+            },
             "verified_exec": {"fresh_home": True},
             "verified_hauler": {
                 "fresh_home": True,

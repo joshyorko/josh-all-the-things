@@ -22,6 +22,13 @@ command -v oras >/dev/null
 [[ -f $schema ]] || { printf 'Receipt schema is required: %s\n' "$schema" >&2; exit 2; }
 expected_rcc_version=$(jq -er '.properties.rcc_version.const' "$schema")
 platform=$(jq -er '.platform' "$receipt")
+rcc_source_repository=$(jq -er '.source.repository' "$root/runtime/rcc.json")
+rcc_source_tag=$(jq -er '.source.tag' "$root/runtime/rcc.json")
+rcc_source_commit=$(jq -er '.source.commit' "$root/runtime/rcc.json")
+rcc_asset=$(jq -er --arg platform "$platform" '.platforms[$platform].asset' "$root/runtime/rcc.json")
+rcc_sha256=$(jq -er --arg platform "$platform" '.platforms[$platform].sha256' "$root/runtime/rcc.json")
+expected_hauler_version=$(jq -er '.hauler.version' "$root/runtime/hauler.json")
+jat_source_sha=$(git -C "$root" rev-parse HEAD)
 case "$platform" in
   linux_amd64|windows_amd64) ;;
   *) printf 'Unsupported JAT artifact platform: %s\n' "$platform" >&2; exit 2;;
@@ -32,13 +39,20 @@ hauler_launcher=$(jq -er '
   | select(type == "array" and length == 3 and .[0] == "python" and .[1] == "-c" and (.[2] | type == "string"))
   | .[2]
 ' "$schema")
-jq -e --arg hauler_launcher "$hauler_launcher" --arg expected_rcc_version "$expected_rcc_version" --arg platform "$platform" --arg archive_filename "$archive_filename" '.format_version == 2 and .operation == "build" and .success == true and
-  (.jat_git_sha | test("^[0-9a-f]{40}$")) and
+jq -e --arg hauler_launcher "$hauler_launcher" \
+  --arg expected_rcc_version "$expected_rcc_version" --arg platform "$platform" --arg archive_filename "$archive_filename" \
+  --arg expected_hauler_version "$expected_hauler_version" --arg jat_source_sha "$jat_source_sha" \
+  --arg rcc_repository "$rcc_source_repository" --arg rcc_tag "$rcc_source_tag" --arg rcc_commit "$rcc_source_commit" \
+  --arg rcc_asset "$rcc_asset" --arg rcc_sha256 "$rcc_sha256" '.format_version == 3 and .operation == "build" and .success == true and
+  .jat_git_sha == $jat_source_sha and
   (.rcc_executable | type == "string" and length > 0) and
-  .rcc_version == $expected_rcc_version and .platform == $platform and
+  .rcc_version == $expected_rcc_version and .hauler_version == $expected_hauler_version and .platform == $platform and
+  .rcc_source.repository == $rcc_repository and .rcc_source.tag == $rcc_tag and
+  .rcc_source.commit == $rcc_commit and .rcc_source.asset == $rcc_asset and .rcc_source.sha256 == $rcc_sha256 and
   .verified_acquire.fresh_home == true and .verified_acquire.no_build == true and
   .verified_no_build.fresh_home == true and .verified_no_build.no_build == true and
   .verified_exec.fresh_home == true and
+  .verified_warm_reuse.fresh_home == true and .verified_warm_reuse.no_build == true and .verified_warm_reuse.provider_unavailable == true and
   .verified_hauler.fresh_home == true and .verified_hauler.command == ["hauler", "version"] and
   .verified_hauler.launcher == ["python", "-c", $hauler_launcher] and
   .verified_hauler.resolved_under_conda_prefix == true and .verified_hauler.exit_code == 0 and
@@ -56,7 +70,7 @@ reference="$repository:$(jq -r .platform "$receipt")-${artifact#sha256:}"
 printf '%s' "$GITHUB_TOKEN" | oras login ghcr.io --username "$username" --password-stdin
 (cd "$(dirname "$archive")" && oras push "$reference" --artifact-type application/vnd.joshyorko.rcc-environment-artifact.v2 \
   "$(basename "$archive"):application/vnd.joshyorko.rcc-environment-artifact.v2+rcca" \
-  "$(basename "$receipt"):application/vnd.joshyorko.rcc-environment-artifact-receipt.v2+json")
+  "$(basename "$receipt"):application/vnd.joshyorko.rcc-environment-artifact-receipt.v3+json")
 digest=$(oras manifest fetch --descriptor "$reference" | jq -r .digest)
 [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'Registry did not return a valid manifest digest.\n' >&2; exit 2; }
 printf '%s@%s\n' "$repository" "$digest"

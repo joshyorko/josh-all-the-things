@@ -58,6 +58,7 @@ def _download(payload: bytes):
     return download
 
 
+
 def test_resolve_platform_maps_supported_linux_and_windows_x64():
     assert resolve_platform("Linux", "x86_64") == "linux-amd64"
     assert resolve_platform("Windows", "AMD64") == "windows-amd64"
