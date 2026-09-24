@@ -651,20 +651,26 @@ jobs:
         run: |
           set -euo pipefail
           notes="$RUNNER_TEMP/jat-runtime-release-notes.md"
-          cat > "$notes" <<EOF
-          ## JAT v0.1.11 runtime artifacts
+          python3 - "$notes" "$JAT_RELEASE_SOURCE_SHA" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" dist/carriers.txt <<'PY'
+          import pathlib
+          import sys
 
-          Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source \`$JAT_RELEASE_SOURCE_SHA\` using Josh RCC v18.19.5 and Hauler v2.1.1.
-
-          Workflow proof: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
-
-          Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. \`SHA256SUMS\` covers every attached runtime asset other than itself.
-
-          GHCR carriers:
-          ```
-          $(cat dist/carriers.txt)
-          ```
-          EOF
+          notes_path, source_sha, repository, run_id, carriers_path = sys.argv[1:]
+          carriers = pathlib.Path(carriers_path).read_text().strip()
+          if not carriers:
+              raise SystemExit("GHCR carrier list is empty")
+          tick = chr(96)
+          body = (
+              "## JAT v0.1.11 runtime artifacts\n\n"
+              f"Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source {tick}{source_sha}{tick} using Josh RCC v18.19.5 and Hauler v2.1.1.\n\n"
+              f"Workflow proof: https://github.com/{repository}/actions/runs/{run_id}\n\n"
+              "Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. "
+              + tick + "SHA256SUMS" + tick + " covers every attached runtime asset other than itself.\n\n"
+              "GHCR carriers:\n\n"
+              + tick * 3 + "\n" + carriers + "\n" + tick * 3 + "\n"
+          )
+          pathlib.Path(notes_path).write_text(body)
+          PY
           release_list="$RUNNER_TEMP/releases.json"
           gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$release_list"
           release_id=$(jq -r --arg tag "$JAT_RELEASE_TAG" '[.[] | select(.tag_name == $tag)] | first | .id // empty' "$release_list")
@@ -850,34 +856,33 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "fresh Windows release archive acquire failed" }
           $acquired = Get-Content -Raw (Join-Path $env:RUNNER_TEMP "release-windows-acquire.json") | ConvertFrom-Json
           if ($acquired.artifactDigest -ne $receipt.artifact_digest -or $acquired.verification.valid -ne $true) { throw "fresh Windows acquire did not validate the release artifact" }
-          & $rcc --no-build ht vars --robot (Join-Path $PWD "robot.yaml") --json 1> (Join-Path $env:RUNNER_TEMP "release-windows-vars.json")
-          if ($LASTEXITCODE -ne 0) { throw "Windows release no-build variables failed" }
           $artifact = $receipt.artifact_digest
+          $env:PYTHONPATH = Join-Path $PWD "src"
+          $variablesPath = Join-Path $env:RUNNER_TEMP "release-windows-vars.json"
+          $variablesCode = "import json,os,sys; print(json.dumps({'conda_prefix':os.environ.get('CONDA_PREFIX'),'python':os.path.realpath(sys.executable)}))"
+          & $rcc --no-build env exec --artifact $artifact --permissive-local -- python -c $variablesCode 1> $variablesPath
+          if ($LASTEXITCODE -ne 0) { throw "Windows release no-build artifact variables failed" }
+          $runtimeVariables = Get-Content -Raw $variablesPath | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace($runtimeVariables.conda_prefix) -or -not $runtimeVariables.python.StartsWith($runtimeVariables.conda_prefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Windows release variables did not come from the acquired artifact" }
           & $rcc --no-build env exec --artifact $artifact --permissive-local --json -- cmd.exe /d /c hauler.exe version 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler.exe.json")
           if ($LASTEXITCODE -ne 0) { throw "Windows release hauler.exe proof failed" }
           $haulerCode = "import os,shutil,subprocess,sys; e=shutil.which('hauler'); p=os.path.realpath(os.environ['CONDA_PREFIX']); r=os.path.realpath(e) if e else ''; result=subprocess.run([r,'version'],check=False,capture_output=True,text=True) if r.startswith(p+os.sep) else None; sys.exit(127 if result is None else (result.returncode if '2.1.1' in result.stdout else 1))"
           & $rcc --no-build env exec --artifact $artifact --permissive-local --json -- python -c $haulerCode 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler-python.json")
           if ($LASTEXITCODE -ne 0) { throw "Windows release environment-owned Hauler proof failed" }
-          & $rcc --no-build task run --robot (Join-Path $PWD "robot.yaml") --task Doctor --dev --silent
+          & $rcc --no-build env exec --artifact $artifact --permissive-local -- python -m jat.cli doctor --json
           if ($LASTEXITCODE -ne 0) { throw "JAT Doctor failed from the published Windows artifact" }
           $source = Join-Path $PWD "devdata/synthetic-source"
           $haul = Join-Path $env:RUNNER_TEMP "release-windows-jat.tar.zst"
-          $buildRequest = Join-Path $env:RUNNER_TEMP "release-windows-build.json"
-          @{ folder = $source; output = $haul; rcc_environment = "off" } | ConvertTo-Json | Out-File $buildRequest -Encoding utf8
-          & $rcc --no-build task run --robot (Join-Path $PWD "robot.yaml") --task Build -- --json-input $buildRequest
+          & $rcc --no-build env exec --artifact $artifact --permissive-local -- python -m jat.cli build --folder $source --output $haul --rcc-environment off --json
           if ($LASTEXITCODE -ne 0) { throw "JAT Build failed from the published Windows artifact" }
-          $restoreRequest = Join-Path $env:RUNNER_TEMP "release-windows-restore.json"
           $restore = Join-Path $env:RUNNER_TEMP "release-windows-restored"
-          @{ haul = $haul; destination = $restore } | ConvertTo-Json | Out-File $restoreRequest -Encoding utf8
-          & $rcc --no-build task run --robot (Join-Path $PWD "robot.yaml") --task Restore -- --json-input $restoreRequest
+          & $rcc --no-build env exec --artifact $artifact --permissive-local -- python -m jat.cli restore --haul $haul --destination $restore --json
           if ($LASTEXITCODE -ne 0) { throw "JAT Restore failed from the published Windows artifact" }
-          $serveRequest = Join-Path $env:RUNNER_TEMP "release-windows-serve.json"
-          @{ haul = $haul } | ConvertTo-Json | Out-File $serveRequest -Encoding utf8
           $env:JAT_RUN_DIR = Join-Path $env:RUNNER_TEMP "release-windows-serve-runtime"
           New-Item -ItemType Directory -Force -Path $env:JAT_RUN_DIR | Out-Null
           $serveOut = Join-Path $env:RUNNER_TEMP "release-windows-serve.out"
           $serveErr = Join-Path $env:RUNNER_TEMP "release-windows-serve.err"
-          $serveArgs = @("--no-build", "task", "run", "--robot", (Join-Path $PWD "robot.yaml"), "--task", "Serve", "--", "--json-input", $serveRequest)
+          $serveArgs = @("--no-build", "env", "exec", "--artifact", $artifact, "--permissive-local", "--", "python", "-m", "jat.cli", "serve", "--haul", $haul, "--mode", "files", "--fileserver-port", "8080", "--json")
           $serve = Start-Process -FilePath $rcc -ArgumentList $serveArgs -WorkingDirectory $PWD -RedirectStandardOutput $serveOut -RedirectStandardError $serveErr -PassThru
           $ready = $false
           $downloaded = Join-Path $env:RUNNER_TEMP "release-windows-served.tar.zst"
