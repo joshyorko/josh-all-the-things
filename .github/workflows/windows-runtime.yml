@@ -18,6 +18,11 @@ on:
 permissions:
   contents: read
 
+# One-time publication for the merged RCC/Hauler tranche; keep its source and tag paired.
+env:
+  JAT_RELEASE_SOURCE_SHA: 5b59fcafc832be67eaca3b8f42ff9f7b06719b76
+  JAT_RELEASE_TAG: v0.1.11-jat-runtime
+
 jobs:
   windows-runtime:
     runs-on: windows-latest
@@ -28,6 +33,8 @@ jobs:
     steps:
       - name: Checkout JAT
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && env.JAT_RELEASE_SOURCE_SHA || github.sha }}
 
       - name: Acquire and verify pinned RCC
         run: |
@@ -282,6 +289,8 @@ jobs:
     steps:
       - name: Checkout JAT
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && env.JAT_RELEASE_SOURCE_SHA || github.sha }}
 
       - name: Acquire and verify pinned RCC
         run: |
@@ -461,3 +470,381 @@ jobs:
             output/environment_linux_amd64_freeze.yaml
             ${{ runner.temp }}/*.log
             ${{ runner.temp }}/*.json
+
+  publish-jat-runtime:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [windows-runtime, linux-runtime]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout the exact merged JAT source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}
+
+      - name: Download the exact-source Linux and Windows runtime evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: jat-linux-runtime-evidence
+          path: ${{ runner.temp }}/jat-linux-runtime-evidence
+
+      - name: Download the exact-source Windows runtime evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: jat-windows-runtime-evidence
+          path: ${{ runner.temp }}/jat-windows-runtime-evidence
+
+      - name: Check release sequence and assemble verified inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$JAT_RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release tag already exists: $JAT_RELEASE_TAG" >&2
+            exit 1
+          fi
+          mkdir -p dist/publish/linux dist/publish/windows dist/release-assets
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import shutil
+          from pathlib import Path
+
+          source_sha = "5b59fcafc832be67eaca3b8f42ff9f7b06719b76"
+          inputs = {
+              "linux": (Path("${{ runner.temp }}/jat-linux-runtime-evidence"), "jat-runtime.rcca", "jat-runtime.json", "linux_amd64"),
+              "windows": (Path("${{ runner.temp }}/jat-windows-runtime-evidence"), "jat-runtime-windows.rcca", "jat-runtime-windows.json", "windows_amd64"),
+          }
+          release = Path("dist/release-assets")
+          receipt_names = {"linux": "jat-runtime-linux-amd64.json", "windows": "jat-runtime-windows-amd64.json"}
+          archive_names = {"linux": "jat-runtime-linux-amd64.rcca", "windows": "jat-runtime-windows-amd64.rcca"}
+          for name, (root, archive_file, receipt_file, platform) in inputs.items():
+              archives = list(root.rglob(archive_file))
+              receipts = list(root.rglob(receipt_file))
+              if len(archives) != 1 or len(receipts) != 1:
+                  raise SystemExit(f"expected one {archive_file} and one {receipt_file} under {root}")
+              receipt = json.loads(receipts[0].read_text(encoding="utf-8-sig"))
+              archive = archives[0]
+              actual_sha = hashlib.sha256(archive.read_bytes()).hexdigest()
+              if receipt["jat_git_sha"] != source_sha:
+                  raise SystemExit(f"{name} receipt source SHA mismatch: {receipt['jat_git_sha']}")
+              if receipt["platform"] != platform or receipt["rcc_version"] != "v18.19.5" or receipt["hauler_version"] != "v2.1.1":
+                  raise SystemExit(f"{name} receipt runtime identity mismatch")
+              if receipt["archive"]["filename"] != archive_file:
+                  raise SystemExit(f"{name} receipt archive filename mismatch")
+              if receipt["archive"]["sha256"] != actual_sha or receipt["archive"]["size"] != archive.stat().st_size:
+                  raise SystemExit(f"{name} archive does not match its receipt")
+              if receipt["verified_acquire"] != {"fresh_home": True, "no_build": True}:
+                  raise SystemExit(f"{name} fresh acquire proof is incomplete")
+              if receipt["verified_no_build"] != {"fresh_home": True, "no_build": True}:
+                  raise SystemExit(f"{name} no-build proof is incomplete")
+              if not receipt["verified_hauler"]["resolved_under_conda_prefix"]:
+                  raise SystemExit(f"{name} Hauler was not verified inside the acquired runtime")
+              publish_dir = Path("dist/publish") / name
+              publish_dir.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(archive, publish_dir / archive_file)
+              shutil.copy2(receipts[0], publish_dir / receipt_file)
+              shutil.copy2(archive, release / archive_names[name])
+              shutil.copy2(receipts[0], release / receipt_names[name])
+          linux_freeze = Path("environment_linux_amd64_freeze.yaml")
+          if not linux_freeze.is_file():
+              raise SystemExit("tracked Linux freeze is missing")
+          shutil.copy2(linux_freeze, release / linux_freeze.name)
+          windows_root = Path("${{ runner.temp }}/jat-windows-runtime-evidence")
+          windows_freezes = list(windows_root.rglob("environment_windows_amd64_freeze.yaml"))
+          if not windows_freezes:
+              raise SystemExit("generated Windows freeze is missing")
+          freeze_bytes = windows_freezes[0].read_bytes()
+          if any(item.read_bytes() != freeze_bytes for item in windows_freezes[1:]):
+              raise SystemExit("Windows freeze copies disagree")
+          shutil.copy2(windows_freezes[0], release / "environment_windows_amd64_freeze.yaml")
+          PY
+
+      - name: Install checksum-pinned ORAS
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/oras_1.3.2_linux_amd64.tar.gz"
+          curl --fail --location --silent --show-error --retry 3 \
+            https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_linux_amd64.tar.gz \
+            --output "$archive"
+          printf '%s  %s\n' 9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf "$archive" | sha256sum --check --status -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" oras
+          sudo install "$RUNNER_TEMP/oras" /usr/local/bin/oras
+          oras version
+
+      - name: Publish the existing immutable GHCR artifact carriers
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          scripts/publish_environment_artifacts.sh \
+            --linux-archive dist/publish/linux/jat-runtime.rcca \
+            --linux-receipt dist/publish/linux/jat-runtime.json \
+            --windows-archive dist/publish/windows/jat-runtime-windows.rcca \
+            --windows-receipt dist/publish/windows/jat-runtime-windows.json \
+            | tee dist/carriers.txt
+
+      - name: Create provenance and release checksums
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          assets = Path("dist/release-assets")
+          carriers = {}
+          for line in Path("dist/carriers.txt").read_text().splitlines():
+              if line.startswith("ghcr.io/joshyorko/josh-all-the-things-jat-runtime:"):
+                  platform = "linux_amd64" if ":linux_amd64-" in line else "windows_amd64"
+                  carriers[platform] = line
+          if set(carriers) != {"linux_amd64", "windows_amd64"}:
+              raise SystemExit("both immutable GHCR carrier references are required")
+          platforms = {}
+          for platform, receipt_name, archive_name in (
+              ("linux_amd64", "jat-runtime-linux-amd64.json", "jat-runtime-linux-amd64.rcca"),
+              ("windows_amd64", "jat-runtime-windows-amd64.json", "jat-runtime-windows-amd64.rcca"),
+          ):
+              receipt = json.loads((assets / receipt_name).read_text(encoding="utf-8-sig"))
+              platforms[platform] = {
+                  "receipt": receipt_name,
+                  "artifact_digest": receipt["artifact_digest"],
+                  "specification_digest": receipt["specification_digest"],
+                  "archive": {
+                      "asset": archive_name,
+                      "sha256": receipt["archive"]["sha256"],
+                      "size": receipt["archive"]["size"],
+                  },
+                  "ghcr_carrier": carriers[platform],
+              }
+          provenance = {
+              "format_version": 1,
+              "release_tag": "v0.1.11-jat-runtime",
+              "jat_git_sha": "5b59fcafc832be67eaca3b8f42ff9f7b06719b76",
+              "workflow_run": {
+                  "id": int("${{ github.run_id }}"),
+                  "url": f"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              },
+              "rcc_version": "v18.19.5",
+              "hauler_version": "v2.1.1",
+              "platforms": platforms,
+          }
+          (assets / "jat-runtime-provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
+          PY
+          (cd dist/release-assets && sha256sum environment_linux_amd64_freeze.yaml environment_windows_amd64_freeze.yaml jat-runtime-linux-amd64.json jat-runtime-linux-amd64.rcca jat-runtime-windows-amd64.json jat-runtime-windows-amd64.rcca jat-runtime-provenance.json | sort -k2 > SHA256SUMS)
+
+      - name: Create and publish the immutable JAT runtime release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/jat-runtime-release-notes.md"
+          cat > "$notes" <<EOF
+          ## JAT v0.1.11 runtime artifacts
+
+          Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source `$JAT_RELEASE_SOURCE_SHA` using Josh RCC v18.19.5 and Hauler v2.1.1.
+
+          Workflow proof: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. `SHA256SUMS` covers every attached runtime asset other than itself.
+
+          GHCR carriers:
+          ```
+          $(cat dist/carriers.txt)
+          ```
+          EOF
+          gh release create "$JAT_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$JAT_RELEASE_SOURCE_SHA" \
+            --draft --prerelease \
+            --title "JAT v0.1.11 Linux and Windows runtime artifacts" \
+            --notes-file "$notes" \
+            dist/release-assets/environment_linux_amd64_freeze.yaml \
+            dist/release-assets/environment_windows_amd64_freeze.yaml \
+            dist/release-assets/jat-runtime-linux-amd64.json \
+            dist/release-assets/jat-runtime-linux-amd64.rcca \
+            dist/release-assets/jat-runtime-windows-amd64.json \
+            dist/release-assets/jat-runtime-windows-amd64.rcca \
+            dist/release-assets/jat-runtime-provenance.json \
+            dist/release-assets/SHA256SUMS
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$JAT_RELEASE_TAG" --jq .id)
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -F prerelease=true >/dev/null
+          immutable=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$JAT_RELEASE_TAG" --jq .immutable)
+          [[ "$immutable" == true ]] || { echo "GitHub did not lock the published release as immutable" >&2; exit 1; }
+
+  verify-published-linux:
+    if: github.event_name == 'workflow_dispatch'
+    needs: publish-jat-runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the exact merged JAT source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}
+
+      - name: Download the published Linux archive and receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jat-runtime-linux"
+          gh release download "$JAT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern jat-runtime-linux-amd64.rcca \
+            --pattern jat-runtime-linux-amd64.json \
+            --dir "$RUNNER_TEMP/jat-runtime-linux"
+
+      - name: Verify fresh Linux acquire, no-build, Hauler, and real JAT tasks
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.rcca"
+          receipt="$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.json"
+          python3 - "$archive" "$receipt" "$JAT_RELEASE_SOURCE_SHA" <<'PY'
+          import hashlib, json, pathlib, sys
+          archive, receipt, source_sha = pathlib.Path(sys.argv[1]), json.loads(pathlib.Path(sys.argv[2]).read_text()), sys.argv[3]
+          assert receipt["jat_git_sha"] == source_sha
+          assert receipt["hauler_version"] == "v2.1.1"
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == receipt["archive"]["sha256"]
+          assert archive.stat().st_size == receipt["archive"]["size"]
+          PY
+          mapfile -t pin < <(python3 -c 'import json; p=json.load(open("runtime/rcc.json")); x=p["platforms"]["linux_amd64"]; print(p["version"]); print(x["url"]); print(x["sha256"])')
+          rcc="$RUNNER_TEMP/rcc"
+          curl --fail --location --silent --show-error --retry 3 "${pin[1]}" --output "$rcc"
+          printf '%s  %s\n' "${pin[2]}" "$rcc" | sha256sum --check --status -
+          chmod 0755 "$rcc"
+          [[ "$($rcc version | head -n 1)" == "${pin[0]}" ]]
+          export ROBOCORP_HOME="$RUNNER_TEMP/jat-release-linux-verifier"
+          mkdir -p "$ROBOCORP_HOME"
+          "$rcc" env acquire --archive "$archive" --permissive-local --json > "$RUNNER_TEMP/linux-release-acquire.json"
+          artifact=$(python3 -c 'import json; print(json.load(open("'"$receipt"'"))["artifact_digest"])')
+          python3 - "$RUNNER_TEMP/linux-release-acquire.json" "$artifact" <<'PY'
+          import json, sys
+          acquired = json.load(open(sys.argv[1]))
+          assert acquired["artifactDigest"] == sys.argv[2] and acquired["verification"]["valid"] is True
+          PY
+          "$rcc" --no-build ht vars --robot "$PWD/robot.yaml" --json > "$RUNNER_TEMP/linux-release-vars.json"
+          hauler_probe="import os,shutil,subprocess,sys; e=shutil.which('hauler'); p=os.path.realpath(os.environ['CONDA_PREFIX']); r=os.path.realpath(e) if e else ''; result=subprocess.run([r,'version'],check=False,capture_output=True,text=True) if r.startswith(p+os.sep) else None; sys.exit(127 if result is None else (result.returncode if '2.1.1' in result.stdout else 1))"
+          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --json -- python -c "$hauler_probe" > "$RUNNER_TEMP/linux-release-hauler.json"
+          python3 - "$RUNNER_TEMP/linux-release-hauler.json" "$artifact" <<'PY'
+          import json, sys
+          execution = json.load(open(sys.argv[1]))
+          assert execution["artifactDigest"] == sys.argv[2] and execution["exitCode"] == 0
+          PY
+          "$rcc" --no-build task run --robot "$PWD/robot.yaml" --task Doctor --dev --silent
+          source="$PWD/devdata/synthetic-source"
+          haul="$RUNNER_TEMP/linux-release-jat.tar.zst"
+          python3 - "$RUNNER_TEMP/linux-release-build.json" "$source" "$haul" <<'PY'
+          import json, sys
+          json.dump({"folder":sys.argv[2],"output":sys.argv[3],"rcc_environment":"off"},open(sys.argv[1],"w"))
+          PY
+          "$rcc" --no-build task run --robot "$PWD/robot.yaml" --task Build -- --json-input "$RUNNER_TEMP/linux-release-build.json"
+          python3 - "$RUNNER_TEMP/linux-release-restore.json" "$haul" "$RUNNER_TEMP/linux-release-restored" <<'PY'
+          import json, sys
+          json.dump({"haul":sys.argv[2],"destination":sys.argv[3]},open(sys.argv[1],"w"))
+          PY
+          "$rcc" --no-build task run --robot "$PWD/robot.yaml" --task Restore -- --json-input "$RUNNER_TEMP/linux-release-restore.json"
+          python3 - "$RUNNER_TEMP/linux-release-serve.json" "$haul" <<'PY'
+          import json, sys
+          json.dump({"haul":sys.argv[2]},open(sys.argv[1],"w"))
+          PY
+          export JAT_RUN_DIR="$RUNNER_TEMP/linux-release-serve-runtime"
+          mkdir -p "$JAT_RUN_DIR"
+          "$rcc" --no-build task run --robot "$PWD/robot.yaml" --task Serve -- --json-input "$RUNNER_TEMP/linux-release-serve.json" > "$RUNNER_TEMP/linux-release-serve.log" 2>&1 &
+          serve_pid=$!
+          cleanup() { kill "$serve_pid" 2>/dev/null || true; wait "$serve_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          served="$RUNNER_TEMP/linux-release-served.tar.zst"
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --output "$served" --max-time 2 http://127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst && [[ -s "$served" ]]; then ready=true; break; fi
+            sleep 1
+          done
+          [[ "$ready" == true ]] || { cat "$RUNNER_TEMP/linux-release-serve.log"; exit 1; }
+
+  verify-published-windows:
+    if: github.event_name == 'workflow_dispatch'
+    needs: publish-jat-runtime
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout the exact merged JAT source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}
+
+      - name: Download the published Windows archive and receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseDir = Join-Path $env:RUNNER_TEMP "jat-runtime-windows"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          & gh release download $env:JAT_RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern jat-runtime-windows-amd64.rcca --pattern jat-runtime-windows-amd64.json --dir $releaseDir
+          if ($LASTEXITCODE -ne 0) { throw "could not download published Windows runtime assets" }
+          "RELEASE_DIR=$releaseDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify fresh Windows acquire, no-build, Hauler, and real JAT tasks
+        run: |
+          $archive = Join-Path $env:RELEASE_DIR "jat-runtime-windows-amd64.rcca"
+          $receiptPath = Join-Path $env:RELEASE_DIR "jat-runtime-windows-amd64.json"
+          $receipt = Get-Content -Raw -LiteralPath $receiptPath | ConvertFrom-Json
+          if ($receipt.jat_git_sha -cne $env:JAT_RELEASE_SOURCE_SHA -or $receipt.hauler_version -cne "v2.1.1") { throw "Windows receipt source or Hauler version mismatch" }
+          $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          $size = (Get-Item -LiteralPath $archive).Length
+          if ($sha -cne $receipt.archive.sha256 -or $size -ne $receipt.archive.size) { throw "downloaded Windows archive does not match its receipt" }
+          $manifest = Get-Content -Raw -LiteralPath (Join-Path $PWD "runtime/rcc.json") | ConvertFrom-Json
+          $pin = $manifest.platforms.windows_amd64
+          $rcc = Join-Path $env:RUNNER_TEMP "release-rcc.exe"
+          Invoke-WebRequest -Uri $pin.url -OutFile $rcc
+          if ((Get-FileHash -Algorithm SHA256 -Path $rcc).Hash.ToLowerInvariant() -cne $pin.sha256) { throw "pinned RCC checksum mismatch" }
+          if ((& $rcc version | Select-Object -First 1).Trim() -cne $manifest.version) { throw "pinned RCC version mismatch" }
+          $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-release-windows-verifier"
+          New-Item -ItemType Directory -Force -Path $env:ROBOCORP_HOME | Out-Null
+          & $rcc env acquire --archive $archive --permissive-local --json 1> (Join-Path $env:RUNNER_TEMP "release-windows-acquire.json")
+          if ($LASTEXITCODE -ne 0) { throw "fresh Windows release archive acquire failed" }
+          $acquired = Get-Content -Raw (Join-Path $env:RUNNER_TEMP "release-windows-acquire.json") | ConvertFrom-Json
+          if ($acquired.artifactDigest -ne $receipt.artifact_digest -or $acquired.verification.valid -ne $true) { throw "fresh Windows acquire did not validate the release artifact" }
+          & $rcc --no-build ht vars --robot (Join-Path $PWD "robot.yaml") --json 1> (Join-Path $env:RUNNER_TEMP "release-windows-vars.json")
+          if ($LASTEXITCODE -ne 0) { throw "Windows release no-build variables failed" }
+          $artifact = $receipt.artifact_digest
+          & $rcc --no-build env exec --artifact $artifact --permissive-local --json -- cmd.exe /d /c hauler.exe version 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler.exe.json")
+          if ($LASTEXITCODE -ne 0) { throw "Windows release hauler.exe proof failed" }
+          $haulerCode = "import os,shutil,subprocess,sys; e=shutil.which('hauler'); p=os.path.realpath(os.environ['CONDA_PREFIX']); r=os.path.realpath(e) if e else ''; result=subprocess.run([r,'version'],check=False,capture_output=True,text=True) if r.startswith(p+os.sep) else None; sys.exit(127 if result is None else (result.returncode if '2.1.1' in result.stdout else 1))"
+          & $rcc --no-build env exec --artifact $artifact --permissive-local --json -- python -c $haulerCode 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler-python.json")
+          if ($LASTEXITCODE -ne 0) { throw "Windows release environment-owned Hauler proof failed" }
+          & $rcc --no-build task run --robot (Join-Path $PWD "robot.yaml") --task Doctor --dev --silent
+          if ($LASTEXITCODE -ne 0) { throw "JAT Doctor failed from the published Windows artifact" }
+          $source = Join-Path $PWD "devdata/synthetic-source"
+          $haul = Join-Path $env:RUNNER_TEMP "release-windows-jat.tar.zst"
+          $buildRequest = Join-Path $env:RUNNER_TEMP "release-windows-build.json"
+          @{ folder = $source; output = $haul; rcc_environment = "off" } | ConvertTo-Json | Out-File $buildRequest -Encoding utf8
+          & $rcc --no-build task run --robot (Join-Path $PWD "robot.yaml") --task Build -- --json-input $buildRequest
+          if ($LASTEXITCODE -ne 0) { throw "JAT Build failed from the published Windows artifact" }
+          $restoreRequest = Join-Path $env:RUNNER_TEMP "release-windows-restore.json"
+          $restore = Join-Path $env:RUNNER_TEMP "release-windows-restored"
+          @{ haul = $haul; destination = $restore } | ConvertTo-Json | Out-File $restoreRequest -Encoding utf8
+          & $rcc --no-build task run --robot (Join-Path $PWD "robot.yaml") --task Restore -- --json-input $restoreRequest
+          if ($LASTEXITCODE -ne 0) { throw "JAT Restore failed from the published Windows artifact" }
+          $serveRequest = Join-Path $env:RUNNER_TEMP "release-windows-serve.json"
+          @{ haul = $haul } | ConvertTo-Json | Out-File $serveRequest -Encoding utf8
+          $env:JAT_RUN_DIR = Join-Path $env:RUNNER_TEMP "release-windows-serve-runtime"
+          New-Item -ItemType Directory -Force -Path $env:JAT_RUN_DIR | Out-Null
+          $serveOut = Join-Path $env:RUNNER_TEMP "release-windows-serve.out"
+          $serveErr = Join-Path $env:RUNNER_TEMP "release-windows-serve.err"
+          $serveArgs = @("--no-build", "task", "run", "--robot", (Join-Path $PWD "robot.yaml"), "--task", "Serve", "--", "--json-input", $serveRequest)
+          $serve = Start-Process -FilePath $rcc -ArgumentList $serveArgs -WorkingDirectory $PWD -RedirectStandardOutput $serveOut -RedirectStandardError $serveErr -PassThru
+          $ready = $false
+          $downloaded = Join-Path $env:RUNNER_TEMP "release-windows-served.tar.zst"
+          for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            if ($serve.HasExited) { Get-Content $serveOut, $serveErr; throw "JAT Serve exited before readiness" }
+            try {
+              Invoke-WebRequest -Uri "http://127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst" -OutFile $downloaded -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null
+              if ((Test-Path -LiteralPath $downloaded) -and (Get-Item -LiteralPath $downloaded).Length -gt 0) { $ready = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { Get-Content $serveOut, $serveErr; throw "JAT Serve did not serve the published artifact workspace" }
+          & taskkill.exe /PID $serve.Id /T /F | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "could not stop the Windows release Serve process" }
