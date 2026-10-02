@@ -9,8 +9,8 @@ class RecordingRunner:
         self.calls = []
         self.responses = list(responses)
 
-    def run(self, argv, timeout=None, foreground=False, secrets=()):
-        self.calls.append((argv, timeout, foreground, secrets))
+    def run(self, argv, timeout=None, foreground=False, secrets=(), env=None):
+        self.calls.append((argv, timeout, foreground, secrets, env))
         return self.responses.pop(0)
 
 
@@ -63,6 +63,65 @@ def test_rcc_adapter_rejects_non_json_verification_output(tmp_path):
         pass
     else:
         raise AssertionError("non-JSON verification output was accepted")
+
+
+def test_rcc_adapter_verifies_saved_archive_identity_in_private_runtime_home(tmp_path):
+    archive = tmp_path / "saved.rcca"
+    archive.write_bytes(b"saved archive")
+    runtime_home = tmp_path / "private-rcc-home"
+    runtime_home.mkdir()
+    runner = RecordingRunner([result(stdout=json.dumps({
+        "artifactDigest": "sha256:" + "a" * 64,
+        "specificationDigest": "sha256:" + "b" * 64,
+        "legacyBlueprintKey": "c" * 16,
+        "platform": "linux_amd64",
+    }))])
+
+    metadata = RCCArtifactAdapter(runner, executable="/tools/rcc").acquire(
+        archive,
+        rcc_version="v18.19.5",
+        specification_digest="sha256:" + "b" * 64,
+        legacy_blueprint_key="c" * 16,
+        artifact_digest="sha256:" + "a" * 64,
+        expected_platform="linux_amd64",
+        runtime_home=runtime_home,
+        strict_identity=True,
+    )
+
+    assert metadata.platform == "linux_amd64"
+    argv, _, _, _, env = runner.calls[0]
+    assert argv == [
+        "/tools/rcc", "env", "acquire", "--archive", str(archive),
+        "--artifact", "sha256:" + "a" * 64, "--permissive-local", "--json",
+    ]
+    assert env["ROBOCORP_HOME"] == str(runtime_home)
+
+
+def test_rcc_adapter_rejects_saved_specification_mismatch(tmp_path):
+    archive = tmp_path / "saved.rcca"
+    archive.write_bytes(b"saved archive")
+    runner = RecordingRunner([result(stdout=json.dumps({
+        "artifactDigest": "sha256:" + "a" * 64,
+        "specificationDigest": "sha256:" + "d" * 64,
+        "legacyBlueprintKey": "c" * 16,
+        "platform": "linux_amd64",
+    }))])
+
+    try:
+        RCCArtifactAdapter(runner, executable="/tools/rcc").acquire(
+            archive,
+            rcc_version="v18.19.5",
+            specification_digest="sha256:" + "b" * 64,
+            legacy_blueprint_key="c" * 16,
+            artifact_digest="sha256:" + "a" * 64,
+            expected_platform="linux_amd64",
+            runtime_home=tmp_path / "private-rcc-home",
+            strict_identity=True,
+        )
+    except ValueError as error:
+        assert "specification digest" in str(error)
+    else:
+        raise AssertionError("mismatched saved RCC specification was accepted")
 
 
 def test_rcc_adapter_rejects_unsupported_version(tmp_path):

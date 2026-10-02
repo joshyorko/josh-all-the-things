@@ -33,6 +33,9 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--folder", required=True)
     build.add_argument("--output", required=True)
     build.add_argument("--brew")
+    build.add_argument("--brew-archive", help="Reuse an existing Homebrew recovery archive")
+    build.add_argument("--rcc-archive", help="Reuse an existing RCC Environment Artifact archive")
+    build.add_argument("--rcc-metadata", help="Validated metadata accompanying --rcc-archive")
     images = build.add_mutually_exclusive_group()
     images.add_argument("--image", action="append", default=[], dest="images")
     images.add_argument("--all-images", action="store_true")
@@ -180,6 +183,9 @@ def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:
                 folder=parsed.folder,
                 output=parsed.output,
                 brew=parsed.brew,
+                brew_archive=parsed.brew_archive,
+                rcc_archive=parsed.rcc_archive,
+                rcc_metadata=parsed.rcc_metadata,
                 images=parsed.images,
                 all_images=parsed.all_images,
                 images_files=parsed.images_files,

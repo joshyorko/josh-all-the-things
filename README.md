@@ -253,6 +253,32 @@ brew bundle dump --force --file ./homebrew-recovery/Brewfile
 
 The haul stores that export as a top-level `homebrew-recovery.tar.zst` artifact.
 
+### Compose with Saved Recovery Components
+
+When the workspace is already materialized and recovery components were saved
+separately, reuse their exact archive files instead of capturing the current
+Homebrew or RCC environment again:
+
+```bash
+rcc task script -r robot.yaml -- ./jat build \
+  --folder /path/to/materialized-workspace \
+  --brew-archive /path/to/saved-homebrew-recovery.tar.zst \
+  --rcc-archive /path/to/saved-environment.rcca \
+  --rcc-metadata /path/to/saved-environment.json \
+  --hauler-manifest ./selected-content.yaml \
+  --output ./portable-haul.tar.zst
+```
+
+The RCC archive and its JSON metadata must be supplied together. JAT verifies
+the archive size and SHA-256, then asks RCC to verify the saved artifact,
+specification, and platform in a temporary private runtime home. This mode
+requires RCC but does not publish or export a replacement artifact. The saved
+robot path must exist in the materialized workspace. Saved Homebrew archives
+must pass JAT archive safety checks and contain a readable `Brewfile`. `--brew`
+and `--brew-archive` are mutually exclusive; saved RCC inputs cannot be
+combined with RCC capture options. All selected Hauler content still passes
+the normal reserved-anchor checks.
+
 ### Restore the Folder
 
 The destination must either not exist or be an empty directory:

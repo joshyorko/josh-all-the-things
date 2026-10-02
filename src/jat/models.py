@@ -28,6 +28,9 @@ class BuildRequest(RequestModel):
     folder: Path
     output: Path
     brew: Path | None = None
+    brew_archive: Path | None = None
+    rcc_archive: Path | None = None
+    rcc_metadata: Path | None = None
     images: list[str] = Field(default_factory=list)
     all_images: bool = False
     rcc_environment: Literal["off", "auto", "required"] = "off"
@@ -40,9 +43,15 @@ class BuildRequest(RequestModel):
     concurrency: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
-    def image_modes_are_exclusive(self):
+    def build_options_are_consistent(self):
         if self.images and self.all_images:
             raise ValueError("images and all_images are mutually exclusive")
+        if (self.rcc_archive is None) != (self.rcc_metadata is None):
+            raise ValueError("saved RCC archive and metadata must be supplied together")
+        if self.rcc_archive is not None and (self.rcc_environment != "off" or self.rcc_robot is not None):
+            raise ValueError("saved RCC components cannot be combined with RCC capture options")
+        if self.brew is not None and self.brew_archive is not None:
+            raise ValueError("Homebrew directory and saved archive are mutually exclusive")
         return self
 
     @field_validator("chunk_size")
@@ -229,6 +238,7 @@ class EnvironmentArtifactMetadata(BaseModel):
     archive_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     archive_size: int = Field(ge=1)
     rcc_version: str
+    platform: str | None = Field(default=None, pattern=r"^[a-z0-9]+_[a-z0-9]+$")
     robot: Path
     provider: Literal["local"] = "local"
     acquired: bool = False

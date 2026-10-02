@@ -4,13 +4,16 @@ import hashlib
 import ipaddress
 import json
 import os
+import platform
 import re
+import stat
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from shutil import which as system_which
 from urllib.parse import quote, urlsplit
 
+from pydantic import ValidationError
 from robocorp import log
 
 from .archive import ArchiveAdapter
@@ -194,33 +197,116 @@ class JATService:
             brew = existing_directory(request.brew) if request.brew else None
             if brew:
                 _validate_brew_recovery(brew)
+            saved_brew_input = existing_file(request.brew_archive) if request.brew_archive else None
             images = self._select_images(request)
             images_files = _validate_capture_sources(request.images_files, "images-file")
             hauler_manifests = _validate_capture_sources(request.hauler_manifests, "hauler-manifest")
+            saved_rcc_input = existing_file(request.rcc_archive) if request.rcc_archive else None
+            saved_rcc_metadata_input = existing_file(request.rcc_metadata) if request.rcc_metadata else None
+            if saved_rcc_metadata_input and saved_rcc_metadata_input.stat().st_size > 1024 * 1024:
+                raise ValueError("saved RCC metadata exceeds the 1 MiB input limit")
             with OwnedStage(output.parent, "build") as stage:
+                saved_brew_archive = None
+                if saved_brew_input:
+                    saved_brew_archive = stage.path / BREW_ARTIFACT
+                    _copy_regular_file(saved_brew_input, saved_brew_archive)
+                saved_rcc_archive = None
+                saved_rcc_metadata = None
+                saved_robot = None
+                if saved_rcc_input:
+                    saved_rcc_archive = stage.path / RCC_ARTIFACT
+                    _copy_regular_file(saved_rcc_input, saved_rcc_archive)
+                    saved_metadata_file = stage.path / "saved-rcc-metadata.json"
+                    _copy_regular_file(saved_rcc_metadata_input, saved_metadata_file, max_size=1024 * 1024)
+                    try:
+                        saved_rcc_metadata = EnvironmentArtifactMetadata.model_validate_json(
+                            saved_metadata_file.read_text(encoding="utf-8")
+                        )
+                    except ValidationError:
+                        raise ValueError("saved RCC metadata is invalid or unsupported") from None
+                    if (
+                        saved_rcc_metadata.archive_size != saved_rcc_archive.stat().st_size
+                        or saved_rcc_metadata.archive_sha256 != _sha256(saved_rcc_archive)
+                    ):
+                        raise ValueError("RCC environment metadata does not match the embedded archive")
+                    saved_robot = _source_robot_path(folder, saved_rcc_metadata.robot)
                 workspace_archive = stage.path / WORKSPACE_ARTIFACT
                 self.archive.create(folder, workspace_archive)
                 validate_archive_members(self.archive.members(workspace_archive))
-                brew_archive = None
+                brew_archive = saved_brew_archive
                 if brew:
                     brew_archive = stage.path / BREW_ARTIFACT
                     self.archive.create(brew, brew_archive)
                     validate_archive_members(self.archive.members(brew_archive))
+                elif saved_brew_archive:
+                    validate_archive_members(self.archive.members(saved_brew_archive))
+                    brew_validation = stage.path / "brew-validation"
+                    brew_validation.mkdir()
+                    self.archive.extract(saved_brew_archive, brew_validation, strip_components=1)
+                    _validate_brew_recovery(brew_validation)
                 rcc_archive = None
                 rcc_metadata = None
                 rcc_metadata_path = None
-                rcc_robot = self._select_rcc_robot(request, folder) if request.rcc_environment != "off" else None
-                if request.rcc_environment == "required" and rcc_robot is None:
-                    raise ValueError("RCC environment is required but no regular robot.yaml was found")
-                if rcc_robot is not None and request.rcc_environment != "off":
-                    if self.rcc is not None or self.which("rcc"):
-                        rcc_archive = stage.path / RCC_ARTIFACT
-                        rcc_metadata = self._rcc_adapter().publish_and_export(folder, rcc_archive, rcc_robot)
-                        rcc_metadata = rcc_metadata.model_copy(
-                            update={"archive": Path(RCC_ARTIFACT), "robot": rcc_robot.relative_to(folder)}
+                if saved_rcc_archive is not None:
+                    rcc_archive = saved_rcc_archive
+                    if self.rcc is None and not self.which("rcc"):
+                        raise ValueError("RCC is required to verify a supplied environment artifact")
+                    rcc_home = stage.path / "rcc-home"
+                    rcc_home.mkdir()
+                    try:
+                        verified_rcc = self._rcc_adapter().acquire(
+                            saved_rcc_archive,
+                            saved_robot,
+                            saved_rcc_metadata.rcc_version,
+                            saved_rcc_metadata.specification_digest,
+                            saved_rcc_metadata.legacy_blueprint_key,
+                            artifact_digest=saved_rcc_metadata.artifact,
+                            expected_platform=saved_rcc_metadata.platform,
+                            runtime_home=rcc_home,
+                            strict_identity=True,
                         )
-                        rcc_metadata_path = stage.path / RCC_METADATA_ARTIFACT
-                        rcc_metadata_path.write_text(json.dumps(rcc_metadata.model_dump(mode="json"), indent=2, sort_keys=True) + "\n")
+                    except RuntimeError:
+                        raise ValueError("RCC could not verify the supplied environment artifact") from None
+                    if (
+                        verified_rcc.artifact != saved_rcc_metadata.artifact
+                        or verified_rcc.specification_digest != saved_rcc_metadata.specification_digest
+                        or verified_rcc.legacy_blueprint_key != saved_rcc_metadata.legacy_blueprint_key
+                        or not verified_rcc.platform
+                        or (
+                            saved_rcc_metadata.platform is not None
+                            and verified_rcc.platform != saved_rcc_metadata.platform
+                        )
+                    ):
+                        raise ValueError("RCC acquire verification did not match saved metadata")
+                    rcc_metadata = saved_rcc_metadata.model_copy(
+                        update={
+                            "archive": Path(RCC_ARTIFACT),
+                            "platform": verified_rcc.platform,
+                        }
+                    )
+                    rcc_metadata_path = stage.path / RCC_METADATA_ARTIFACT
+                    rcc_metadata_path.write_text(
+                        json.dumps(rcc_metadata.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+                    )
+                else:
+                    rcc_robot = self._select_rcc_robot(request, folder) if request.rcc_environment != "off" else None
+                    if request.rcc_environment == "required" and rcc_robot is None:
+                        raise ValueError("RCC environment is required but no regular robot.yaml was found")
+                    if rcc_robot is not None and request.rcc_environment != "off":
+                        if self.rcc is not None or self.which("rcc"):
+                            rcc_archive = stage.path / RCC_ARTIFACT
+                            rcc_metadata = self._rcc_adapter().publish_and_export(folder, rcc_archive, rcc_robot)
+                            rcc_metadata = rcc_metadata.model_copy(
+                                update={
+                                    "archive": Path(RCC_ARTIFACT),
+                                    "robot": rcc_robot.relative_to(folder),
+                                    "platform": _platform_name(),
+                                }
+                            )
+                            rcc_metadata_path = stage.path / RCC_METADATA_ARTIFACT
+                            rcc_metadata_path.write_text(
+                                json.dumps(rcc_metadata.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+                            )
                     elif request.rcc_environment == "required":
                         raise ValueError("RCC environment is required but rcc is unavailable")
                 manifest = stage.path / "manifest.yaml"
@@ -292,7 +378,7 @@ class JATService:
                     entrypoint = staged
                 self.hauler.load(validation_store, validation_temp, entrypoint)
                 inventory = self.hauler.inventory(validation_store, validation_temp)
-                _validate_inventory(inventory, brew is not None, rcc_archive is not None)
+                _validate_inventory(inventory, brew_archive is not None, rcc_archive is not None)
                 outputs = _promote_all_or_nothing(chunks, output.parent)
             if request.chunk_size:
                 return OperationResult(
@@ -1029,6 +1115,31 @@ def _saved_robot_path(workspace: Path, relative: Path) -> Path:
     return candidate
 
 
+def _source_robot_path(workspace: Path, relative: Path) -> Path:
+    """Validate a saved RCC robot path against the materialized workspace."""
+    if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("saved robot path must be relative to the materialized workspace")
+    candidate = workspace.joinpath(*relative.parts)
+    current = workspace
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("saved robot path contains a symlink")
+    try:
+        candidate.resolve(strict=True).relative_to(workspace.resolve(strict=True))
+    except (OSError, ValueError):
+        raise ValueError("saved robot path escapes the materialized workspace")
+    if not candidate.is_file():
+        raise ValueError("saved robot path is absent or not a regular file")
+    return candidate
+
+
+def _platform_name() -> str:
+    machine = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine().lower(), platform.machine().lower())
+    system = {"darwin": "darwin"}.get(platform.system().lower(), platform.system().lower())
+    return f"{system}_{machine}"
+
+
 def _inventory_references(inventory: list[dict]) -> set[str]:
     return {item["Reference"] for item in inventory}
 
@@ -1101,6 +1212,37 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _copy_regular_file(source: Path, destination: Path, max_size: int | None = None) -> None:
+    """Snapshot a caller file into owned staging without following symlinks."""
+    try:
+        source_stat = source.lstat()
+    except OSError:
+        raise ValueError("saved component input changed or cannot be opened safely") from None
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise ValueError("saved component input must be a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source, flags)
+    except OSError:
+        raise ValueError("saved component input changed or cannot be opened safely") from None
+    with os.fdopen(descriptor, "rb") as reader:
+        file_stat = os.fstat(reader.fileno())
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or (source_stat.st_dev, source_stat.st_ino) != (file_stat.st_dev, file_stat.st_ino)
+        ):
+            raise ValueError("saved component input must be a regular file")
+        if max_size is not None and file_stat.st_size > max_size:
+            raise ValueError("saved RCC metadata exceeds the 1 MiB input limit")
+        copied = 0
+        with destination.open("xb") as writer:
+            while block := reader.read(1024 * 1024):
+                copied += len(block)
+                if max_size is not None and copied > max_size:
+                    raise ValueError("saved RCC metadata exceeds the 1 MiB input limit")
+                writer.write(block)
 
 
 def _git_version(root: Path) -> str:
