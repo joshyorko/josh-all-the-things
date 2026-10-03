@@ -222,12 +222,14 @@ def test_build_cli_forwards_saved_component_inputs(capsys):
         "build", "--folder", "/workspace", "--output", "/tmp/haul.tar.zst",
         "--rcc-archive", "/saved/runtime.rcca", "--rcc-metadata", "/saved/runtime.json",
         "--brew-archive", "/saved/brew.tar.zst", "--json",
+        "--hauler-archive", "/saved/hauler-content.tar.zst",
     ], service=service)
     assert status == 0
     _, request = service.calls[0]
     assert request.rcc_archive == Path("/saved/runtime.rcca")
     assert request.rcc_metadata == Path("/saved/runtime.json")
     assert request.brew_archive == Path("/saved/brew.tar.zst")
+    assert request.hauler_archive == Path("/saved/hauler-content.tar.zst")
 
 
 

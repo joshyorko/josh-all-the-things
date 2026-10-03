@@ -34,6 +34,7 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--output", required=True)
     build.add_argument("--brew")
     build.add_argument("--brew-archive", help="Reuse an existing Homebrew recovery archive")
+    build.add_argument("--hauler-archive", help="Reuse exact saved non-anchor Hauler content")
     build.add_argument("--rcc-archive", help="Reuse an existing RCC Environment Artifact archive")
     build.add_argument("--rcc-metadata", help="Validated metadata accompanying --rcc-archive")
     images = build.add_mutually_exclusive_group()
@@ -184,6 +185,7 @@ def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:
                 output=parsed.output,
                 brew=parsed.brew,
                 brew_archive=parsed.brew_archive,
+                hauler_archive=parsed.hauler_archive,
                 rcc_archive=parsed.rcc_archive,
                 rcc_metadata=parsed.rcc_metadata,
                 images=parsed.images,

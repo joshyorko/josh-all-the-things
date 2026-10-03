@@ -4,8 +4,6 @@ import shutil
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
-
 from jat.archive import ArchiveAdapter
 from jat.models import (
     BuildRequest,
@@ -21,15 +19,17 @@ from jat.models import (
 from jat.process import ProcessResult, ProcessRunner
 from jat.safety import ArchiveMember
 from jat.services import (
-    WORKSPACE_ARTIFACT as WORKSPACE_ARTIFACT_NAME,
-)
-from jat.services import (
+    RCC_REFERENCE,
     WORKSPACE_REFERENCE,
     JATService,
     _chunk_files,
     _local_file_reference,
     _registry_config,
 )
+from jat.services import (
+    WORKSPACE_ARTIFACT as WORKSPACE_ARTIFACT_NAME,
+)
+from pydantic import ValidationError
 
 
 class ManifestHauler:
@@ -169,6 +169,36 @@ class FakeHauler:
             target = output / "recovery" / "homebrew-recovery.tar.zst"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"brew")
+
+
+class SavedHaulerComposer(FakeHauler):
+    def __init__(self, saved_inventory):
+        super().__init__()
+        self.saved_inventory = [dict(item) for item in saved_inventory]
+        self.build_inventory = []
+        self.output_inventory = []
+        self.events = []
+
+    def load(self, store, temp, haul):
+        if Path(haul).name == "hauler-content.tar.zst":
+            self.events.append(("load_saved", store.name))
+            self.build_inventory = [dict(item) for item in self.saved_inventory]
+        else:
+            self.events.append(("load_output", store.name))
+            self.build_inventory = [dict(item) for item in self.output_inventory]
+
+    def sync(self, store, temp, *manifests, retries=None, exclude_extras=False):
+        self.events.append(("sync", store.name, len(manifests)))
+        self.build_inventory.append({"Reference": WORKSPACE_REFERENCE, "Type": "file", "Digest": "sha256:" + "a" * 64, "Size": 12})
+
+    def save(self, store, temp, haul, chunk_size=None, containerd=False):
+        self.events.append(("save", store.name))
+        self.output_inventory = [dict(item) for item in self.build_inventory]
+        haul.write_bytes(b"synthetic-composed-haul")
+
+    def inventory(self, store, temp):
+        self.events.append(("inventory", store.name))
+        return self.build_inventory
 
 
 class RccHauler(FakeHauler):
@@ -551,6 +581,58 @@ def test_build_reuses_saved_rcc_and_brew_archive_bytes_without_recapture(tmp_pat
     assert len(rcc.calls) == 1 and rcc.calls[0][0] == "acquire"
     assert rcc.calls[0][6]["strict_identity"] is True
     assert rcc.calls[0][6]["runtime_home"].name == "rcc-home"
+
+
+def test_build_composes_saved_hauler_content_by_native_load_without_refetch(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    archive = tmp_path / "saved-content.tar.zst"
+    archive.write_bytes(b"native Hauler content")
+    saved_entry = {
+        "Reference": "registry.example.test/team/image@sha256:" + "b" * 64,
+        "Type": "image",
+        "Platform": "linux/amd64",
+        "Digest": "sha256:" + "b" * 64,
+        "Size": 4096,
+    }
+    hauler = SavedHaulerComposer([saved_entry])
+
+    result = service(tmp_path, archive=FakeArchive(), hauler=hauler).build(
+        BuildRequest(folder=source, output=tmp_path / "composed.tar.zst", hauler_archive=archive)
+    )
+
+    assert result.success, result.diagnostics
+    assert hauler.events[0] == ("load_saved", "build-store")
+    assert next(index for index, event in enumerate(hauler.events) if event[0] == "load_saved") < next(
+        index for index, event in enumerate(hauler.events) if event[0] == "sync"
+    )
+    assert [event for event in hauler.events if event[0] == "sync"] == [("sync", "build-store", 1)]
+    assert hauler.output_inventory == [saved_entry, {"Reference": WORKSPACE_REFERENCE, "Type": "file", "Digest": "sha256:" + "a" * 64, "Size": 12}]
+
+
+@pytest.mark.parametrize(
+    "saved_entry",
+    [
+        {"Reference": "hauler/user.txt:latest", "Type": "file", "Size": 10},
+        {"Reference": "hauler/user.txt:latest", "Type": "file", "Digest": "sha256:" + "b" * 64},
+        {"Reference": WORKSPACE_REFERENCE, "Type": "file", "Digest": "sha256:" + "b" * 64, "Size": 10},
+        {"Reference": RCC_REFERENCE, "Type": "file", "Digest": "sha256:" + "b" * 64, "Size": 10},
+    ],
+)
+def test_build_rejects_invalid_or_reserved_saved_hauler_content_before_sync(tmp_path, saved_entry):
+    source = tmp_path / "source"
+    source.mkdir()
+    archive = tmp_path / "saved-content.tar.zst"
+    archive.write_bytes(b"native Hauler content")
+    hauler = SavedHaulerComposer([saved_entry])
+
+    result = service(tmp_path, archive=FakeArchive(), hauler=hauler).build(
+        BuildRequest(folder=source, output=tmp_path / "composed.tar.zst", hauler_archive=archive)
+    )
+
+    assert result.success is False
+    assert not any(event[0] == "sync" for event in hauler.events)
+    assert not (tmp_path / "composed.tar.zst").exists()
 
 
 @pytest.mark.parametrize("mutation, expected", [

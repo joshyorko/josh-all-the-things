@@ -58,6 +58,7 @@ RCC_ARTIFACT = "rcc-environment.rcca"
 RCC_REFERENCE = "hauler/rcc-environment.rcca:latest"
 RCC_METADATA_ARTIFACT = "rcc-environment-metadata.json"
 RCC_METADATA_REFERENCE = "hauler/rcc-environment-metadata.json:latest"
+HAULER_CONTENT_ARTIFACT = "hauler-content.tar.zst"
 
 COPY_REMOTE_SCHEMES = ("registry://", "reg://", "oci://")
 COPY_LOCAL_SCHEMES = ("dir://", "directory://")
@@ -198,6 +199,7 @@ class JATService:
             if brew:
                 _validate_brew_recovery(brew)
             saved_brew_input = existing_file(request.brew_archive) if request.brew_archive else None
+            saved_hauler_input = existing_file(request.hauler_archive) if request.hauler_archive else None
             images = self._select_images(request)
             images_files = _validate_capture_sources(request.images_files, "images-file")
             hauler_manifests = _validate_capture_sources(request.hauler_manifests, "hauler-manifest")
@@ -210,6 +212,11 @@ class JATService:
                 if saved_brew_input:
                     saved_brew_archive = stage.path / BREW_ARTIFACT
                     _copy_regular_file(saved_brew_input, saved_brew_archive)
+                saved_hauler_archive = None
+                saved_hauler_identities = None
+                if saved_hauler_input:
+                    saved_hauler_archive = stage.path / HAULER_CONTENT_ARTIFACT
+                    _copy_regular_file(saved_hauler_input, saved_hauler_archive)
                 saved_rcc_archive = None
                 saved_rcc_metadata = None
                 saved_robot = None
@@ -317,6 +324,11 @@ class JATService:
                 validation_temp = stage.path / "validation-temp"
                 temp.mkdir()
                 validation_temp.mkdir()
+                if saved_hauler_archive:
+                    self.hauler.load(build_store, temp, saved_hauler_archive)
+                    saved_hauler_identities = _saved_hauler_content_identities(
+                        self.hauler.inventory(build_store, temp)
+                    )
                 artifact_files = [(workspace_archive, WORKSPACE_ARTIFACT)]
                 if brew_archive:
                     artifact_files.append((brew_archive, BREW_ARTIFACT))
@@ -339,6 +351,10 @@ class JATService:
                 else:
                     self.hauler.sync(
                         build_store, temp, manifest, retries=retries, exclude_extras=exclude_extras, **concurrency_policy
+                    )
+                if saved_hauler_identities is not None:
+                    _verify_saved_hauler_content(
+                        self.hauler.inventory(build_store, temp), saved_hauler_identities
                     )
                 # JAT owns its anchors: user-provided content must never
                 # replace or duplicate a reserved anchor reference.
@@ -379,6 +395,8 @@ class JATService:
                 self.hauler.load(validation_store, validation_temp, entrypoint)
                 inventory = self.hauler.inventory(validation_store, validation_temp)
                 _validate_inventory(inventory, brew_archive is not None, rcc_archive is not None)
+                if saved_hauler_identities is not None:
+                    _verify_saved_hauler_content(inventory, saved_hauler_identities)
                 outputs = _promote_all_or_nothing(chunks, output.parent)
             if request.chunk_size:
                 return OperationResult(
@@ -1183,6 +1201,85 @@ def _validate_inventory(inventory: list[dict], expect_brew: bool, expect_rcc: bo
         raise ValueError("validated Hauler store contains a Homebrew recovery artifact but none was requested")
     if not expect_rcc and RCC_REFERENCE in references:
         raise ValueError("validated Hauler store contains an RCC environment artifact but none was requested")
+
+
+def _is_reserved_jat_reference(reference: str) -> bool:
+    return reference in {
+        WORKSPACE_REFERENCE,
+        BREW_REFERENCE,
+        RCC_REFERENCE,
+        RCC_METADATA_REFERENCE,
+    } or reference.endswith(".rcca:latest")
+
+
+def _hauler_content_identities(inventory: list[dict]) -> set[tuple[str, str, str | None, str, int]]:
+    if not isinstance(inventory, list):
+        raise TypeError("saved Hauler inventory is invalid")
+    identities = set()
+    for item in inventory:
+        if not isinstance(item, dict):
+            raise TypeError("saved Hauler inventory is invalid")
+        reference = item.get("Reference")
+        artifact_type = item.get("Type")
+        digest = item.get("Digest")
+        size = item.get("Size")
+        platform_value = item.get("Platform")
+        if (
+            not isinstance(reference, str)
+            or not reference
+            or len(reference) > 4096
+            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in reference)
+            or not isinstance(artifact_type, str)
+            or not artifact_type
+            or len(artifact_type) > 64
+            or not isinstance(digest, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+            or type(size) is not int
+            or size < 0
+            or (platform_value is not None and (not isinstance(platform_value, str) or not platform_value))
+        ):
+            raise ValueError("saved Hauler content is missing a strong identity")
+        identity = (reference, artifact_type, platform_value, digest, size)
+        if identity in identities:
+            raise ValueError("saved Hauler content contains duplicate identities")
+        identities.add(identity)
+    return identities
+
+
+def _saved_hauler_content_identities(inventory: list[dict]) -> set[tuple[str, str, str | None, str, int]]:
+    if not isinstance(inventory, list) or not inventory:
+        raise ValueError("saved Hauler archive contains no content")
+    if any(
+        isinstance(item, dict)
+        and isinstance(item.get("Reference"), str)
+        and _is_reserved_jat_reference(item["Reference"])
+        for item in inventory
+    ):
+        raise ValueError("saved Hauler content contains a reserved JAT anchor")
+    try:
+        return _hauler_content_identities(inventory)
+    except TypeError as error:
+        raise ValueError("saved Hauler inventory is invalid") from error
+
+
+def _verify_saved_hauler_content(
+    inventory: list[dict], expected: set[tuple[str, str, str | None, str, int]]
+) -> None:
+    content_inventory = [
+        item
+        for item in inventory
+        if not (
+            isinstance(item, dict)
+            and isinstance(item.get("Reference"), str)
+            and _is_reserved_jat_reference(item["Reference"])
+        )
+    ]
+    try:
+        identities = _hauler_content_identities(content_inventory)
+    except TypeError as error:
+        raise ValueError("Hauler inventory is invalid") from error
+    if identities != expected:
+        raise ValueError("saved Hauler content identity changed during composition")
 
 
 def _promote_restore(assembled: Path, destination: Path) -> None:

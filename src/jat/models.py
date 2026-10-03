@@ -29,6 +29,7 @@ class BuildRequest(RequestModel):
     output: Path
     brew: Path | None = None
     brew_archive: Path | None = None
+    hauler_archive: Path | None = None
     rcc_archive: Path | None = None
     rcc_metadata: Path | None = None
     images: list[str] = Field(default_factory=list)
@@ -52,6 +53,10 @@ class BuildRequest(RequestModel):
             raise ValueError("saved RCC components cannot be combined with RCC capture options")
         if self.brew is not None and self.brew_archive is not None:
             raise ValueError("Homebrew directory and saved archive are mutually exclusive")
+        if self.hauler_archive is not None and (
+            self.images or self.all_images or self.images_files or self.hauler_manifests
+        ):
+            raise ValueError("saved Hauler archive cannot be combined with other Hauler capture inputs")
         return self
 
     @field_validator("chunk_size")

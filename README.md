@@ -265,7 +265,7 @@ rcc task script -r robot.yaml -- ./jat build \
   --brew-archive /path/to/saved-homebrew-recovery.tar.zst \
   --rcc-archive /path/to/saved-environment.rcca \
   --rcc-metadata /path/to/saved-environment.json \
-  --hauler-manifest ./selected-content.yaml \
+  --hauler-archive /path/to/saved-hauler-content.tar.zst \
   --output ./portable-haul.tar.zst
 ```
 
@@ -276,8 +276,10 @@ requires RCC but does not publish or export a replacement artifact. The saved
 robot path must exist in the materialized workspace. Saved Homebrew archives
 must pass JAT archive safety checks and contain a readable `Brewfile`. `--brew`
 and `--brew-archive` are mutually exclusive; saved RCC inputs cannot be
-combined with RCC capture options. All selected Hauler content still passes
-the normal reserved-anchor checks.
+combined with RCC capture options. A saved Hauler archive is loaded into the
+owned native Hauler store and its exact inventory identities must survive
+composition. It cannot be combined with image or Hauler manifest inputs, and it
+must not contain JAT-reserved workspace, Brew, or RCC anchors.
 
 ### Restore the Folder
 
