@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 
@@ -58,22 +59,53 @@ class RCCArtifactAdapter:
         rcc_version: str | None = None,
         specification_digest: str | None = None,
         legacy_blueprint_key: str | None = None,
+        *,
+        artifact_digest: str | None = None,
+        expected_platform: str | None = None,
+        runtime_home: Path | None = None,
+        strict_identity: bool = False,
     ) -> EnvironmentArtifactMetadata:
+        arguments = [
+            self.executable,
+            "env",
+            "acquire",
+            "--archive",
+            str(archive),
+        ]
+        if artifact_digest is not None:
+            arguments.extend(("--artifact", artifact_digest))
+        arguments.extend(("--permissive-local", "--json"))
+        environment = None
+        if runtime_home is not None:
+            environment = os.environ.copy()
+            environment["ROBOCORP_HOME"] = str(runtime_home)
         acquired = self._run(
-            [
-                self.executable,
-                "env",
-                "acquire",
-                "--archive",
-                str(archive),
-                "--permissive-local",
-                "--json",
-            ]
+            arguments,
+            env=environment,
         )
         payload = _json_object(acquired.stdout)
         artifact = _artifact(payload)
-        specification = _optional_digest(payload, "specificationDigest", specification_digest)
-        legacy = _optional_string(payload, "legacyBlueprintKey", legacy_blueprint_key)
+        specification = (
+            _required_digest(payload, "specificationDigest")
+            if strict_identity
+            else _optional_digest(payload, "specificationDigest", specification_digest)
+        )
+        legacy = (
+            _required_string(payload, "legacyBlueprintKey")
+            if strict_identity
+            else _optional_string(payload, "legacyBlueprintKey", legacy_blueprint_key)
+        )
+        artifact_platform = payload.get("platform")
+        if strict_identity and (not isinstance(artifact_platform, str) or not artifact_platform):
+            raise RuntimeError("RCC acquire verification did not return a platform")
+        if artifact_digest is not None and artifact != artifact_digest:
+            raise ValueError("acquired RCC environment artifact digest did not match saved metadata")
+        if specification_digest is not None and specification != specification_digest:
+            raise ValueError("acquired RCC specification digest did not match saved metadata")
+        if legacy_blueprint_key is not None and legacy != legacy_blueprint_key:
+            raise ValueError("acquired RCC legacy blueprint key did not match saved metadata")
+        if expected_platform is not None and artifact_platform != expected_platform:
+            raise ValueError("acquired RCC platform did not match saved metadata")
         return EnvironmentArtifactMetadata(
             artifact=artifact,
             specification_digest=specification,
@@ -82,6 +114,7 @@ class RCCArtifactAdapter:
             archive_sha256=_sha256(archive),
             archive_size=archive.stat().st_size,
             rcc_version=rcc_version or self.version(),
+            platform=artifact_platform,
             robot=robot or Path("robot.yaml"),
             acquired=True,
         )
@@ -102,8 +135,11 @@ class RCCArtifactAdapter:
             raise RuntimeError(f"RCC {EXPECTED_RCC_VERSION} is required; found {version}")
         return version
 
-    def _run(self, argv: list[str]):
-        result = self.runner.run(argv, timeout=self.timeout)
+    def _run(self, argv: list[str], env: dict[str, str] | None = None):
+        if env is None:
+            result = self.runner.run(argv, timeout=self.timeout)
+        else:
+            result = self.runner.run(argv, timeout=self.timeout, env=env)
         if not result.success:
             raise RuntimeError(result.diagnostics or f"RCC command failed: {' '.join(argv)}")
         return result

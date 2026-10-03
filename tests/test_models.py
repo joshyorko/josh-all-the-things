@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -116,6 +117,8 @@ def test_build_request_accepts_and_bounds_new_capture_contract():
     assert request.images_files[1].startswith("https://")
     assert request.chunk_size == "500MB"
     assert request.retries == 1
+    saved = BuildRequest(folder="src", output="out.tar.zst", hauler_archive="saved-content.tar.zst")
+    assert saved.hauler_archive == Path("saved-content.tar.zst")
     assert BuildRequest(folder="s", output="o").retries is None
     for accepted in ("1M", "1G", "500mb", "1048576", "2TB"):
         assert BuildRequest(folder="s", output="o", chunk_size=accepted).chunk_size == accepted
@@ -127,6 +130,14 @@ def test_build_request_accepts_and_bounds_new_capture_contract():
             BuildRequest(folder="s", output="o", chunk_size=bad_chunk_size)
     with pytest.raises(ValidationError):
         BuildRequest(folder="s", output="o", images_files=["./images.txt", "ftp://example.test/images.txt"])
+    for capture_options in (
+        {"images": ["example/image:tag"]},
+        {"all_images": True},
+        {"images_files": ["images.txt"]},
+        {"hauler_manifests": ["content.yaml"]},
+    ):
+        with pytest.raises(ValidationError, match="saved Hauler archive"):
+            BuildRequest(folder="s", output="o", hauler_archive="saved.tar.zst", **capture_options)
 
 
 def test_manifest_request_requires_explicit_local_publish_and_safe_registry_prefix():
