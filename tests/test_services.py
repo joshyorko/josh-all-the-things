@@ -4,7 +4,6 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 from jat.archive import ArchiveAdapter
 from jat.models import (
     BuildRequest,
@@ -18,16 +17,20 @@ from jat.models import (
     ServeRequest,
 )
 from jat.process import ProcessResult, ProcessRunner
-from pydantic import ValidationError
 from jat.safety import ArchiveMember
 from jat.services import (
-    JATService,
-    WORKSPACE_ARTIFACT as WORKSPACE_ARTIFACT_NAME,
+    RCC_REFERENCE,
     WORKSPACE_REFERENCE,
+    JATService,
+    _chunk_files,
     _local_file_reference,
     _registry_config,
-    _chunk_files,
 )
+from jat.services import (
+    WORKSPACE_ARTIFACT as WORKSPACE_ARTIFACT_NAME,
+)
+from pydantic import ValidationError
+
 
 class ManifestHauler:
     def __init__(self, remote_digest=None, multi_platform=False):
@@ -168,6 +171,36 @@ class FakeHauler:
             target.write_bytes(b"brew")
 
 
+class SavedHaulerComposer(FakeHauler):
+    def __init__(self, saved_inventory):
+        super().__init__()
+        self.saved_inventory = [dict(item) for item in saved_inventory]
+        self.build_inventory = []
+        self.output_inventory = []
+        self.events = []
+
+    def load(self, store, temp, haul):
+        if Path(haul).name == "hauler-content.tar.zst":
+            self.events.append(("load_saved", store.name))
+            self.build_inventory = [dict(item) for item in self.saved_inventory]
+        else:
+            self.events.append(("load_output", store.name))
+            self.build_inventory = [dict(item) for item in self.output_inventory]
+
+    def sync(self, store, temp, *manifests, retries=None, exclude_extras=False):
+        self.events.append(("sync", store.name, len(manifests)))
+        self.build_inventory.append({"Reference": WORKSPACE_REFERENCE, "Type": "file", "Digest": "sha256:" + "a" * 64, "Size": 12})
+
+    def save(self, store, temp, haul, chunk_size=None, containerd=False):
+        self.events.append(("save", store.name))
+        self.output_inventory = [dict(item) for item in self.build_inventory]
+        haul.write_bytes(b"synthetic-composed-haul")
+
+    def inventory(self, store, temp):
+        self.events.append(("inventory", store.name))
+        return self.build_inventory
+
+
 class RccHauler(FakeHauler):
     def __init__(
         self,
@@ -218,8 +251,18 @@ class RccHauler(FakeHauler):
 
 
 class FakeRcc:
-    def __init__(self):
+    def __init__(
+        self,
+        artifact="sha256:" + "b" * 64,
+        specification="sha256:" + "c" * 64,
+        legacy="d" * 16,
+        platform="linux_amd64",
+    ):
         self.calls = []
+        self.artifact = artifact
+        self.specification = specification
+        self.legacy = legacy
+        self.platform = platform
 
     def publish_and_export(self, source, archive, robot=None):
         self.calls.append(("publish_and_export", source, archive, robot))
@@ -227,7 +270,7 @@ class FakeRcc:
         return EnvironmentArtifactMetadata(
             artifact="sha256:" + "b" * 64,
             specification_digest="sha256:" + "c" * 64,
-            legacy_blueprint_key="d" * 16,
+            legacy_blueprint_key=self.legacy,
             archive=archive,
             archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
             archive_size=4,
@@ -235,16 +278,25 @@ class FakeRcc:
             robot=robot or source / "robot.yaml",
         )
 
-    def acquire(self, archive, robot, rcc_version=None, specification_digest=None, legacy_blueprint_key=None):
-        self.calls.append(("acquire", archive, robot, rcc_version, specification_digest, legacy_blueprint_key))
+    def acquire(
+        self,
+        archive,
+        robot,
+        rcc_version=None,
+        specification_digest=None,
+        legacy_blueprint_key=None,
+        **kwargs,
+    ):
+        self.calls.append(("acquire", archive, robot, rcc_version, specification_digest, legacy_blueprint_key, kwargs))
         return EnvironmentArtifactMetadata(
-            artifact="sha256:" + "b" * 64,
-            specification_digest="sha256:" + "c" * 64,
-            legacy_blueprint_key="d" * 16,
+            artifact=self.artifact,
+            specification_digest=self.specification,
+            legacy_blueprint_key=self.legacy,
             archive=archive,
             archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
             archive_size=4,
             rcc_version=rcc_version or "v18.19.5",
+            platform=self.platform,
             robot=robot,
             acquired=True,
         )
@@ -472,6 +524,293 @@ def test_build_accepts_workspace_with_safe_internal_symlink(tmp_path):
 
     assert result.success, result.diagnostics
     assert hauler.calls == ["sync", "save", "load", "inventory"]
+
+
+@pytest.mark.parametrize("component", ["brew_archive", "hauler_archive", "rcc_archive"])
+def test_saved_component_limit_precedes_copy_and_native_work(tmp_path, monkeypatch, component):
+    from jat import services
+
+    monkeypatch.setattr(services, "MAX_SAVED_COMPONENT_ARCHIVE_BYTES", 8, raising=False)
+    source = tmp_path / "workspace"
+    source.mkdir()
+    saved = tmp_path / "saved-archive"
+    saved.write_bytes(b"123456789")
+    arguments = {component: saved}
+    if component == "rcc_archive":
+        (source / "robot.yaml").write_text("tasks: {}\n")
+        metadata = tmp_path / "rcc-metadata.json"
+        metadata.write_text(EnvironmentArtifactMetadata(
+            artifact="sha256:" + "b" * 64,
+            specification_digest="sha256:" + "c" * 64,
+            legacy_blueprint_key="d" * 16,
+            archive=saved,
+            archive_sha256=hashlib.sha256(saved.read_bytes()).hexdigest(),
+            archive_size=saved.stat().st_size,
+            rcc_version="v18.19.5",
+            platform="linux_amd64",
+            robot=Path("robot.yaml"),
+        ).model_dump_json())
+        arguments["rcc_metadata"] = metadata
+    archive = FakeArchive()
+    hauler = FakeHauler()
+    rcc = FakeRcc()
+    output = tmp_path / "capsule.tar.zst"
+
+    result = service(tmp_path, archive=archive, hauler=hauler, rcc=rcc).build(
+        BuildRequest(folder=source, output=output, **arguments)
+    )
+
+    assert not result.success
+    assert "saved component input exceeds its size limit" in result.diagnostics
+    assert not output.exists()
+    assert archive.calls == []
+    assert hauler.calls == []
+    assert rcc.calls == []
+
+
+def test_build_reuses_saved_rcc_and_brew_archive_bytes_without_recapture(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "robot.yaml").write_text("tasks: {}\n")
+    rcc_archive = tmp_path / "saved.rcca"
+    rcc_bytes = b"saved-rcca-bytes"
+    rcc_archive.write_bytes(rcc_bytes)
+    rcc_metadata = tmp_path / "saved-rcc.json"
+    rcc_metadata.write_text(json.dumps({
+        "artifact": "sha256:" + "b" * 64,
+        "specification_digest": "sha256:" + "c" * 64,
+        "legacy_blueprint_key": "d" * 16,
+        "archive": "old-private-path.rcca",
+        "archive_sha256": hashlib.sha256(rcc_bytes).hexdigest(),
+        "archive_size": len(rcc_bytes),
+        "rcc_version": "v18.19.5",
+        "platform": "linux_amd64",
+        "robot": "robot.yaml",
+    }))
+    brew_archive = tmp_path / "saved-brew.tar.zst"
+    brew_archive.write_bytes(b"saved-brew-bytes")
+    archive = FakeArchive()
+    class InputInspectingHauler(RccHauler):
+        def __init__(self):
+            super().__init__(extracted_brew=True)
+
+        def sync(self, store, temp, *manifests, retries=None, exclude_extras=False):
+            self.manifest_text = Path(manifests[0]).read_text()
+            manifest_directory = Path(manifests[0]).parent
+            self.input_bytes = (
+                (manifest_directory / "rcc-environment.rcca").read_bytes(),
+                (manifest_directory / "homebrew-recovery.tar.zst").read_bytes(),
+            )
+            super().sync(store, temp, *manifests, retries=retries, exclude_extras=exclude_extras)
+
+    hauler = InputInspectingHauler()
+    rcc = FakeRcc()
+
+    result = service(tmp_path, archive=archive, hauler=hauler, rcc=rcc).build(BuildRequest(
+        folder=source,
+        output=tmp_path / "composed.tar.zst",
+        rcc_archive=rcc_archive,
+        rcc_metadata=rcc_metadata,
+        brew_archive=brew_archive,
+    ))
+
+    assert result.success, result.diagnostics
+    assert [call[1] for call in archive.calls if call[0] == "create"] == [source]
+    assert str(rcc_archive.resolve()) not in hauler.manifest_text
+    assert str(brew_archive.resolve()) not in hauler.manifest_text
+    assert hauler.input_bytes == (rcc_bytes, b"saved-brew-bytes")
+    assert hauler.calls == ["sync", "save", "load", "inventory"]
+    assert len(rcc.calls) == 1 and rcc.calls[0][0] == "acquire"
+    assert rcc.calls[0][6]["strict_identity"] is True
+    assert rcc.calls[0][6]["runtime_home"].name == "rcc-home"
+
+
+def test_build_composes_saved_hauler_content_by_native_load_without_refetch(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    archive = tmp_path / "saved-content.tar.zst"
+    archive.write_bytes(b"native Hauler content")
+    saved_entry = {
+        "Reference": "registry.example.test/team/image@sha256:" + "b" * 64,
+        "Type": "image",
+        "Platform": "linux/amd64",
+        "Digest": "sha256:" + "b" * 64,
+        "Size": 4096,
+    }
+    hauler = SavedHaulerComposer([saved_entry])
+
+    result = service(tmp_path, archive=FakeArchive(), hauler=hauler).build(
+        BuildRequest(folder=source, output=tmp_path / "composed.tar.zst", hauler_archive=archive)
+    )
+
+    assert result.success, result.diagnostics
+    assert hauler.events[0] == ("load_saved", "build-store")
+    assert next(index for index, event in enumerate(hauler.events) if event[0] == "load_saved") < next(
+        index for index, event in enumerate(hauler.events) if event[0] == "sync"
+    )
+    assert [event for event in hauler.events if event[0] == "sync"] == [("sync", "build-store", 1)]
+    assert hauler.output_inventory == [saved_entry, {"Reference": WORKSPACE_REFERENCE, "Type": "file", "Digest": "sha256:" + "a" * 64, "Size": 12}]
+
+
+@pytest.mark.parametrize(
+    "saved_entry",
+    [
+        {"Reference": "hauler/user.txt:latest", "Type": "file", "Size": 10},
+        {"Reference": "hauler/user.txt:latest", "Type": "file", "Digest": "sha256:" + "b" * 64},
+        {"Reference": WORKSPACE_REFERENCE, "Type": "file", "Digest": "sha256:" + "b" * 64, "Size": 10},
+        {"Reference": RCC_REFERENCE, "Type": "file", "Digest": "sha256:" + "b" * 64, "Size": 10},
+    ],
+)
+def test_build_rejects_invalid_or_reserved_saved_hauler_content_before_sync(tmp_path, saved_entry):
+    source = tmp_path / "source"
+    source.mkdir()
+    archive = tmp_path / "saved-content.tar.zst"
+    archive.write_bytes(b"native Hauler content")
+    hauler = SavedHaulerComposer([saved_entry])
+
+    result = service(tmp_path, archive=FakeArchive(), hauler=hauler).build(
+        BuildRequest(folder=source, output=tmp_path / "composed.tar.zst", hauler_archive=archive)
+    )
+
+    assert result.success is False
+    assert not any(event[0] == "sync" for event in hauler.events)
+    assert not (tmp_path / "composed.tar.zst").exists()
+
+
+@pytest.mark.parametrize("mutation, expected", [
+    ("hash", "does not match the embedded archive"),
+    ("spec", "saved RCC metadata is invalid or unsupported"),
+    ("spec_identity", "RCC acquire verification did not match saved metadata"),
+    ("artifact_identity", "RCC acquire verification did not match saved metadata"),
+    ("robot", "saved robot path"),
+    ("platform", "RCC acquire verification did not match saved metadata"),
+])
+def test_build_rejects_invalid_saved_rcc_metadata_before_hauler(tmp_path, mutation, expected):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "robot.yaml").write_text("tasks: {}\n")
+    archive_path = tmp_path / "saved.rcca"
+    archive_bytes = b"saved-rcca-bytes"
+    archive_path.write_bytes(archive_bytes)
+    payload = {
+        "artifact": "sha256:" + "b" * 64,
+        "specification_digest": "sha256:" + "c" * 64,
+        "legacy_blueprint_key": "d" * 16,
+        "archive": "saved.rcca",
+        "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
+        "archive_size": len(archive_bytes),
+        "rcc_version": "v18.19.5",
+        "platform": "linux_amd64",
+        "robot": "robot.yaml",
+    }
+    if mutation == "hash":
+        payload["archive_sha256"] = "0" * 64
+    elif mutation == "spec":
+        payload["specification_digest"] = "invalid"
+    elif mutation == "spec_identity":
+        payload["specification_digest"] = "sha256:" + "a" * 64
+    elif mutation == "artifact_identity":
+        payload["artifact"] = "sha256:" + "a" * 64
+    elif mutation == "robot":
+        payload["robot"] = "missing.yaml"
+    else:
+        payload["platform"] = "impossible_arch"
+    metadata = tmp_path / "saved-rcc.json"
+    metadata.write_text(json.dumps(payload))
+    hauler = FakeHauler()
+    rcc = FakeRcc()
+    result = service(tmp_path, hauler=hauler, rcc=rcc).build(BuildRequest(
+        folder=source,
+        output=tmp_path / "composed.tar.zst",
+        rcc_archive=archive_path,
+        rcc_metadata=metadata,
+    ))
+    assert result.success is False
+    assert expected in result.diagnostics
+    assert hauler.calls == []
+    assert not (tmp_path / "composed.tar.zst").exists()
+
+
+def test_build_rejects_archive_and_metadata_options_without_the_pair(tmp_path):
+    with pytest.raises(ValidationError, match="supplied together"):
+        BuildRequest(folder=tmp_path, output=tmp_path / "out.tar.zst", rcc_archive=tmp_path / "saved.rcca")
+
+
+def test_build_requires_rcc_to_verify_a_supplied_rcca(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "robot.yaml").write_text("tasks: {}\n")
+    archive_path = tmp_path / "saved.rcca"
+    archive_bytes = b"saved-rcca-bytes"
+    archive_path.write_bytes(archive_bytes)
+    metadata_path = tmp_path / "saved-rcc.json"
+    metadata_path.write_text(json.dumps({
+        "artifact": "sha256:" + "b" * 64,
+        "specification_digest": "sha256:" + "c" * 64,
+        "legacy_blueprint_key": "d" * 16,
+        "archive": "saved.rcca",
+        "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
+        "archive_size": len(archive_bytes),
+        "rcc_version": "v18.19.5",
+        "platform": "linux_amd64",
+        "robot": "robot.yaml",
+    }))
+    service_without_rcc = JATService(
+        archive=FakeArchive(),
+        hauler=FakeHauler(),
+        producer_version="synthetic-version",
+        which=lambda command: None,
+    )
+
+    result = service_without_rcc.build(BuildRequest(
+        folder=source,
+        output=tmp_path / "composed.tar.zst",
+        rcc_archive=archive_path,
+        rcc_metadata=metadata_path,
+    ))
+
+    assert result.success is False
+    assert "RCC is required to verify" in result.diagnostics
+    assert not (tmp_path / "composed.tar.zst").exists()
+
+
+def test_build_rejects_unsafe_saved_brew_members_before_hauler(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    brew_archive = tmp_path / "saved-brew.tar.zst"
+    brew_archive.write_bytes(b"synthetic")
+    archive = FakeArchive(members=[ArchiveMember("../escape", "file")])
+    hauler = FakeHauler()
+    output = tmp_path / "composed.tar.zst"
+
+    result = service(tmp_path, archive=archive, hauler=hauler).build(BuildRequest(
+        folder=source, output=output, brew_archive=brew_archive
+    ))
+
+    assert result.success is False
+    assert "unsafe path" in result.diagnostics
+    assert hauler.calls == []
+    assert not output.exists()
+
+
+def test_build_cancellation_cleans_owned_stage_without_promoting_output(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+
+    class CancellingHauler(FakeHauler):
+        def sync(self, store, temp, *manifests, retries=None, exclude_extras=False):
+            raise KeyboardInterrupt
+
+    output = tmp_path / "composed.tar.zst"
+    try:
+        service(tmp_path, hauler=CancellingHauler()).build(BuildRequest(folder=source, output=output))
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("cancelled build did not propagate cancellation")
+
+    assert not output.exists()
+    assert list(tmp_path.glob(".jat-build-*")) == []
 
 
 @pytest.mark.parametrize("target", ["/etc/passwd", "../outside.txt"])
