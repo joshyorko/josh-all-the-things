@@ -149,6 +149,20 @@ def test_rcc_adapter_rejects_saved_specification_mismatch(tmp_path):
         raise AssertionError("mismatched saved RCC specification was accepted")
 
 
+def test_archive_limit_precedes_native_acquire(tmp_path, monkeypatch):
+    from jat import rcc_artifacts
+
+    archive = tmp_path / "oversized.rcca"
+    write_rcca(archive)
+    monkeypatch.setattr(rcc_artifacts, "_MAX_RCC_ARCHIVE_SIZE", archive.stat().st_size - 1)
+    runner = RecordingRunner([result(stdout=json.dumps(verified_acquire_payload()))])
+
+    with pytest.raises(RuntimeError, match="bounded regular file"):
+        RCCArtifactAdapter(runner).acquire(archive, rcc_version="v18.19.5")
+
+    assert runner.calls == []
+
+
 def test_strict_acquire_reads_identity_from_verified_canonical_archive(tmp_path):
     archive = tmp_path / "saved.rcca"
     manifest = write_rcca(archive)

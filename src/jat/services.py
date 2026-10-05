@@ -59,6 +59,7 @@ RCC_REFERENCE = "hauler/rcc-environment.rcca:latest"
 RCC_METADATA_ARTIFACT = "rcc-environment-metadata.json"
 RCC_METADATA_REFERENCE = "hauler/rcc-environment-metadata.json:latest"
 HAULER_CONTENT_ARTIFACT = "hauler-content.tar.zst"
+MAX_SAVED_COMPONENT_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024
 
 COPY_REMOTE_SCHEMES = ("registry://", "reg://", "oci://")
 COPY_LOCAL_SCHEMES = ("dir://", "directory://")
@@ -211,18 +212,18 @@ class JATService:
                 saved_brew_archive = None
                 if saved_brew_input:
                     saved_brew_archive = stage.path / BREW_ARTIFACT
-                    _copy_regular_file(saved_brew_input, saved_brew_archive)
+                    _copy_regular_file(saved_brew_input, saved_brew_archive, max_size=MAX_SAVED_COMPONENT_ARCHIVE_BYTES)
                 saved_hauler_archive = None
                 saved_hauler_identities = None
                 if saved_hauler_input:
                     saved_hauler_archive = stage.path / HAULER_CONTENT_ARTIFACT
-                    _copy_regular_file(saved_hauler_input, saved_hauler_archive)
+                    _copy_regular_file(saved_hauler_input, saved_hauler_archive, max_size=MAX_SAVED_COMPONENT_ARCHIVE_BYTES)
                 saved_rcc_archive = None
                 saved_rcc_metadata = None
                 saved_robot = None
                 if saved_rcc_input:
                     saved_rcc_archive = stage.path / RCC_ARTIFACT
-                    _copy_regular_file(saved_rcc_input, saved_rcc_archive)
+                    _copy_regular_file(saved_rcc_input, saved_rcc_archive, max_size=MAX_SAVED_COMPONENT_ARCHIVE_BYTES)
                     saved_metadata_file = stage.path / "saved-rcc-metadata.json"
                     _copy_regular_file(saved_rcc_metadata_input, saved_metadata_file, max_size=1024 * 1024)
                     try:
@@ -1332,13 +1333,13 @@ def _copy_regular_file(source: Path, destination: Path, max_size: int | None = N
         ):
             raise ValueError("saved component input must be a regular file")
         if max_size is not None and file_stat.st_size > max_size:
-            raise ValueError("saved RCC metadata exceeds the 1 MiB input limit")
+            raise ValueError("saved component input exceeds its size limit")
         copied = 0
         with destination.open("xb") as writer:
             while block := reader.read(1024 * 1024):
                 copied += len(block)
                 if max_size is not None and copied > max_size:
-                    raise ValueError("saved RCC metadata exceeds the 1 MiB input limit")
+                    raise ValueError("saved component input exceeds its size limit")
                 writer.write(block)
 
 

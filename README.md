@@ -280,6 +280,10 @@ combined with RCC capture options. A saved Hauler archive is loaded into the
 owned native Hauler store and its exact inventory identities must survive
 composition. It cannot be combined with image or Hauler manifest inputs, and it
 must not contain JAT-reserved workspace, Brew, or RCC anchors.
+Each supplied archive has an 8 GiB input-copy limit, enforced before native
+processing and while copying. RCCA acquisition additionally requires an archive
+of at most 2 GiB and bounded canonical metadata; saved JSON metadata is limited
+to 1 MiB.
 
 ### Restore the Folder
 

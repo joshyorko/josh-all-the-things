@@ -72,6 +72,7 @@ class RCCArtifactAdapter:
         runtime_home: Path | None = None,
         strict_identity: bool = False,
     ) -> EnvironmentArtifactMetadata:
+        manifest, archive_sha256, archive_size = _canonical_archive_manifest(archive)
         arguments = [
             self.executable,
             "env",
@@ -99,7 +100,6 @@ class RCCArtifactAdapter:
         if verified_digest != artifact:
             raise ValueError("RCC acquire verification artifact digest did not match acquire result")
         artifact_platform = _required_string(verification, "platform")
-        manifest, archive_sha256, archive_size = _canonical_archive_manifest(archive)
         if _required_digest(manifest, "artifactDigest") != verified_digest:
             raise ValueError("verified RCC artifact digest did not match canonical archive manifest")
         specification_data = manifest.get("specification")

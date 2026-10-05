@@ -526,6 +526,48 @@ def test_build_accepts_workspace_with_safe_internal_symlink(tmp_path):
     assert hauler.calls == ["sync", "save", "load", "inventory"]
 
 
+@pytest.mark.parametrize("component", ["brew_archive", "hauler_archive", "rcc_archive"])
+def test_saved_component_limit_precedes_copy_and_native_work(tmp_path, monkeypatch, component):
+    from jat import services
+
+    monkeypatch.setattr(services, "MAX_SAVED_COMPONENT_ARCHIVE_BYTES", 8, raising=False)
+    source = tmp_path / "workspace"
+    source.mkdir()
+    saved = tmp_path / "saved-archive"
+    saved.write_bytes(b"123456789")
+    arguments = {component: saved}
+    if component == "rcc_archive":
+        (source / "robot.yaml").write_text("tasks: {}\n")
+        metadata = tmp_path / "rcc-metadata.json"
+        metadata.write_text(EnvironmentArtifactMetadata(
+            artifact="sha256:" + "b" * 64,
+            specification_digest="sha256:" + "c" * 64,
+            legacy_blueprint_key="d" * 16,
+            archive=saved,
+            archive_sha256=hashlib.sha256(saved.read_bytes()).hexdigest(),
+            archive_size=saved.stat().st_size,
+            rcc_version="v18.19.5",
+            platform="linux_amd64",
+            robot=Path("robot.yaml"),
+        ).model_dump_json())
+        arguments["rcc_metadata"] = metadata
+    archive = FakeArchive()
+    hauler = FakeHauler()
+    rcc = FakeRcc()
+    output = tmp_path / "capsule.tar.zst"
+
+    result = service(tmp_path, archive=archive, hauler=hauler, rcc=rcc).build(
+        BuildRequest(folder=source, output=output, **arguments)
+    )
+
+    assert not result.success
+    assert "saved component input exceeds its size limit" in result.diagnostics
+    assert not output.exists()
+    assert archive.calls == []
+    assert hauler.calls == []
+    assert rcc.calls == []
+
+
 def test_build_reuses_saved_rcc_and_brew_archive_bytes_without_recapture(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
