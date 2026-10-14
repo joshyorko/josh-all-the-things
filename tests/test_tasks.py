@@ -115,22 +115,22 @@ def test_rcc_manifest_pins_current_linux_and_windows_assets_without_future_place
     manifest_text = manifest_path.read_text()
     manifest = json.loads(manifest_text)
     assert manifest["schema_version"] == 1
-    assert manifest["version"] == "v18.19.5"
+    assert manifest["version"] == "v18.19.6"
     assert manifest["source"] == {
         "repository": "https://github.com/joshyorko/rcc",
-        "tag": "v18.19.5",
-        "commit": "d1aec7d0bb897a81274423c7a6bb747233f9c263",
+        "tag": "v18.19.6",
+        "commit": "f35d6d52242b09cdf37a9f6fe9f0aaa0d85764e0",
     }
     assert manifest["platforms"] == {
         "linux_amd64": {
             "asset": "rcc-linux64",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.5/rcc-linux64",
-            "sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.6/rcc-linux64",
+            "sha256": "2036b84ec8637e76ea41ab90abd2963357b1fed5ceb9a4e58fe852c67baaff1e",
         },
         "windows_amd64": {
             "asset": "rcc-windows64.exe",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.5/rcc-windows64.exe",
-            "sha256": "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.6/rcc-windows64.exe",
+            "sha256": "7fc250c378bcc853286998a69d6335e0a9e29b11a0ec653cad6e62f4644dc238",
         },
     }
     for pin in manifest["platforms"].values():
@@ -154,6 +154,21 @@ def test_current_artifact_candidate_pins_official_hauler_v211_checksums():
     }
 
 
+def test_runtime_release_dispatch_binds_publication_to_exact_current_main_sha():
+    workflow = Path(".github/workflows/windows-runtime.yml").read_text()
+    assert "source_sha:" in workflow
+    assert "Exact current main commit whose JAT runtimes should be qualified and published" in workflow
+    assert "JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}" in workflow
+    assert "JAT_RELEASE_TAG: v0.1.12-jat-runtime" in workflow
+    assert "reject-non-main-release-dispatch:" in workflow
+    assert "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in workflow
+    assert 'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' in workflow
+    assert 'test "$(git rev-parse origin/main)" = "$SOURCE_SHA"' in workflow
+    assert 'refs/tags/${JAT_RELEASE_TAG}^{}' in workflow
+    assert "5b59fcafc832be67eaca3b8f42ff9f7b06719b76" not in workflow
+    assert "v0.1.11-jat-runtime" not in workflow
+
+
 def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():
     workflow = Path(".github/workflows/windows-runtime.yml").read_text()
     assert "linux-runtime:" in workflow
@@ -168,6 +183,17 @@ def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():
     assert "env export" in workflow
     assert "--no-build" in workflow
     assert "jat-linux-runtime-evidence" in workflow
+    assert "Run the JAT Python suite in the pinned RCC environment" in workflow
+    assert 'python -m pip install --quiet pytest jsonschema' in workflow
+    assert 'suite_root="$RUNNER_TEMP/jat-python-suite"' in workflow
+    assert 'export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"' in workflow
+    assert 'JAT_RUN_DIR="$suite_root/run"' in workflow
+    assert 'TMPDIR="$suite_root/tmp"' in workflow
+    assert "docker pull busybox:1.36" in workflow
+    assert "docker image inspect busybox:1.36" in workflow
+    assert 'os.chdir(sys.argv[1])' in workflow
+    assert 'pytest.main(sys.argv[2:])' in workflow
+    assert '"$GITHUB_WORKSPACE" -q "$GITHUB_WORKSPACE/tests"' in workflow
 
 
 def test_publisher_accepts_platform_specific_receipts_and_archive_names():

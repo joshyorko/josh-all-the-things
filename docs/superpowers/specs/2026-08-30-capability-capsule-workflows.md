@@ -53,8 +53,10 @@ Receipts never carry credentials.
   `K|KB|M|MB|G|GB|T|TB` suffix (binary multiples, case-insensitive) or a bare
   byte count; forms like `1B`, `1Mi`, or `1KiB` fail in Hauler, so the JAT
   contract rejects them before any capture work.
-- `--containerd` removes `oci-layout` from the haul; chunking and `--containerd`
-  are mutually exclusive (JAT rejects the combination in the adapter).
+- `--containerd` keeps `oci-layout` so containerd selects OCI import, filters
+  `index.json` to image content, and preserves the full index in the
+  `hauler-index.json` sidecar; chunking and `--containerd` are mutually
+  exclusive (JAT rejects the combination in the adapter).
 - `store serve fileserver` copies file artifacts into its backend directory and
   then serves them; the registry honors the config file's loopback bind.
 - Local chart manifests resolve `repoURL` relative to Hauler's working

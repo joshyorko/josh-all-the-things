@@ -490,7 +490,8 @@ def test_real_containerd_export_produces_hauler_containerd_layout(tmp_path):
     )
     names = listing.stdout.splitlines()
     assert any(name.startswith("blobs/sha256/") for name in names)
-    assert not any(name == "oci-layout" for name in names), "containerd compatibility removes oci-layout"
+    assert any(name == "oci-layout" for name in names), "containerd import needs the OCI layout marker"
+    assert any(name == "hauler-index.json" for name in names), "Hauler preserves the full index as a sidecar"
 
 
 def test_real_copy_to_directory_projection(tmp_path):
