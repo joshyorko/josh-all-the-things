@@ -185,7 +185,13 @@ def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():
     assert "jat-linux-runtime-evidence" in workflow
     assert "Run the JAT Python suite in the pinned RCC environment" in workflow
     assert 'python -m pip install --quiet pytest jsonschema' in workflow
-    assert 'python -m pytest -q "$GITHUB_WORKSPACE/tests"' in workflow
+    assert 'suite_root="$RUNNER_TEMP/jat-python-suite"' in workflow
+    assert 'export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"' in workflow
+    assert 'JAT_RUN_DIR="$suite_root/run"' in workflow
+    assert 'TMPDIR="$suite_root/tmp"' in workflow
+    assert 'os.chdir(sys.argv[1])' in workflow
+    assert 'pytest.main(sys.argv[2:])' in workflow
+    assert '"$GITHUB_WORKSPACE" -q "$GITHUB_WORKSPACE/tests"' in workflow
 
 
 def test_publisher_accepts_platform_specific_receipts_and_archive_names():

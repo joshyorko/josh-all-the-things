@@ -483,8 +483,15 @@ jobs:
           artifact=$(python3 -c 'import json; print(json.load(open("dist/jat-runtime.json"))["artifact_digest"])')
           export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"
           receipt="$RUNNER_TEMP/jat-python-tests.json"
+          suite_root="$RUNNER_TEMP/jat-python-suite"
+          mkdir -p "$suite_root/run" "$suite_root/tmp"
           "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$receipt" -- \
-            env PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE" python -m pytest -q "$GITHUB_WORKSPACE/tests"
+            env \
+              PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE" \
+              JAT_RUN_DIR="$suite_root/run" \
+              TMPDIR="$suite_root/tmp" \
+              python -c 'import os,sys; os.chdir(sys.argv[1]); import pytest; raise SystemExit(pytest.main(sys.argv[2:]))' \
+                "$GITHUB_WORKSPACE" -q "$GITHUB_WORKSPACE/tests"
           python3 - "$receipt" <<'PY'
           import json
           import sys
