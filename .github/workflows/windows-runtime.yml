@@ -477,6 +477,12 @@ jobs:
           assert receipt["exitCode"] == 0, receipt
           PY
 
+      - name: Prepare the Docker fixture for the Linux Python suite
+        run: |
+          set -euo pipefail
+          docker pull busybox:1.36
+          docker image inspect busybox:1.36 >/dev/null
+
       - name: Run the JAT Python suite in the pinned RCC environment
         run: |
           set -euo pipefail
