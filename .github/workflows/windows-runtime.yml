@@ -2,6 +2,11 @@ name: JAT Windows runtime
 
 on:
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact current main commit whose JAT runtimes should be qualified and published
+        required: true
+        type: string
   push:
     paths:
       - "conda.yaml"
@@ -20,12 +25,23 @@ on:
 permissions:
   contents: read
 
-# One-time publication for the merged RCC/Hauler tranche; keep its source and tag paired.
+# Dispatch from main with the exact source SHA; candidate runs on pushes never publish.
 env:
-  JAT_RELEASE_SOURCE_SHA: 5b59fcafc832be67eaca3b8f42ff9f7b06719b76
-  JAT_RELEASE_TAG: v0.1.11-jat-runtime
+  JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
+  JAT_RELEASE_TAG: v0.1.12-jat-runtime
 
 jobs:
+  reject-non-main-release-dispatch:
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Reject release dispatch from a non-main ref
+        run: |
+          echo "JAT runtime publication must be dispatched from main with an exact source_sha input." >&2
+          exit 1
+
   windows-runtime:
     runs-on: windows-latest
     defaults:
@@ -336,8 +352,9 @@ jobs:
 
           receipt = json.loads(Path("dist/jat-runtime.json").read_text())
           assert receipt["platform"] == "linux_amd64"
-          assert receipt["rcc_version"] == "v18.19.5"
-          assert receipt["rcc_source"]["commit"] == "d1aec7d0bb897a81274423c7a6bb747233f9c263"
+          manifest = json.loads(Path("runtime/rcc.json").read_text())
+          assert receipt["rcc_version"] == manifest["version"]
+          assert receipt["rcc_source"]["commit"] == manifest["source"]["commit"]
           assert receipt["hauler_version"] == "v2.1.1"
           assert receipt["verified_acquire"] == {"fresh_home": True, "no_build": True}
           assert receipt["verified_no_build"] == {"fresh_home": True, "no_build": True}
@@ -449,11 +466,26 @@ jobs:
           export JAT_TEST_DOCKER="$(command -v docker)"
           export JAT_TEST_HTPASSWD="$(command -v htpasswd)"
           export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"
-          "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --json -- python -m pip install --quiet pytest
+          PIP_CACHE_DIR="$RUNNER_TEMP/pip-cache" "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --json -- python -m pip install --quiet pytest jsonschema
           test_receipt="$RUNNER_TEMP/registry-first-manifest-receipt.json"
           "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$test_receipt" -- \
             env PYTHONPATH="$GITHUB_WORKSPACE/src" python -m pytest -q "$GITHUB_WORKSPACE/tests/test_real_vertical.py" -k manifest_local_publish
           python3 - "$test_receipt" <<'PY'
+          import json
+          import sys
+          receipt = json.load(open(sys.argv[1]))
+          assert receipt["exitCode"] == 0, receipt
+          PY
+
+      - name: Run the JAT Python suite in the pinned RCC environment
+        run: |
+          set -euo pipefail
+          artifact=$(python3 -c 'import json; print(json.load(open("dist/jat-runtime.json"))["artifact_digest"])')
+          export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"
+          receipt="$RUNNER_TEMP/jat-python-tests.json"
+          "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$receipt" -- \
+            env PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE" python -m pytest -q "$GITHUB_WORKSPACE/tests"
+          python3 - "$receipt" <<'PY'
           import json
           import sys
           receipt = json.load(open(sys.argv[1]))
@@ -474,7 +506,7 @@ jobs:
             ${{ runner.temp }}/*.json
 
   publish-jat-runtime:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: [windows-runtime, linux-runtime]
     runs-on: ubuntu-24.04
     permissions:
@@ -485,6 +517,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify the exact current main source before publication
+        env:
+          SOURCE_SHA: ${{ env.JAT_RELEASE_SOURCE_SHA }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "joshyorko/josh-all-the-things"
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git fetch origin main --tags
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          tag_sha=$(git ls-remote origin "refs/tags/${JAT_RELEASE_TAG}^{}" | awk 'NR == 1 {print $1}')
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha=$(git ls-remote origin "refs/tags/$JAT_RELEASE_TAG" | awk 'NR == 1 {print $1}')
+          fi
+          if [[ -n "$tag_sha" && "$tag_sha" != "$SOURCE_SHA" ]]; then
+            echo "JAT runtime release tag already points to a different source commit" >&2
+            exit 1
+          fi
 
       - name: Download the exact-source Linux and Windows runtime evidence
         uses: actions/download-artifact@v4
@@ -513,10 +566,12 @@ jobs:
           python3 - <<'PY'
           import hashlib
           import json
+          import os
           import shutil
           from pathlib import Path
 
-          source_sha = "5b59fcafc832be67eaca3b8f42ff9f7b06719b76"
+          source_sha = os.environ["JAT_RELEASE_SOURCE_SHA"]
+          rcc_manifest = json.loads(Path("runtime/rcc.json").read_text(encoding="utf-8"))
           inputs = {
               "linux": (Path("${{ runner.temp }}/jat-linux-runtime-evidence"), "jat-runtime.rcca", "jat-runtime.json", "linux_amd64"),
               "windows": (Path("${{ runner.temp }}/jat-windows-runtime-evidence"), "jat-runtime-windows.rcca", "jat-runtime-windows.json", "windows_amd64"),
@@ -534,7 +589,7 @@ jobs:
               actual_sha = hashlib.sha256(archive.read_bytes()).hexdigest()
               if receipt["jat_git_sha"] != source_sha:
                   raise SystemExit(f"{name} receipt source SHA mismatch: {receipt['jat_git_sha']}")
-              if receipt["platform"] != platform or receipt["rcc_version"] != "v18.19.5" or receipt["hauler_version"] != "v2.1.1":
+              if receipt["platform"] != platform or receipt["rcc_version"] != rcc_manifest["version"] or receipt["rcc_source"]["commit"] != rcc_manifest["source"]["commit"] or receipt["hauler_version"] != "v2.1.1":
                   raise SystemExit(f"{name} receipt runtime identity mismatch")
               if receipt["archive"]["filename"] != archive_file:
                   raise SystemExit(f"{name} receipt archive filename mismatch")
@@ -597,6 +652,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           assets = Path("dist/release-assets")
@@ -631,13 +687,13 @@ jobs:
               }
           provenance = {
               "format_version": 1,
-              "release_tag": "v0.1.11-jat-runtime",
-              "jat_git_sha": "5b59fcafc832be67eaca3b8f42ff9f7b06719b76",
+              "release_tag": os.environ["JAT_RELEASE_TAG"],
+              "jat_git_sha": os.environ["JAT_RELEASE_SOURCE_SHA"],
               "workflow_run": {
                   "id": int("${{ github.run_id }}"),
                   "url": f"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
               },
-              "rcc_version": "v18.19.5",
+              "rcc_version": json.loads(Path("runtime/rcc.json").read_text(encoding="utf-8"))["version"],
               "hauler_version": "v2.1.1",
               "platforms": platforms,
           }
@@ -651,18 +707,21 @@ jobs:
         run: |
           set -euo pipefail
           notes="$RUNNER_TEMP/jat-runtime-release-notes.md"
-          python3 - "$notes" "$JAT_RELEASE_SOURCE_SHA" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" dist/carriers.txt <<'PY'
+          python3 - "$notes" "$JAT_RELEASE_SOURCE_SHA" "$JAT_RELEASE_TAG" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" dist/carriers.txt <<'PY'
+          import json
           import pathlib
           import sys
 
-          notes_path, source_sha, repository, run_id, carriers_path = sys.argv[1:]
+          notes_path, source_sha, release_tag, repository, run_id, carriers_path = sys.argv[1:]
           carriers = pathlib.Path(carriers_path).read_text().strip()
           if not carriers:
               raise SystemExit("GHCR carrier list is empty")
           tick = chr(96)
+          jat_version = release_tag.removesuffix("-jat-runtime")
+          rcc_version = json.loads(pathlib.Path("runtime/rcc.json").read_text(encoding="utf-8"))["version"]
           body = (
-              "## JAT v0.1.11 runtime artifacts\n\n"
-              f"Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source {tick}{source_sha}{tick} using Josh RCC v18.19.5 and Hauler v2.1.1.\n\n"
+              f"## JAT {jat_version} runtime artifacts\n\n"
+              f"Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source {tick}{source_sha}{tick} using Josh RCC {rcc_version} and Hauler v2.1.1.\n\n"
               f"Workflow proof: https://github.com/{repository}/actions/runs/{run_id}\n\n"
               "Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. "
               + tick + "SHA256SUMS" + tick + " covers every attached runtime asset other than itself.\n\n"
@@ -679,7 +738,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$JAT_RELEASE_SOURCE_SHA" \
               --draft --prerelease \
-              --title "JAT v0.1.11 Linux and Windows runtime artifacts" \
+              --title "JAT ${JAT_RELEASE_TAG%-jat-runtime} Linux and Windows runtime artifacts" \
               --notes-file "$notes" \
               dist/release-assets/environment_linux_amd64_freeze.yaml \
               dist/release-assets/environment_windows_amd64_freeze.yaml \
@@ -694,17 +753,18 @@ jobs:
           fi
           [[ -n "$release_id" ]] || { echo "Release ID was not returned by GitHub" >&2; exit 1; }
           gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release.json"
-          python3 - "$RUNNER_TEMP/release.json" "$JAT_RELEASE_SOURCE_SHA" "$GITHUB_WORKSPACE" <<'PY'
+          python3 - "$RUNNER_TEMP/release.json" "$JAT_RELEASE_SOURCE_SHA" "$JAT_RELEASE_TAG" <<'PY'
           import json, sys
           release = json.load(open(sys.argv[1]))
           source_sha = sys.argv[2]
+          release_tag = sys.argv[3]
           expected = {
               "environment_linux_amd64_freeze.yaml", "environment_windows_amd64_freeze.yaml",
               "jat-runtime-linux-amd64.json", "jat-runtime-linux-amd64.rcca",
               "jat-runtime-windows-amd64.json", "jat-runtime-windows-amd64.rcca",
               "jat-runtime-provenance.json", "SHA256SUMS",
           }
-          if release["tag_name"] != "v0.1.11-jat-runtime" or not release["target_commitish"].startswith(source_sha[:7]):
+          if release["tag_name"] != release_tag or not release["target_commitish"].startswith(source_sha[:7]):
               raise SystemExit("draft release tag or source commit does not match the JAT release")
           assets = {asset["name"] for asset in release["assets"]}
           if assets != expected:

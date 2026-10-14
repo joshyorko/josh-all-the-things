@@ -11,11 +11,11 @@ import tempfile
 from pathlib import Path
 
 DEFAULT_RCC = "rcc"
-EXPECTED_RCC_VERSION = "v18.19.5"
+EXPECTED_RCC_VERSION = "v18.19.6"
 RCC_SOURCE = {
     "repository": "https://github.com/joshyorko/rcc",
-    "tag": "v18.19.5",
-    "commit": "d1aec7d0bb897a81274423c7a6bb747233f9c263",
+    "tag": "v18.19.6",
+    "commit": "f35d6d52242b09cdf37a9f6fe9f0aaa0d85764e0",
 }
 HAULER_VERSION_COMMAND = (
     "python",
