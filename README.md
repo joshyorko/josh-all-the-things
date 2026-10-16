@@ -711,3 +711,19 @@ The canonical `BuildRequest` and RCC JSON task input use `workspace_exclusions`,
 `jat.models.WORKSPACE_CAPTURE_POLICY_VERSION == 1`; Room must expand its own
 ignore matching into literal exclusion roots and cannot assume an older installed
 JAT runtime supports this contract.
+
+#### Self-contained review candidate
+
+The `Filtered JAT source candidate` workflow runs only on pushes to the draft
+feature branch and has read-only repository permissions. It does not publish a
+release or update runtime pins. It derives a separate RCC environment from the
+tracked platform contract, embeds the exact committed JAT source and thin task
+bridge inside that environment, and records per-file source hashes.
+
+`python scripts/build_filtered_candidate.py --rcc /path/to/pinned/rcc --output /new/candidate/directory`
+produces `jat-filtered-candidate.rcca` and `candidate-receipt.json`. Qualification
+acquires the export into a fresh RCC home, makes the producer and source snapshot
+unavailable, clears external `PYTHONPATH`, verifies every embedded source hash,
+and proves filtered capture and byte-exact restore from the artifact. The task
+bridge is installed as `jat/candidate_tasks.py`; `_candidate.json` identifies the
+source commit. These artifacts are review candidates, not release approval.
