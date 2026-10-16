@@ -12,7 +12,6 @@ from pathlib import Path
 from build_environment_artifact import (
     _environment,
     _platform_name,
-    _rcc_identity,
     _run,
     _sha256,
 )
@@ -49,7 +48,13 @@ def main():
         environment.pop('PYTHONPATH', None)
         environment.pop('PYTHONHOME', None)
     rcc = str(Path(args.rcc).resolve())
-    rcc_identity = _rcc_identity(root, rcc)
+    platform_name = _platform_name().lower()
+    manifest = json.loads((root / 'runtime' / 'rcc.json').read_text())
+    pin = manifest['platforms'][platform_name]
+    binary_digest = _sha256(Path(rcc))
+    if binary_digest != pin['sha256']:
+        raise ValueError('candidate RCC does not match the tracked platform pin')
+    rcc_identity = {**manifest['source'], 'asset': pin['asset'], 'sha256': binary_digest}
     def run(arguments, environment, cwd):
         return _run([rcc, *arguments], cwd=cwd, env=environment, timeout=args.timeout)
     published = json.loads(run(['env', 'publish', '--robot', str(snapshot / 'robot.yaml'),
@@ -70,7 +75,7 @@ def main():
     assert execution['exitCode'] == 0 and execution['artifactDigest'] == artifact
     receipt = {
         'format_version': 1, 'candidate_only': True, 'success': True, 'jat_git_sha': sha,
-        'platform': _platform_name(), 'artifact_digest': artifact,
+        'platform': platform_name, 'artifact_digest': artifact,
         'specification_digest': published['specificationDigest'],
         'legacy_blueprint_key': published['legacyBlueprintKey'], 'rcc_source': rcc_identity,
         'archive': {'filename': payload.name, 'sha256': _sha256(payload), 'size': payload.stat().st_size},
