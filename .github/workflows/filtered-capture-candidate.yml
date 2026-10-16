@@ -2,7 +2,7 @@ name: Filtered JAT source candidate
 
 on:
   push:
-    branches: [feature/filtered-capture-19]
+    branches: [feature/filtered-capture-19, main]
     paths:
       - 'src/**'
       - 'scripts/**'
