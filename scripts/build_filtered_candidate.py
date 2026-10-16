@@ -12,7 +12,6 @@ from pathlib import Path
 from build_environment_artifact import (
     _environment,
     _platform_name,
-    _run,
     _sha256,
 )
 
@@ -37,7 +36,12 @@ def main():
     for name in ('conda.yaml', 'environment_linux_amd64_freeze.yaml', 'environment_windows_amd64.yaml'):
         config = snapshot / name
         if config.is_file():
-            config.write_text(config.read_text() + f'  - python scripts/install_filtered_candidate.py {sha}\n')
+            text = config.read_text()
+            lines = text.splitlines()
+            postinstall = lines.index('rccPostInstall:')
+            first_command = lines[postinstall + 1]
+            indentation = first_command[:len(first_command) - len(first_command.lstrip())]
+            config.write_text(text.rstrip() + f'\n{indentation}- python scripts/install_filtered_candidate.py {sha}\n')
     producer_home = output / 'producer-home'
     verifier_home = output / 'verifier-home'
     producer_home.mkdir()
@@ -56,7 +60,11 @@ def main():
         raise ValueError('candidate RCC does not match the tracked platform pin')
     rcc_identity = {**manifest['source'], 'asset': pin['asset'], 'sha256': binary_digest}
     def run(arguments, environment, cwd):
-        return _run([rcc, *arguments], cwd=cwd, env=environment, timeout=args.timeout)
+        result = subprocess.run([rcc, *arguments], cwd=cwd, env=environment, timeout=args.timeout,
+                                capture_output=True, text=True, encoding='utf-8', errors='replace')
+        if result.returncode:
+            raise RuntimeError(f'candidate RCC operation failed: {result.stdout[-8000:]}\n{result.stderr[-4000:]}')
+        return result
     published = json.loads(run(['env', 'publish', '--robot', str(snapshot / 'robot.yaml'),
                                 '--provider', 'local', '--json'], producer, snapshot).stdout)
     artifact = published['artifactDigest']
