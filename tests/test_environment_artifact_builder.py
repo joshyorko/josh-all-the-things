@@ -44,7 +44,7 @@ def write_fake_rcc(path: Path, log: Path) -> None:
         "    exit_code = 127 if command == ['hauler', 'version'] else 0\n"
         "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': exit_code}))\n"
         "elif args == ['version']:\n"
-        "    print(os.environ.get('JAT_FAKE_RCC_VERSION', 'v18.19.6'))\n"
+        "    print(os.environ.get('JAT_FAKE_RCC_VERSION', 'v18.19.7'))\n"
     )
     path.chmod(0o755)
 
@@ -120,7 +120,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "jat_git_sha": "d" * 40,
         "legacy_blueprint_key": "c" * 16,
         "platform": result["platform"],
-        "rcc_version": "v18.19.6",
+        "rcc_version": "v18.19.7",
         "hauler_version": "v2.1.1",
         "rcc_source": {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "0" * 64},
         "specification_digest": "sha256:" + "b" * 64,
@@ -197,7 +197,7 @@ def test_builder_rejects_unsupported_rcc_before_publish(tmp_path, monkeypatch):
     write_fake_rcc(rcc, log)
     monkeypatch.setenv("JAT_FAKE_RCC_VERSION", "v18.19.2")
 
-    with pytest.raises(RuntimeError, match="v18.19.6"):
+    with pytest.raises(RuntimeError, match="v18.19.7"):
         main([
             "--robot",
             str(robot),
@@ -260,9 +260,9 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
                 "success": True,
                 "jat_git_sha": subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip(),
                 "rcc_executable": "/synthetic/rcc",
-                "rcc_version": "v18.19.6",
+                "rcc_version": "v18.19.7",
                 "hauler_version": "v2.1.1",
-                "rcc_source": {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "2036b84ec8637e76ea41ab90abd2963357b1fed5ceb9a4e58fe852c67baaff1e"},
+                "rcc_source": {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48"},
                 "platform": "linux_amd64",
                 "artifact_digest": "sha256:" + "a" * 64,
                 "specification_digest": "sha256:" + "b" * 64,
@@ -428,8 +428,8 @@ def test_publish_wrapper_accepts_windows_archive_and_keeps_platform_tag(tmp_path
         "success": True,
         "jat_git_sha": subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip(),
         "rcc_executable": "C:/runner/rcc.exe",
-        "rcc_version": "v18.19.6",
-        "rcc_source": {**RCC_SOURCE, "asset": "rcc-windows64.exe", "sha256": "7fc250c378bcc853286998a69d6335e0a9e29b11a0ec653cad6e62f4644dc238"},
+        "rcc_version": "v18.19.7",
+        "rcc_source": {**RCC_SOURCE, "asset": "rcc-windows64.exe", "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be"},
         "hauler_version": "v2.1.1",
         "platform": "windows_amd64",
         "artifact_digest": "sha256:" + "e" * 64,
@@ -493,6 +493,6 @@ def test_legacy_files_are_removed_and_new_receipt_schema_is_version_three():
     assert not (root / "docs/hololib-receipt.schema.json").exists()
     schema = json.loads((root / "docs/environment-artifact-receipt.schema.json").read_text())
     assert schema["properties"]["format_version"]["const"] == 3
-    assert schema["properties"]["rcc_version"]["const"] == "v18.19.6"
+    assert schema["properties"]["rcc_version"]["const"] == "v18.19.7"
     assert schema["properties"]["hauler_version"]["const"] == "v2.1.1"
     assert "artifact_digest" in schema["required"]
