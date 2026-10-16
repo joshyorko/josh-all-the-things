@@ -1,0 +1,55 @@
+name: Complete approved JAT 0.1.14 prerelease
+on:
+  push:
+    branches: [release/jat-runtime-014-fe43065]
+    paths: [.github/workflows/complete-qualified-014.yml]
+permissions:
+  contents: write
+  actions: read
+  packages: read
+jobs:
+  publish-existing-approved-draft:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 12060820191
+          run-id: 38934211098
+          github-token: ${{ github.token }}
+          path: qualified/linux
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 12059169968
+          run-id: 38934211098
+          github-token: ${{ github.token }}
+          path: qualified/windows
+          merge-multiple: true
+      - name: Install checksum-pinned ORAS and read immutable carriers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_linux_amd64.tar.gz -o "$RUNNER_TEMP/oras.tgz"
+          echo "9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf  $RUNNER_TEMP/oras.tgz" | sha256sum --check
+          mkdir "$RUNNER_TEMP/oras-bin"
+          tar -xzf "$RUNNER_TEMP/oras.tgz" -C "$RUNNER_TEMP/oras-bin" oras
+          printf '%s' "$GH_TOKEN" | "$RUNNER_TEMP/oras-bin/oras" login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          mkdir carrier-readback
+          "$RUNNER_TEMP/oras-bin/oras" manifest fetch ghcr.io/joshyorko/josh-all-the-things-jat-runtime@sha256:c3253ce1d51f9faddceef611f25e679613161121ec7078d3cbfa123a0ce9a4d6 --output carrier-readback/linux.json
+          "$RUNNER_TEMP/oras-bin/oras" manifest fetch ghcr.io/joshyorko/josh-all-the-things-jat-runtime@sha256:46d44b7f44a16a7f9ee7cb676cf134a4432b3f2814fd7faba645356f5607c907 --output carrier-readback/windows.json
+      - name: Verify, upload and publish only known approved draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/complete_qualified_014.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: approved-jat-014-release-readback-${{ github.sha }}
+          path: |
+            carrier-readback
+            publication-readback.json
+            release-assets/jat-runtime-provenance.json
+            release-assets/SHA256SUMS
+          retention-days: 30
