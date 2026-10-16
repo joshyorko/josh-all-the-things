@@ -29,7 +29,7 @@ permissions:
 # Dispatch from main with the exact source SHA; candidate runs on pushes never publish.
 env:
   JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
-  JAT_RELEASE_TAG: v0.1.12-jat-runtime
+  JAT_RELEASE_TAG: v0.1.13-jat-runtime
 
 jobs:
   reject-non-main-release-dispatch:
@@ -804,4 +804,4 @@ jobs:
     uses: ./.github/workflows/verify-published-runtime.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      release_tag: v0.1.12-jat-runtime
+      release_tag: v0.1.13-jat-runtime

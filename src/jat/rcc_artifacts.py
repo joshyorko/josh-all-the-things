@@ -12,7 +12,7 @@ from pathlib import Path
 from .models import EnvironmentArtifactMetadata
 from .process import ProcessRunner
 
-EXPECTED_RCC_VERSION = "v18.19.6"
+EXPECTED_RCC_VERSION = "v18.19.7"
 _MAX_RCC_ARCHIVE_SIZE = 2 * 1024 * 1024 * 1024
 _MAX_RCC_ARCHIVE_MEMBERS = 100_000
 _MAX_RCC_MANIFEST_SIZE = 1024 * 1024

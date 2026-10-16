@@ -21,7 +21,7 @@ def test_published_verifier_has_no_publication_dependency_or_write_permissions()
         assert forbidden not in workflow
     assert 'needs: validate-release' in workflow
     assert 'JAT_RELEASE_TAG: ${{ inputs.release_tag }}' in workflow
-    assert 'default: v0.1.12-jat-runtime' in workflow
+    assert 'default: v0.1.13-jat-runtime' in workflow
     assert 'JAT_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}' in workflow
     assert 'JAT_VERIFIER_CODE_SHA: ${{ github.workflow_sha }}' in workflow
     assert 'release["immutable"] is True' in workflow

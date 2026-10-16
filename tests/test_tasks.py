@@ -115,22 +115,22 @@ def test_rcc_manifest_pins_current_linux_and_windows_assets_without_future_place
     manifest_text = manifest_path.read_text()
     manifest = json.loads(manifest_text)
     assert manifest["schema_version"] == 1
-    assert manifest["version"] == "v18.19.6"
+    assert manifest["version"] == "v18.19.7"
     assert manifest["source"] == {
         "repository": "https://github.com/joshyorko/rcc",
-        "tag": "v18.19.6",
-        "commit": "f35d6d52242b09cdf37a9f6fe9f0aaa0d85764e0",
+        "tag": "v18.19.7",
+        "commit": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
     }
     assert manifest["platforms"] == {
         "linux_amd64": {
             "asset": "rcc-linux64",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.6/rcc-linux64",
-            "sha256": "2036b84ec8637e76ea41ab90abd2963357b1fed5ceb9a4e58fe852c67baaff1e",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-linux64",
+            "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
         },
         "windows_amd64": {
             "asset": "rcc-windows64.exe",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.6/rcc-windows64.exe",
-            "sha256": "7fc250c378bcc853286998a69d6335e0a9e29b11a0ec653cad6e62f4644dc238",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-windows64.exe",
+            "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
         },
     }
     for pin in manifest["platforms"].values():
@@ -159,7 +159,7 @@ def test_runtime_release_dispatch_binds_publication_to_exact_current_main_sha():
     assert "source_sha:" in workflow
     assert "Exact current main commit whose JAT runtimes should be qualified and published" in workflow
     assert "JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}" in workflow
-    assert "JAT_RELEASE_TAG: v0.1.12-jat-runtime" in workflow
+    assert "JAT_RELEASE_TAG: v0.1.13-jat-runtime" in workflow
     assert "reject-non-main-release-dispatch:" in workflow
     assert "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in workflow
     assert 'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' in workflow
