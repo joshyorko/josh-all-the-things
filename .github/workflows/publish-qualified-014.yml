@@ -1,0 +1,67 @@
+name: Publish qualified JAT 0.1.14 carriers
+on:
+  push:
+    branches: [release/jat-runtime-014-fe43065]
+    paths: [.github/workflows/publish-qualified-014.yml]
+permissions:
+  contents: read
+  actions: read
+  packages: write
+jobs:
+  publish-approved-carriers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fe43065a654d1649ba9ebe5a6f202eac612e4385
+      - name: Check exact approved source and unused release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = fe43065a654d1649ba9ebe5a6f202eac612e4385
+          test "$(gh api repos/joshyorko/josh-all-the-things/commits/main --jq .sha)" = fe43065a654d1649ba9ebe5a6f202eac612e4385
+          test -z "$(git ls-remote origin refs/tags/v0.1.14-jat-runtime)"
+          gh api 'repos/joshyorko/josh-all-the-things/releases?per_page=100' > "$RUNNER_TEMP/releases.json"
+          jq -e 'all(.[]; .tag_name != "v0.1.14-jat-runtime")' "$RUNNER_TEMP/releases.json"
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 12060820191
+          run-id: 38934211098
+          github-token: ${{ github.token }}
+          path: qualified/linux
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 12059169968
+          run-id: 38934211098
+          github-token: ${{ github.token }}
+          path: qualified/windows
+          merge-multiple: true
+      - name: Install checksum-pinned ORAS
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error https://github.com/oras-project/oras/releases/download/v1.3.2/oras_1.3.2_linux_amd64.tar.gz -o "$RUNNER_TEMP/oras.tgz"
+          echo "9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf  $RUNNER_TEMP/oras.tgz" | sha256sum --check
+          mkdir "$RUNNER_TEMP/oras-bin"
+          tar -xzf "$RUNNER_TEMP/oras.tgz" -C "$RUNNER_TEMP/oras-bin" oras
+          echo "$RUNNER_TEMP/oras-bin" >> "$GITHUB_PATH"
+      - name: Publish unchanged qualified archives through native publisher
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          echo 'de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09  qualified/linux/jat-filtered-candidate.rcca' | sha256sum --check
+          echo '8bbf7aa8925b5a517164e7e6ea00b735394cc1eac026ba34404e729d89e441b1  qualified/windows/jat-filtered-candidate.rcca' | sha256sum --check
+          bash scripts/publish_environment_artifacts.sh \
+            --linux-archive qualified/linux/jat-filtered-candidate.rcca \
+            --linux-receipt qualified/linux/promotion-receipt.json \
+            --windows-archive qualified/windows/jat-filtered-candidate.rcca \
+            --windows-receipt qualified/windows/promotion-receipt.json | tee "$RUNNER_TEMP/carriers.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: approved-jat-014-carriers-${{ github.sha }}
+          path: ${{ runner.temp }}/carriers.txt
+          retention-days: 30
