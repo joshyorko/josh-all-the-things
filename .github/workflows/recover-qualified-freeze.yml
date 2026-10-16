@@ -1,0 +1,47 @@
+name: Recover qualified Windows freeze
+on:
+  push:
+    branches: [proof/runtime-freeze-fe43065]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  recover:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 12059169968
+          run-id: 38934211098
+          github-token: ${{ github.token }}
+          path: qualified-input
+          merge-multiple: true
+      - name: Acquire checksum-pinned RCC
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,pathlib,subprocess,urllib.request
+          source='fe43065a654d1649ba9ebe5a6f202eac612e4385'
+          pin=json.loads(subprocess.check_output(['git','show',source+':runtime/rcc.json']))['platforms']['windows_amd64']
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'freeze-proof-rcc.exe'
+          urllib.request.urlretrieve(pin['url'],path)
+          assert hashlib.sha256(path.read_bytes()).hexdigest()==pin['sha256']
+          with open(os.environ['GITHUB_ENV'],'a') as f: f.write(f'CANDIDATE_RCC={path}\n')
+          PY
+      - name: Recover freeze without rebuilding qualified archive
+        run: python scripts/recover_qualified_freeze.py qualified-input "$RUNNER_TEMP/freeze-proof"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qualified-windows-freeze-fe43065-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/freeze-proof/environment_windows_amd64_freeze.yaml
+            ${{ runner.temp }}/freeze-proof/freeze-recovery-receipt.json
+            ${{ runner.temp }}/freeze-proof/embedded-exec.json
+            ${{ runner.temp }}/freeze-proof/*.log
+          retention-days: 30
