@@ -16,6 +16,31 @@ from build_environment_artifact import (
 )
 
 
+def prepare_candidate_descriptors(snapshot: Path, sha: str) -> None:
+    # Candidate-only descriptors include the exact source identity in the
+    # environment specification, so dependency-cache reuse cannot hide changes.
+    for name in ('conda.yaml', 'environment_linux_amd64_freeze.yaml', 'environment_windows_amd64.yaml'):
+        config = snapshot / name
+        if config.is_file():
+            text = config.read_text()
+            lines = text.splitlines()
+            postinstall = lines.index('rccPostInstall:')
+            first_command = lines[postinstall + 1]
+            indentation = first_command[:len(first_command) - len(first_command.lstrip())]
+            config.write_text(text.rstrip() + f'\n{indentation}- python scripts/install_filtered_candidate.py {sha}\n')
+
+
+def validate_pinned_rcc(root: Path, rcc: str):
+    platform_name = _platform_name().lower()
+    manifest = json.loads((root / 'runtime' / 'rcc.json').read_text())
+    pin = manifest['platforms'][platform_name]
+    binary_digest = _sha256(Path(rcc))
+    if binary_digest != pin['sha256']:
+        raise ValueError('candidate RCC does not match the tracked platform pin')
+    rcc_identity = {**manifest['source'], 'asset': pin['asset'], 'sha256': binary_digest}
+    return platform_name, rcc_identity
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rcc', required=True)
@@ -31,17 +56,7 @@ def main():
     archive = subprocess.check_output(['git', 'archive', 'HEAD'], cwd=root)
     with tarfile.open(fileobj=io.BytesIO(archive)) as source_archive:
         source_archive.extractall(snapshot, filter='data')
-    # Candidate-only descriptors include the exact source identity in the
-    # environment specification, so dependency-cache reuse cannot hide changes.
-    for name in ('conda.yaml', 'environment_linux_amd64_freeze.yaml', 'environment_windows_amd64.yaml'):
-        config = snapshot / name
-        if config.is_file():
-            text = config.read_text()
-            lines = text.splitlines()
-            postinstall = lines.index('rccPostInstall:')
-            first_command = lines[postinstall + 1]
-            indentation = first_command[:len(first_command) - len(first_command.lstrip())]
-            config.write_text(text.rstrip() + f'\n{indentation}- python scripts/install_filtered_candidate.py {sha}\n')
+    prepare_candidate_descriptors(snapshot, sha)
     producer_home = output / 'producer-home'
     verifier_home = output / 'verifier-home'
     producer_home.mkdir()
@@ -52,13 +67,7 @@ def main():
         environment.pop('PYTHONPATH', None)
         environment.pop('PYTHONHOME', None)
     rcc = str(Path(args.rcc).resolve())
-    platform_name = _platform_name().lower()
-    manifest = json.loads((root / 'runtime' / 'rcc.json').read_text())
-    pin = manifest['platforms'][platform_name]
-    binary_digest = _sha256(Path(rcc))
-    if binary_digest != pin['sha256']:
-        raise ValueError('candidate RCC does not match the tracked platform pin')
-    rcc_identity = {**manifest['source'], 'asset': pin['asset'], 'sha256': binary_digest}
+    platform_name, rcc_identity = validate_pinned_rcc(root, rcc)
     def run(arguments, environment, cwd):
         result = subprocess.run([rcc, *arguments], cwd=cwd, env=environment, timeout=args.timeout,
                                 capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)

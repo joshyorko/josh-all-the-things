@@ -51,6 +51,9 @@ jobs:
       - name: Build embedded-source artifact and prove isolated filtered restore
         run: |
           python scripts/build_filtered_candidate.py --rcc "$CANDIDATE_RCC" --output "$RUNNER_TEMP/filtered-candidate" --timeout 1800
+      - name: Qualify existing bytes for the native publisher receipt contract
+        run: |
+          python scripts/qualify_candidate_for_promotion.py --rcc "$CANDIDATE_RCC" --archive "$RUNNER_TEMP/filtered-candidate/jat-filtered-candidate.rcca" --candidate-receipt "$RUNNER_TEMP/filtered-candidate/candidate-receipt.json" --output "$RUNNER_TEMP/filtered-candidate/promotion-receipt.json" --timeout 1800
       - name: Retain exact candidate and machine-readable qualification
         if: always()
         uses: actions/upload-artifact@v4
@@ -61,5 +64,6 @@ jobs:
           path: |
             ${{ runner.temp }}/filtered-candidate/jat-filtered-candidate.rcca
             ${{ runner.temp }}/filtered-candidate/candidate-receipt.json
+            ${{ runner.temp }}/filtered-candidate/promotion-receipt.json
             ${{ runner.temp }}/filtered-candidate/proof/qualification.json
             ${{ runner.temp }}/filtered-candidate/proof/filtered.haul
