@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from robocorp import log
 
 from .archive import ArchiveAdapter
+from .capture import CAPTURE_WARNING, select_workspace
 from .hauler import HaulerAdapter, hauler_subprocess_environment
 from .models import (
     ANCHOR_KINDS,
@@ -59,6 +60,7 @@ RCC_REFERENCE = "hauler/rcc-environment.rcca:latest"
 RCC_METADATA_ARTIFACT = "rcc-environment-metadata.json"
 RCC_METADATA_REFERENCE = "hauler/rcc-environment-metadata.json:latest"
 HAULER_CONTENT_ARTIFACT = "hauler-content.tar.zst"
+CAPTURE_POLICY_REFERENCE = "hauler/jat-workspace-capture-policy.json:latest"
 MAX_SAVED_COMPONENT_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024
 
 COPY_REMOTE_SCHEMES = ("registry://", "reg://", "oci://")
@@ -195,7 +197,31 @@ class JATService:
         try:
             folder = existing_directory(request.folder)
             _validate_robocorp_home(folder)
+            filtered = bool(request.workspace_exclusions or request.capture_mode == "source-only")
+            selection = None
+            capture_policy = None
+            if filtered or request.dry_run:
+                selection = select_workspace(folder, request.workspace_exclusions, request.capture_mode)
+                capture_policy = selection.summary(request.capture_mode, request.workspace_exclusions)
+                if request.dry_run:
+                    clean = selection.complete and not selection.findings
+                    return OperationResult(
+                        format_version=2, operation="build", success=clean,
+                        exit_status=0 if clean else 1, producer_version=self.producer_version,
+                        complete=selection.complete, capture_policy=capture_policy,
+                        diagnostics=CAPTURE_WARNING,
+                    )
+                if not selection.complete or selection.findings:
+                    return OperationResult(
+                        format_version=2, operation="build", success=False, exit_status=1,
+                        producer_version=self.producer_version, complete=selection.complete,
+                        capture_policy=capture_policy,
+                        diagnostics="workspace selection failed: " + "; ".join(selection.findings),
+                    )
+                self._announce(CAPTURE_WARNING)
             output = new_output_path(request.output)
+            if filtered and (output == folder or folder in output.parents):
+                raise ValueError("filtered capture output must be outside the source workspace")
             brew = existing_directory(request.brew) if request.brew else None
             if brew:
                 _validate_brew_recovery(brew)
@@ -239,7 +265,10 @@ class JATService:
                         raise ValueError("RCC environment metadata does not match the embedded archive")
                     saved_robot = _source_robot_path(folder, saved_rcc_metadata.robot)
                 workspace_archive = stage.path / WORKSPACE_ARTIFACT
-                self.archive.create(folder, workspace_archive)
+                if filtered:
+                    self.archive.create(folder, workspace_archive, selected_paths=selection.paths)
+                else:
+                    self.archive.create(folder, workspace_archive)
                 validate_archive_members(self.archive.members(workspace_archive))
                 brew_archive = saved_brew_archive
                 if brew:
@@ -319,6 +348,16 @@ class JATService:
                         raise ValueError("RCC environment is required but rcc is unavailable")
                 manifest = stage.path / "manifest.yaml"
                 _write_manifest(manifest, workspace_archive, brew_archive, rcc_archive, rcc_metadata_path, images)
+                policy_path = None
+                if filtered:
+                    policy_path = stage.path / "jat-workspace-capture-policy.json"
+                    policy_path.write_text(json.dumps({**capture_policy, "workspace_exclusions": request.workspace_exclusions,
+                                                     "exclusion_rules_truncated": False}, sort_keys=True, indent=2) + "\n")
+                    with manifest.open("a") as handle:
+                        handle.write("\n---\napiVersion: content.hauler.cattle.io/v1\nkind: Files\n"
+                                     "metadata:\n  name: jat-workspace-capture-policy\nspec:\n  files:\n"
+                                     f"    - path: {json.dumps(_local_file_reference(policy_path))}\n"
+                                     "      name: jat-workspace-capture-policy.json\n")
                 build_store = stage.path / "build-store"
                 validation_store = stage.path / "validation-store"
                 temp = stage.path / "hauler-temp"
@@ -331,6 +370,8 @@ class JATService:
                         self.hauler.inventory(build_store, temp)
                     )
                 artifact_files = [(workspace_archive, WORKSPACE_ARTIFACT)]
+                if policy_path:
+                    artifact_files.append((policy_path, policy_path.name))
                 if brew_archive:
                     artifact_files.append((brew_archive, BREW_ARTIFACT))
                 if rcc_archive:
@@ -407,15 +448,18 @@ class JATService:
                     exit_status=0,
                     producer_version=self.producer_version,
                     payloads=outputs,
+                    capture_policy=capture_policy,
                     complete=True,
                     environment_artifact=rcc_metadata,
                 )
             single = outputs[0]
             return OperationResult(
+                format_version=2 if filtered else 1,
                 operation="build",
                 success=True,
                 exit_status=0,
                 payload_path=single.path,
+                capture_policy=capture_policy,
                 payload_size=single.size,
                 sha256=single.sha256,
                 producer_version=self.producer_version,
@@ -1210,6 +1254,7 @@ def _is_reserved_jat_reference(reference: str) -> bool:
         BREW_REFERENCE,
         RCC_REFERENCE,
         RCC_METADATA_REFERENCE,
+        CAPTURE_POLICY_REFERENCE,
     } or reference.endswith(".rcca:latest")
 
 
@@ -1390,7 +1435,7 @@ def _anchor_snapshot(inventory: list[dict]) -> dict[str, list[tuple]]:
     """
     snapshot: dict[str, list[tuple]] = {
         reference: []
-        for reference in (WORKSPACE_REFERENCE, BREW_REFERENCE, RCC_REFERENCE, RCC_METADATA_REFERENCE)
+        for reference in (WORKSPACE_REFERENCE, BREW_REFERENCE, RCC_REFERENCE, RCC_METADATA_REFERENCE, CAPTURE_POLICY_REFERENCE)
     }
     for item in inventory:
         reference = item["Reference"]

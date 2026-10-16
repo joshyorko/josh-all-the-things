@@ -956,7 +956,8 @@ def test_restore_rejects_transitive_symlink_escape_without_external_write(tmp_pa
     )
 
     assert result.success is False
-    assert "project/link" in result.diagnostics
+    # GNU tar directory enumeration order is filesystem-dependent.
+    assert any(name in result.diagnostics for name in ("project/b", "project/c", "project/link"))
     assert "escapes the archive root" in result.diagnostics
     assert not destination.exists()
     assert adapter.victim_after == "keep"

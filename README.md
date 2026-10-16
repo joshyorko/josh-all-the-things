@@ -665,3 +665,49 @@ requires them and you understand the transport tradeoff.
   Hauler release through RCC's `rccPostInstall` hook before the environment is
   frozen. Homebrew is not part of normal JAT execution; `--brew` is only a
   data payload option.
+
+### Explicit filtered workspace capture
+
+JAT does not read `.gitignore` or `.josh-roomignore`. A caller can explicitly select
+source-only capture without changing or copying its source tree:
+
+```sh
+jat build --folder ./project --output ../project.haul --capture-mode source-only \
+  --workspace-exclude .venv --workspace-exclude 'build output' --dry-run --json
+# Review the selection, then repeat without --dry-run to create the capsule.
+```
+
+`--workspace-exclude` is repeatable. Each rule is a **literal normalized relative
+POSIX path**: an exact entry and all its descendants are omitted. Spaces and glob
+characters are literal; no wildcard, negation, shell, or gitignore syntax is
+interpreted. Absolute paths, backslashes, drive prefixes, control characters,
+empty components, `.` and `..` components are rejected. Duplicate rules are
+removed and sorted; all rules are additive, so their order has no effect.
+There are at most 10,000 rules of at most 4,096 characters each.
+
+The default `full-repository` mode retains the existing capture behavior.
+`source-only` additionally excludes every entry named `.git` at every depth,
+including worktree pointer files, without following or changing those pointers.
+Other worktree directories are included unless explicitly excluded. Excluded
+Git history, staging state, and worktree files **cannot be recovered** from the
+capsule. JAT validates archive safety; it does not promise relocatable Git
+worktrees even in full-repository mode.
+
+Filtered capture preserves the selected file bytes and applies selection before
+archiving. Retained unsafe links, links to excluded targets, unsupported entry
+types, and invalid archive paths still fail. Its output must be outside the
+selected workspace. Dry-run does not create an output or invoke Hauler; it reports
+coverage separately from sample truncation, with at most 100 sample paths per
+category. Cancellation, unreadable subtrees, and the one-million-entry or 30-second scan limit
+produce an unsuccessful, explicitly incomplete result. Dry-run is a preview;
+Build scans again rather than trusting a previous preview.
+
+Filtered capsules include `jat-workspace-capture-policy.json` as an independently
+inspectable Hauler file, recording version 1 policy, the complete literal rules,
+policy digest, selection counts and bounded samples. Receipts contain a bounded
+summary. Paths are relative to the selected workspace, never host absolute paths.
+The canonical `BuildRequest` and RCC JSON task input use `workspace_exclusions`,
+`capture_mode`, and `dry_run` with identical semantics. Integrators can check
+`jat.models.WORKSPACE_CAPTURE_POLICY_VERSION == 1`; Room must expand its own
+ignore matching into literal exclusion roots and cannot assume an older installed
+JAT runtime supports this contract.

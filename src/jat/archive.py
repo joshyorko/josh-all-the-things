@@ -4,9 +4,9 @@ import os
 import shlex
 import sys
 import tarfile
+import tempfile
 from collections.abc import Callable
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from shutil import which as system_which
 
 from .process import ProcessRunner
@@ -22,8 +22,9 @@ class _WindowsArchiveBackend:
                 raise RuntimeError("Windows JAT archive backend requires contained zstandard") from error
         self.zstandard = zstandard_module
 
-    def create(self, source: Path, archive: Path) -> None:
-        paths = [source, *sorted(source.rglob("*"), key=lambda path: path.relative_to(source).as_posix())]
+    def create(self, source: Path, archive: Path, selected_paths: list[str] | None = None) -> None:
+        paths = ([source / path for path in selected_paths] if selected_paths is not None else
+                 [source, *sorted(source.rglob("*"), key=lambda path: path.relative_to(source).as_posix())])
         with archive.open("wb") as raw:
             compressor = self.zstandard.ZstdCompressor(level=3)
             with compressor.stream_writer(raw, closefd=False) as compressed:
@@ -171,9 +172,22 @@ class ArchiveAdapter:
                 return candidate
         raise RuntimeError("GNU tar with --zstd is unavailable (gtar or capable tar required)")
 
-    def create(self, source: Path, archive: Path) -> None:
+    def create(self, source: Path, archive: Path, selected_paths: list[str] | None = None) -> None:
         if self.windows:
-            self._windows_backend.create(source, archive)
+            self._windows_backend.create(source, archive, selected_paths)
+            return
+        if selected_paths is not None:
+            # --null makes names literal, including leading dashes and glob characters.
+            # --no-recursion ensures tar cannot reintroduce excluded descendants.
+            with tempfile.NamedTemporaryFile(dir=archive.parent, suffix=".paths") as listing:
+                for relative in selected_paths:
+                    name = source.name if relative == "." else f"{source.name}/{relative}"
+                    listing.write(os.fsencode(name) + b"\0")
+                listing.flush()
+                self._require(self.runner.run([
+                    self.executable, "--zstd", "-cpf", str(archive), "-C", str(source.parent),
+                    "--no-recursion", "--null", "--verbatim-files-from", "-T", listing.name,
+                ], timeout=self.timeout))
             return
         self._require(
             self.runner.run(
