@@ -61,7 +61,7 @@ def main():
     rcc_identity = {**manifest['source'], 'asset': pin['asset'], 'sha256': binary_digest}
     def run(arguments, environment, cwd):
         result = subprocess.run([rcc, *arguments], cwd=cwd, env=environment, timeout=args.timeout,
-                                capture_output=True, text=True, encoding='utf-8', errors='replace')
+                                capture_output=True, text=True, encoding='utf-8', errors='replace', check=False)
         if result.returncode:
             raise RuntimeError(f'candidate RCC operation failed: {result.stdout[-8000:]}\n{result.stderr[-4000:]}')
         return result
