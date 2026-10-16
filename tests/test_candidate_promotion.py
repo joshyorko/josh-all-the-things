@@ -1,6 +1,7 @@
 import importlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -121,3 +122,20 @@ def test_canonical_source_hashes_use_git_bytes_not_checkout_line_endings(promoti
         'example.py': hashlib.sha256(b'line\n').hexdigest(),
         'candidate_tasks.py': hashlib.sha256(b'bridge\n').hexdigest(),
     }
+
+
+def test_cli_preserves_symlink_identity_for_validation(promotion, tmp_path, monkeypatch):
+    target = tmp_path / 'target.rcca'
+    target.write_bytes(b'payload')
+    link = tmp_path / 'link.rcca'
+    link.symlink_to(target)
+    monkeypatch.setattr(sys, 'argv', [
+        'qualifier', '--archive', str(link), '--candidate-receipt', str(tmp_path / 'candidate.json'),
+        '--rcc', str(tmp_path / 'rcc'), '--output', str(tmp_path / 'receipt.json'),
+    ])
+    def qualify(root, archive, *args):
+        assert archive.is_symlink()
+        raise ValueError('candidate archive must be a regular non-symlink file')
+    monkeypatch.setattr(promotion, 'qualify', qualify)
+    with pytest.raises(ValueError, match='non-symlink'):
+        promotion.main()

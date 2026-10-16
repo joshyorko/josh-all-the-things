@@ -157,9 +157,9 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--timeout', type=int, default=1800)
     args = parser.parse_args()
-    receipt = qualify(Path(__file__).resolve().parents[1], args.archive.resolve(),
-                      args.candidate_receipt.resolve(), str(Path(args.rcc).resolve()),
-                      args.output.resolve(), args.timeout)
+    receipt = qualify(Path(__file__).resolve().parents[1], args.archive.absolute(),
+                      args.candidate_receipt.absolute(), str(Path(args.rcc).resolve()),
+                      args.output.absolute(), args.timeout)
     print(json.dumps(receipt, sort_keys=True))
 
 
