@@ -32,6 +32,11 @@ def parser() -> argparse.ArgumentParser:
     build = subcommands.add_parser("build", help="Build a portable capability capsule")
     build.add_argument("--folder", required=True)
     build.add_argument("--output", required=True)
+    build.add_argument("--workspace-exclude", action="append", default=[],
+                       help="Exclude a literal relative POSIX path and its subtree (no glob syntax)")
+    build.add_argument("--capture-mode", choices=("full-repository", "source-only"), default="full-repository",
+                       help="Source-only omits all .git entries; omitted Git history/staging cannot be recovered")
+    build.add_argument("--dry-run", action="store_true", help="Report bounded workspace selection without capture")
     build.add_argument("--brew")
     build.add_argument("--brew-archive", help="Reuse an existing Homebrew recovery archive")
     build.add_argument("--hauler-archive", help="Reuse exact saved non-anchor Hauler content")
@@ -182,6 +187,9 @@ def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:
         return service.build(
             BuildRequest(
                 folder=parsed.folder,
+                workspace_exclusions=parsed.workspace_exclude,
+                capture_mode=parsed.capture_mode,
+                dry_run=parsed.dry_run,
                 output=parsed.output,
                 brew=parsed.brew,
                 brew_archive=parsed.brew_archive,
@@ -297,6 +305,9 @@ def _print_result(result: OperationResult, as_json: bool) -> None:
             print(result.model_dump_json(indent=2, exclude_none=True))
         return
     stream = sys.stdout if result.success else sys.stderr
+    if result.capture_policy is not None:
+        import json
+        print(json.dumps(result.capture_policy, indent=2, sort_keys=True), file=stream)
     if not result.success:
         print(result.diagnostics or f"{result.operation} failed", file=stream)
         return

@@ -1,0 +1,69 @@
+name: Filtered JAT source candidate
+
+on:
+  push:
+    branches: [feature/filtered-capture-19, main]
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'tasks.py'
+      - 'robot.yaml'
+      - 'conda.yaml'
+      - 'environment_*.yaml'
+      - '.github/workflows/filtered-capture-candidate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux_amd64
+          - runner: windows-latest
+            platform: windows_amd64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Acquire pinned RCC without changing runtime pins
+        env:
+          CANDIDATE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, urllib.request
+          pin = json.loads(pathlib.Path('runtime/rcc.json').read_text())['platforms'][os.environ['CANDIDATE_PLATFORM']]
+          executable = pathlib.Path(os.environ['RUNNER_TEMP']) / ('candidate-rcc.exe' if os.name == 'nt' else 'candidate-rcc')
+          urllib.request.urlretrieve(pin['url'], executable)
+          assert hashlib.sha256(executable.read_bytes()).hexdigest() == pin['sha256']
+          executable.chmod(0o755)
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'CANDIDATE_RCC={executable}\n')
+          PY
+      - name: Build embedded-source artifact and prove isolated filtered restore
+        run: |
+          python scripts/build_filtered_candidate.py --rcc "$CANDIDATE_RCC" --output "$RUNNER_TEMP/filtered-candidate" --timeout 1800
+      - name: Qualify existing bytes for the native publisher receipt contract
+        run: |
+          python scripts/qualify_candidate_for_promotion.py --rcc "$CANDIDATE_RCC" --archive "$RUNNER_TEMP/filtered-candidate/jat-filtered-candidate.rcca" --candidate-receipt "$RUNNER_TEMP/filtered-candidate/candidate-receipt.json" --output "$RUNNER_TEMP/filtered-candidate/promotion-receipt.json" --timeout 1800
+      - name: Retain exact candidate and machine-readable qualification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: filtered-jat-candidate-${{ matrix.platform }}-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            ${{ runner.temp }}/filtered-candidate/jat-filtered-candidate.rcca
+            ${{ runner.temp }}/filtered-candidate/candidate-receipt.json
+            ${{ runner.temp }}/filtered-candidate/promotion-receipt.json
+            ${{ runner.temp }}/filtered-candidate/proof/qualification.json
+            ${{ runner.temp }}/filtered-candidate/proof/filtered.haul

@@ -8,6 +8,10 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .capture import validate_exclusions
+
+WORKSPACE_CAPTURE_POLICY_VERSION = 1
+
 
 class RequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -27,6 +31,15 @@ def is_remote_source(source: str) -> bool:
 class BuildRequest(RequestModel):
     folder: Path
     output: Path
+    workspace_exclusions: list[str] = Field(default_factory=list)
+    capture_mode: Literal["full-repository", "source-only"] = "full-repository"
+    dry_run: bool = False
+
+    @field_validator("workspace_exclusions")
+    @classmethod
+    def literal_workspace_exclusions(cls, values):
+        return validate_exclusions(values)
+
     brew: Path | None = None
     brew_archive: Path | None = None
     hauler_archive: Path | None = None
@@ -362,6 +375,7 @@ class OperationResult(BaseModel):
     transfer: TransferReceipt | None = None
     manifest: ManifestReceipt | None = None
     complete: bool | None = None
+    capture_policy: dict | None = None
 
     @model_validator(mode="after")
     def structured_details_require_format_version_two(self):
@@ -374,6 +388,7 @@ class OperationResult(BaseModel):
                 self.transfer is not None,
                 self.manifest is not None,
                 self.complete is not None,
+                self.capture_policy is not None,
             )
         )
         if structured and self.format_version != 2:
