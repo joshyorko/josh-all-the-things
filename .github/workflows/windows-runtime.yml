@@ -18,6 +18,11 @@ on:
       - "scripts/build_environment_artifact.py"
       - "scripts/publish_environment_artifact.sh"
       - "scripts/publish_environment_artifacts.sh"
+      - "scripts/validate_runtime_receipt.py"
+      - "scripts/verify_hauler_runtime.py"
+      - "scripts/verify_jat_serve.py"
+      - "scripts/runtime-verifier-requirements.txt"
+      - "docs/environment-artifact-receipt.schema.json"
       - "src/jat/archive.py"
       - "src/jat/services.py"
       - "tests/**"
@@ -30,7 +35,7 @@ permissions:
 # Dispatch from main with the exact source SHA; candidate runs on pushes never publish.
 env:
   JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
-  JAT_RELEASE_TAG: v0.1.13-jat-runtime
+  JAT_RELEASE_TAG: v0.1.15-jat-runtime
 
 jobs:
   reject-non-main-release-dispatch:
@@ -807,4 +812,4 @@ jobs:
     uses: ./.github/workflows/verify-published-runtime.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      release_tag: v0.1.13-jat-runtime
+      release_tag: v0.1.15-jat-runtime
