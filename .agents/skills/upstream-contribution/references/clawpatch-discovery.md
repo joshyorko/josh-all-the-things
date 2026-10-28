@@ -130,3 +130,10 @@ missing review or targeted current-source validation, reuse matching upstream
 reports, and avoid duplicate submissions. Update a tracker only for meaningful
 new evidence, not timer-driven reminders. Report skill/tool gaps and what was
 independently verified; one successful run does not certify unattended use.
+
+Operational sources: installed CLI help first, then the current ClawPatch
+[review](https://github.com/openclaw/clawpatch/blob/main/docs/code-review.md),
+[configuration](https://github.com/openclaw/clawpatch/blob/main/docs/configuration.md)
+and [provider](https://github.com/openclaw/clawpatch/blob/main/docs/providers.md)
+documentation. Check those documents against the executable actually selected;
+matching a package version string alone does not establish identical source.

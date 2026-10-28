@@ -36,3 +36,29 @@ Check those boundaries separately against the installed CLI/provider and its
 actual prompt/context records. Any JATT Python validation uses the declared RCC
 environment. This evaluation creates no scheduler, findings database or tool
 integration, and one successful evaluation is not unattended reliability proof.
+
+## Implementation check results
+
+The implementation evaluation used separate fresh-context baseline and
+candidate evaluators on the eight inputs. Both retained the existing
+contribution controls. The candidate explicitly accounted for native-state
+continuation, raw-versus-root-cause counts, incomplete modes/context, effective
+feature/global validation commands and separate model/runtime evidence.
+This is an application/regression check, not a claim that the baseline agent
+could not reason about these facts when the snapshots supplied them.
+
+A separate native CLI transport smoke used an isolated synthetic repository,
+heuristic mapping, one reviewed feature and an unfiltered JSON report.
+ClawPatch 0.8.4's Codex provider wrapper invoked a capturing stub; the stub
+received the `--prompt-file` guidance, correct working directory and read-only
+sandbox argument. The prompt's context record exposed a 44,843-byte file capped
+at 24,000 included bytes. Effective validation still contained a detected
+`pytest` command alongside the configured RCC command, confirming why both
+sources need inspection before native fixing.
+
+The smoke executed neither those validation commands nor a real model review.
+It does not prove sandbox enforcement or automatic AGENTS/skill inheritance in
+Codex. The version and limits above describe the inspected installation, not
+requirements for future runs. Native findings/patch state and production code
+were not changed. Initial smoke-parser and missing-validator-tooling failures
+were kept as harness/setup failures, not product findings.
