@@ -550,7 +550,7 @@ def test_publish_wrapper_validates_selected_structured_receipt(tmp_path, receipt
     assert weak_rejected.returncode != 0
     assert not oras_log.exists(), "weak Hauler proof reached ORAS"
 
-    invalid = json.loads(receipt.read_text())
+    invalid = json.loads(json.dumps(valid_receipt))
     invalid["rcc_version"] = "v18.19.1"
     receipt.write_text(json.dumps(invalid) + "\n")
     oras_log.unlink(missing_ok=True)
