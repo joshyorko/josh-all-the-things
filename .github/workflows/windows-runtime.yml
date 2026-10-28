@@ -175,6 +175,18 @@ jobs:
           if ($pythonExecuted.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $pythonExecuted.exitCode -ne 0) { throw "artifact Python Hauler version proof did not validate" }
           $executed
 
+      - name: Verify bounded installer promotion against real Windows sharing locks
+        run: |
+          $env:ROBOCORP_HOME = Join-Path $env:RUNNER_TEMP "jat-rcc-artifact-verifier"
+          $receipt = Join-Path $env:RUNNER_TEMP "windows-installer-lock.json"
+          $sourceRoot = $PWD.Path
+          $probe = Join-Path $sourceRoot "tests/test_windows_installer_lock.py"
+          $launcher = "import runpy,sys; root,script=sys.argv[1:]; sys.path.insert(0,root); sys.argv=[script]; runpy.run_path(script,run_name='__main__')"
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $receipt -- python -c $launcher $sourceRoot $probe
+          if ($LASTEXITCODE -ne 0) { throw "native Windows installer sharing-lock controls failed" }
+          $executed = Get-Content -Raw $receipt | ConvertFrom-Json
+          if ($executed.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $executed.exitCode -ne 0) { throw "installer sharing-lock execution receipt did not validate" }
+
       - name: Probe Hauler Windows local file ingestion
         run: |
           $probeRoot = Join-Path $env:RUNNER_TEMP "hauler file probe"
