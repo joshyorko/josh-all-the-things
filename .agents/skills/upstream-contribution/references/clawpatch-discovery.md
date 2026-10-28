@@ -118,6 +118,12 @@ work. Explain deferred, disproven, already-addressed and still-unverified leads.
 Count raw reports, unique confirmed root causes, false positives, unresolved
 leads and optional improvements separately.
 
+Use per-finding inspection when needed to retain linked feature and patch
+attempt details; a report summary alone may omit them. Reconcile native runs
+and attempts, including failed/no-change attempts and linked manual patches.
+When the tool does not retain a count or raw result, record that limit rather
+than inventing missing findings or treating an unknown count as zero.
+
 Use native state as canonical. A derived report may join its IDs with Git and
 remote publication evidence; it must not become a second findings database or
 rewrite old analysis as if it reviewed a newer revision. Preserve analysis,

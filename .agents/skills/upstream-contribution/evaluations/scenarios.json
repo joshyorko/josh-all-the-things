@@ -3,6 +3,36 @@
   "execution_limit": "Use the snapshots as evidence. No real scans, tests, network calls, issues or PRs during scenario evaluation.",
   "cases": [
     {
+      "id": "fresh-bootstrap",
+      "request": "Run the upstream-contribution skill against JATT.",
+      "project": {
+        "name": "JATT",
+        "instructions": "Use the declared robot.yaml RCC environment for Python validation. RCC is optional for normal users. Do not add ClawPatch to the runtime, CI, or jat CLI.",
+        "skill_catalog": [
+          "rcc:rcc",
+          "rcc:rcc-core",
+          "rcc:rcc-robots",
+          "rcc:rcc-ci-maintenance"
+        ]
+      },
+      "authorization": "Read-only discovery/investigation; no external writes or installation/configuration changes.",
+      "snapshots": {
+        "available_executables": [
+          "git",
+          "ghx",
+          "rcc",
+          "clawpatch",
+          "codex"
+        ],
+        "source_revision": "unknown",
+        "working_tree_state": "unknown",
+        "tool_versions": "unknown",
+        "provider_configuration": "unknown",
+        "prior_native_state": "unknown",
+        "supplied_defect": null
+      }
+    },
+    {
       "id": "discovery",
       "request": "Run the upstream-contribution skill against JATT. Review the whole requested scope and carry actionable findings through the authorized contribution workflow.",
       "project": {
