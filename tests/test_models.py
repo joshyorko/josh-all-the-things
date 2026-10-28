@@ -342,3 +342,9 @@ def test_capture_sources_reject_credential_bearing_and_signed_urls():
         hauler_manifests=["https://example.test/product.yaml"],
     )
     assert accepted.images_files == ["https://example.test/images.txt"]
+
+
+@pytest.mark.parametrize(("value", "expected"), [(1, "1"), (1.25, "1.25"), (True, "True"), (False, "False")])
+def test_content_entry_normalizes_scalar_extra_metadata(value, expected):
+    entry = ContentEntry.from_hauler({"Reference": "hauler/x:latest", "Type": "file", "Extra": value})
+    assert entry.metadata == {"Extra": expected}

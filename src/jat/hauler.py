@@ -241,7 +241,7 @@ class HaulerAdapter:
 
     def serve_files(self, store: Path, temp: Path, directory: Path, port: int = 8080):
         command = self.serve_fileserver_command(store, temp, directory, port)
-        completed = self.runner.run(command, timeout=self.timeout, foreground=True, env=self._child_env())
+        completed = self.runner.run(command, timeout=None, foreground=True, env=self._child_env())
         if not completed.success:
             raise RuntimeError(completed.diagnostics or "Hauler operation failed")
         return completed
@@ -291,7 +291,7 @@ class HaulerAdapter:
             options["on_line"] = self.progress
         completed = self.runner.run(
             [self.executable, *arguments],
-            timeout=self.timeout,
+            timeout=None if foreground else self.timeout,
             foreground=foreground,
             cwd=cwd,
             env=self._child_env(),

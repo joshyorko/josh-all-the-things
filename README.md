@@ -224,7 +224,8 @@ rcc task script -r robot.yaml -- ./jat build \
   --output ./folder-haul.tar.zst
 ```
 
-The output file must not already exist.
+The output file must not already exist and must be outside the workspace and
+any Homebrew recovery directory being captured.
 
 ### Build with Selected Local Images
 
@@ -419,6 +420,8 @@ uses HTTP for loopback registry pulls. Manifest operations with
 rejects non-loopback references and `--images-file` combinations before any
 registry operation. The flag does not enable plain HTTP for arbitrary
 non-loopback sync targets.
+`--ca-file` supports remote acquisition only. JAT rejects it for local image
+publication because Hauler v2.1.1 cannot apply a custom CA file to registry copy.
 `--ca-file` and the visually explicit `--insecure-skip-tls-verify` are mutually
 exclusive; `--check` requests Hauler's more expensive full store integrity
 check. Receipts never contain CA contents or credentials.

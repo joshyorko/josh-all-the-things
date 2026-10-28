@@ -104,8 +104,11 @@ def _canonical_image_reference(reference: str) -> str:
     else:
         final = name.rsplit("/", 1)[-1]
         suffix = "" if ":" in final else ":latest"
-    if name.startswith("docker.io/"):
-        name = "index.docker.io/" + name.removeprefix("docker.io/")
+    if name.startswith(("docker.io/", "index.docker.io/")):
+        repository = name.split("/", 1)[1]
+        if "/" not in repository:
+            repository = "library/" + repository
+        name = "index.docker.io/" + repository
     return name + suffix
 
 
@@ -220,10 +223,12 @@ class JATService:
                     )
                 self._announce(CAPTURE_WARNING)
             output = new_output_path(request.output)
-            if filtered and (output == folder or folder in output.parents):
-                raise ValueError("filtered capture output must be outside the source workspace")
+            if folder in output.parents:
+                raise ValueError("capture output must be outside the source workspace")
             brew = existing_directory(request.brew) if request.brew else None
             if brew:
+                if brew in output.parents:
+                    raise ValueError("capture output must be outside the Homebrew recovery directory")
                 _validate_brew_recovery(brew)
             saved_brew_input = existing_file(request.brew_archive) if request.brew_archive else None
             saved_hauler_input = existing_file(request.hauler_archive) if request.hauler_archive else None
@@ -477,6 +482,7 @@ class JATService:
             output = new_output_path(request.output)
             if request.ca_file is not None:
                 existing_file(request.ca_file)
+            images_files = _validate_capture_sources(request.images_files, "images-file")
             with OwnedStage(output.parent, "manifest") as stage:
                 temp = stage.path / "hauler-temp"
                 temp.mkdir()
@@ -510,6 +516,11 @@ class JATService:
                         raise ValueError(
                             "local-only images require --registry-prefix and explicit --publish-local; "
                             "use a registry-qualified remote reference to pull without publishing"
+                        )
+                    if request.ca_file is not None:
+                        raise ValueError(
+                            "--ca-file is unsupported for local image publication because "
+                            "Hauler 2.1.1 store copy does not support custom CA files"
                         )
                     docker = self.which("docker")
                     if not docker or not self._docker_ready(docker, required=True):
@@ -545,7 +556,7 @@ class JATService:
                 images_txt = stage.path / "images.txt"
                 images_txt.write_text("".join(f"{image}\n" for image in remote_images))
                 sources = [str(images_txt)] if remote_images else []
-                sources.extend(_validate_capture_sources(request.images_files, "images-file"))
+                sources.extend(images_files)
                 if not sources:
                     raise ValueError("manifest acquisition has no registry image references")
                 self.hauler.sync_image_txt(

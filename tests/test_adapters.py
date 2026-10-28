@@ -740,3 +740,20 @@ def test_hauler_inventory_accepts_legacy_v20_array_shape(tmp_path):
 
     assert inventory == [{"Reference": "ghcr.io/acme/api:v1", "Type": "image", "Digest": digest}]
     assert adapter.store_id is None
+
+
+@pytest.mark.parametrize("endpoint", ["registry", "files"])
+def test_foreground_hauler_server_outlives_acquisition_timeout(tmp_path, endpoint):
+    class SleepingProcessRunner(ProcessRunner):
+        def run(self, argv, **options):
+            return super().run([sys.executable, "-c", "import time; time.sleep(0.1)"], **options)
+
+    adapter = HaulerAdapter(SleepingProcessRunner(), timeout=0.01)
+    if endpoint == "registry":
+        completed = adapter.serve(tmp_path / "store", tmp_path / "temp", tmp_path / "directory", tmp_path / "config")
+    else:
+        completed = adapter.serve_files(tmp_path / "store", tmp_path / "temp", tmp_path / "directory")
+    assert completed.success
+    assert not completed.timed_out
+    with pytest.raises(RuntimeError, match="timed out"):
+        adapter.load(tmp_path / "store", tmp_path / "temp", tmp_path / "haul")

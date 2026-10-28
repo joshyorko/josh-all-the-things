@@ -292,7 +292,7 @@ class ContentEntry(BaseModel):
         metadata = {}
         for key, value in item.items():
             if key not in known and value is not None:
-                metadata[key] = value if isinstance(value, (str, int, float, bool)) else json.dumps(value)
+                metadata[key] = str(value) if isinstance(value, (str, int, float, bool)) else json.dumps(value)
         layers = item.get("Layers")
         size = item.get("Size")
         return cls(
