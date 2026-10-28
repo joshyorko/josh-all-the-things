@@ -95,7 +95,10 @@ def test_process_runner_terminates_child_on_ctrl_c(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         ProcessRunner().run(["hauler", "store", "serve"], foreground=True)
     assert popen_options["start_new_session"] is True
-    assert signals == [(process.pid, __import__("signal").SIGTERM)]
+    assert signals == [
+        (process.pid, __import__("signal").SIGTERM),
+        (process.pid, __import__("signal").SIGKILL),
+    ]
 
 
 def test_archive_resolves_gtar_then_capable_path_tar():

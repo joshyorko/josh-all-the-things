@@ -97,6 +97,24 @@ def test_supervise_stops_the_sibling_when_one_child_fails(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group signal test")
+def test_supervisor_cleanup_does_not_signal_a_reaped_child_group(monkeypatch):
+    class Child:
+        def __init__(self, status):
+            self.status = status
+
+        def poll(self):
+            return self.status
+
+    reaped, running = Child(0), Child(None)
+    stopped = []
+    runner = ProcessRunner()
+    monkeypatch.setattr(runner, "_stop", stopped.append)
+
+    runner._stop_all([reaped, running])
+
+    assert stopped == [running]
+
+
 def test_supervise_stops_all_children_on_cancellation(monkeypatch):
     signals = []
     monkeypatch.setattr("jat.process.os.killpg", lambda pid, signum: signals.append((pid, signum)))

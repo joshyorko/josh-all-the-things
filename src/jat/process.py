@@ -289,7 +289,7 @@ class ProcessRunner:
 
     def _stop_all(self, processes: list[subprocess.Popen]) -> None:
         for process in processes:
-            if os.name != "nt" or process.poll() is None:
+            if process.poll() is None:
                 self._stop(process)
 
     def _result(self, argv, status, stdout, stderr, secrets, timed_out=False) -> ProcessResult:
