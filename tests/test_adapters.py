@@ -59,6 +59,7 @@ def test_process_runner_decodes_external_output_without_locale_failures():
     assert "�" in completed.stdout
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process-group cancellation")
 def test_process_runner_terminates_child_on_ctrl_c(monkeypatch):
     class InterruptedProcess:
         returncode = -15
