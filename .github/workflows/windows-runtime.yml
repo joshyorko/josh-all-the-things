@@ -465,6 +465,7 @@ jobs:
           command -v docker
           command -v htpasswd
           docker info >/dev/null
+          docker pull registry:2
           artifact=$(python3 -c 'import json; print(json.load(open("dist/jat-runtime.json"))["artifact_digest"])')
           export JAT_TEST_DOCKER="$(command -v docker)"
           export JAT_TEST_HTPASSWD="$(command -v htpasswd)"
@@ -483,8 +484,8 @@ jobs:
       - name: Prepare the Docker fixture for the Linux Python suite
         run: |
           set -euo pipefail
-          docker pull busybox:1.36
-          docker image inspect busybox:1.36 >/dev/null
+          docker pull registry:2
+          docker image inspect registry:2 >/dev/null
 
       - name: Run the JAT Python suite in the pinned RCC environment
         run: |
