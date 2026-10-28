@@ -36,6 +36,14 @@ workaround. The skill is the repository's evidence-first reporting and
 follow-through contract, adapted from Bluefin Contribute's upstream-Hive
 workflow. Do not silently bury an upstream bug in JAT documentation.
 
+For discovery without a supplied failure, invoke the same skill with
+"Run the upstream-contribution skill against JATT." Its discovery reference
+uses external ClawPatch tooling and the available RCC skills, then feeds
+verified findings into the contribution contract. A supplied finding takes
+the direct investigation route. Resume prior native state and evidence rather
+than restarting a completed campaign. This is an agent workflow, not a JATT
+runtime dependency, CLI feature, scheduler, or CI sweep.
+
 Reproduce and distinguish a JAT caller/integration bug from independently
 broken upstream behavior. Search for existing reports; route confirmed Hauler
 bugs to `hauler-dev/hauler`, Josh RCC fork bugs to `joshyorko/rcc`, and
