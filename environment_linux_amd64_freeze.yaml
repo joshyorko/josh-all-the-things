@@ -53,4 +53,4 @@ dependencies:
   - typing-inspection==0.4.4
   - typing_extensions==4.16.0
 rccPostInstall:
-- bash scripts/install_hauler.sh
+- python scripts/install_hauler.py --expected-version v2.1.1

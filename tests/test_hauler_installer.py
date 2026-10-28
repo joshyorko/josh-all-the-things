@@ -1,7 +1,10 @@
 import hashlib
 import io
 import json
-import stat
+import os
+import shlex
+import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -9,12 +12,11 @@ import pytest
 
 from scripts.install_hauler import install, resolve_platform
 
-
 ROOT = Path(__file__).parents[1]
 
 
 def _archive(path: Path, executable: str = "hauler", version: str = "v2.1.1") -> bytes:
-    payload = f"#!/bin/sh\nprintf 'GitVersion:    {version}\\n'\n".encode()
+    payload = f"test-hauler\nGitVersion:    {version}\n".encode()
     with tarfile.open(path, "w:gz") as archive:
         info = tarfile.TarInfo(executable)
         info.mode = 0o755
@@ -59,6 +61,18 @@ def _download(payload: bytes):
 
 
 
+@pytest.fixture
+def simulated_hauler_process(monkeypatch):
+    """Keep synthetic archive tests independent of the host executable format."""
+    def run(arguments, **_kwargs):
+        assert arguments[1:] == ["version"]
+        payload = Path(arguments[0]).read_bytes()
+        assert payload.startswith(b"test-hauler\n")
+        return subprocess.CompletedProcess(arguments, 0, payload.decode().split("\n", 1)[1], "")
+
+    monkeypatch.setattr("scripts.install_hauler.subprocess.run", run)
+
+
 def test_resolve_platform_maps_supported_linux_and_windows_x64():
     assert resolve_platform("Linux", "x86_64") == "linux-amd64"
     assert resolve_platform("Windows", "AMD64") == "windows-amd64"
@@ -90,7 +104,7 @@ def test_canonical_manifest_contains_official_linux_and_windows_pins():
     }
 
 
-def test_windows_installs_exe_into_conda_scripts_without_admin(tmp_path):
+def test_simulated_windows_installs_exe_into_conda_scripts_without_admin(tmp_path, simulated_hauler_process):
     archive = tmp_path / "archive.tar.gz"
     payload = _archive(archive, executable="hauler.exe")
     conda = tmp_path / "conda"
@@ -111,11 +125,10 @@ def test_windows_installs_exe_into_conda_scripts_without_admin(tmp_path):
     )
 
     assert target == conda / "Scripts" / "hauler.exe"
-    assert target.read_bytes() == b"#!/bin/sh\nprintf 'GitVersion:    v2.1.1\\n'\n"
-    assert stat.S_IMODE(target.stat().st_mode) & 0o111
+    assert target.read_bytes() == b"test-hauler\nGitVersion:    v2.1.1\n"
 
 
-def test_linux_installs_into_conda_bin_and_reuses_matching_target(tmp_path):
+def test_simulated_linux_installs_into_conda_bin_and_reuses_matching_target(tmp_path, simulated_hauler_process):
     archive = tmp_path / "archive.tar.gz"
     payload = _archive(archive)
     conda = tmp_path / "conda"
@@ -180,7 +193,7 @@ def test_unsafe_archive_fails_before_promotion(tmp_path):
     assert not (conda / "escaped").exists()
 
 
-def test_mismatched_existing_installation_fails_closed(tmp_path):
+def test_mismatched_existing_installation_fails_closed(tmp_path, simulated_hauler_process):
     archive = tmp_path / "archive.tar.gz"
     payload = _archive(archive, version="v1.0.0")
     manifest = _manifest(
@@ -193,15 +206,15 @@ def test_mismatched_existing_installation_fails_closed(tmp_path):
     conda = tmp_path / "conda"
     target = conda / "bin" / "hauler"
     target.parent.mkdir(parents=True)
-    target.write_bytes(b"#!/bin/sh\nprintf 'GitVersion:    v1.0.0\\n'\n")
+    target.write_bytes(b"test-hauler\nGitVersion:    v1.0.0\n")
     target.chmod(0o755)
 
     with pytest.raises(ValueError, match="does not match"):
         install(manifest, conda, system="Linux", machine="x86_64", download=_download(payload))
-    assert target.read_bytes().endswith(b"v1.0.0\\n'\n")
+    assert target.read_bytes().endswith(b"v1.0.0\n")
 
 
-def test_unprefixed_hauler_git_version_matches_v_prefixed_release_pin(tmp_path):
+def test_unprefixed_hauler_git_version_matches_v_prefixed_release_pin(tmp_path, simulated_hauler_process):
     archive = tmp_path / "archive.tar.gz"
     payload = _archive(archive, version="2.1.1")
     manifest = _manifest(
@@ -217,3 +230,74 @@ def test_unprefixed_hauler_git_version_matches_v_prefixed_release_pin(tmp_path):
     target = install(manifest, conda, system="Linux", machine="x86_64", download=_download(payload))
 
     assert target == conda / "bin" / "hauler"
+
+
+
+def test_wrong_downloaded_version_is_not_promoted_and_corrected_retry_succeeds(tmp_path, simulated_hauler_process):
+    archive = tmp_path / "archive.tar.gz"
+    payload = _archive(archive, version="v1.0.0")
+    manifest = _manifest(tmp_path, platform="linux-amd64", asset="hauler.tar.gz", payload=payload)
+    conda = tmp_path / "conda"
+    conda.mkdir()
+
+    with pytest.raises(ValueError, match="pinned version check"):
+        install(manifest, conda, system="Linux", machine="x86_64", download=_download(payload))
+    assert not (conda / "bin" / "hauler").exists()
+    assert not list(conda.glob(".hauler-install-*"))
+
+    payload = _archive(archive)
+    _manifest(tmp_path, platform="linux-amd64", asset="hauler.tar.gz", payload=payload)
+    target = install(manifest, conda, system="Linux", machine="x86_64", download=_download(payload))
+    assert target.read_bytes() == b"test-hauler\nGitVersion:    v2.1.1\n"
+
+
+@pytest.mark.parametrize("descriptor", ["conda.yaml", "environment_linux_amd64_freeze.yaml", "environment_windows_amd64.yaml"])
+def test_rcc_descriptor_pin_matches_canonical_manifest(descriptor, tmp_path, simulated_hauler_process):
+    command = (ROOT / descriptor).read_text().split("rccPostInstall:\n", 1)[1].strip().removeprefix("- ")
+    arguments = shlex.split(command)
+    expected_version = arguments[arguments.index("--expected-version") + 1]
+    canonical = json.loads((ROOT / "runtime" / "hauler.json").read_text())["hauler"]["version"]
+    payload = _archive(tmp_path / "archive.tar.gz", version=canonical)
+    manifest = _manifest(tmp_path, platform="linux-amd64", asset="hauler.tar.gz", payload=payload, version=canonical)
+    conda = tmp_path / "conda"
+    conda.mkdir()
+
+    target = install(manifest, conda, expected_version=expected_version, system="Linux", machine="x86_64", download=_download(payload))
+    assert target.is_file()
+
+
+def test_stale_descriptor_pin_fails_before_prefix_mutation(tmp_path):
+    payload = _archive(tmp_path / "archive.tar.gz")
+    manifest = _manifest(tmp_path, platform="linux-amd64", asset="hauler.tar.gz", payload=payload)
+    conda = tmp_path / "missing-conda"
+
+    with pytest.raises(ValueError, match="environment expects v2.0.3.*manifest pins v2.1.1"):
+        install(manifest, conda, expected_version="v2.0.3", system="Linux", machine="x86_64")
+    assert not conda.exists()
+
+
+def test_cli_rejects_stale_descriptor_pin(tmp_path):
+    environment = os.environ | {"CONDA_PREFIX": str(tmp_path / "missing-conda"), "HAULER_MANIFEST": str(ROOT / "runtime" / "hauler.json")}
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "install_hauler.py"), "--expected-version", "v0.0.0"], env=environment, capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    assert "environment expects v0.0.0" in result.stderr
+    assert not (tmp_path / "missing-conda").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Windows RCC environment and its verified hauler.exe")
+def test_native_windows_installs_and_executes_environment_hauler(tmp_path):
+    """Exercise a real PE executable without the synthetic process fixture."""
+    source = Path(os.environ["CONDA_PREFIX"]) / "Scripts" / "hauler.exe"
+    assert source.is_file(), "native Windows qualification requires environment-owned Hauler"
+    version = json.loads((ROOT / "runtime" / "hauler.json").read_text())["hauler"]["version"]
+    archive_path = tmp_path / "archive.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(source, arcname="hauler.exe")
+    payload = archive_path.read_bytes()
+    manifest = _manifest(tmp_path, platform="windows-amd64", asset="hauler.tar.gz", payload=payload, version=version)
+    conda = tmp_path / "conda"
+    conda.mkdir()
+
+    target = install(manifest, conda, download=_download(payload))
+    result = subprocess.run([str(target), "version"], capture_output=True, text=True, check=True)
+    assert version.removeprefix("v") in result.stdout
