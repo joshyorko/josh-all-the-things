@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 
 from pydantic import ValidationError
 
+from .io import format_validation_error
 from .models import (
     BuildRequest,
     CopyRequest,
@@ -165,21 +166,8 @@ def _invalid_request_result(
         success=False,
         exit_status=1,
         producer_version=getattr(service, "producer_version", "unknown"),
-        diagnostics=f"invalid request: {_format_validation_error(error)}",
+        diagnostics=f"invalid request: {format_validation_error(error)}",
     )
-
-
-def _format_validation_error(error: ValidationError) -> str:
-    """Render validation issues without the rejected input values.
-
-    Pydantic's default str includes the full rejected value, which would copy
-    credentials from a rejected target or URL straight into receipts and logs.
-    """
-    issues = []
-    for issue in error.errors(include_url=False, include_context=False, include_input=False):
-        location = ".".join(str(part) for part in issue.get("loc", ()) or ())
-        issues.append(f"{location or '<request>'}: {issue.get('msg', 'invalid value')}")
-    return "; ".join(issues)
 
 
 def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:
