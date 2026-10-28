@@ -20,6 +20,7 @@ on:
       - "scripts/publish_environment_artifacts.sh"
       - "scripts/validate_runtime_receipt.py"
       - "scripts/verify_hauler_runtime.py"
+      - "scripts/verify_jat_serve.py"
       - "scripts/runtime-verifier-requirements.txt"
       - "docs/environment-artifact-receipt.schema.json"
       - "src/jat/archive.py"

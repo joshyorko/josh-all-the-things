@@ -73,7 +73,7 @@ jobs:
         run: |
           import os, pathlib, shutil, subprocess, sys
           root = pathlib.Path(os.environ["RUNNER_TEMP"])
-          for name in ("validate_runtime_receipt.py", "verify_hauler_runtime.py", "runtime-verifier-requirements.txt"):
+          for name in ("validate_runtime_receipt.py", "verify_hauler_runtime.py", "verify_jat_serve.py", "runtime-verifier-requirements.txt"):
               shutil.copyfile(pathlib.Path("scripts") / name, root / name)
           subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--target", str(root / "jat-receipt-tools"), "--requirement", str(root / "runtime-verifier-requirements.txt")], check=True)
 
@@ -124,50 +124,32 @@ jobs:
           acquired = json.load(open(sys.argv[1]))
           assert acquired["artifactDigest"] == sys.argv[2] and acquired["verification"]["valid"] is True
           PY
-          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$RUNNER_TEMP/linux-release-no-build.json" -- python -c "print('jat-release-no-build-proof')"
-          python3 - "$RUNNER_TEMP/linux-release-no-build.json" "$artifact" <<'PY'
+          verify_execution() {
+            python3 - "$1" "$artifact" <<'PY'
           import json, sys
           execution = json.load(open(sys.argv[1]))
           if execution["artifactDigest"] != sys.argv[2] or execution["exitCode"] != 0 or execution["verification"]["valid"] is not True:
-              raise SystemExit("no-build execution did not verify the acquired release artifact")
+              raise SystemExit("execution did not verify the acquired release artifact")
           PY
+          }
+          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$RUNNER_TEMP/linux-release-no-build.json" -- python -c "print('jat-release-no-build-proof')"
+          verify_execution "$RUNNER_TEMP/linux-release-no-build.json"
           expected_hauler=$(python3 -c 'import json; print(json.load(open("runtime/hauler.json"))["hauler"]["version"])')
-          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --json -- python "$RUNNER_TEMP/verify_hauler_runtime.py" --expected-version "$expected_hauler" > "$RUNNER_TEMP/linux-release-hauler.json"
-          python3 - "$RUNNER_TEMP/linux-release-hauler.json" "$artifact" <<'PY'
-          import json, sys
-          execution = json.load(open(sys.argv[1]))
-          assert execution["artifactDigest"] == sys.argv[2] and execution["exitCode"] == 0
-          PY
-          "$rcc" --no-build task run --robot "$PWD/robot.yaml" --task Doctor --dev --silent
+          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$RUNNER_TEMP/linux-release-hauler.json" -- python "$RUNNER_TEMP/verify_hauler_runtime.py" --expected-version "$expected_hauler"
+          verify_execution "$RUNNER_TEMP/linux-release-hauler.json"
+          export PYTHONPATH="$PWD/src:$PWD"
+          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$RUNNER_TEMP/linux-release-doctor.json" -- env PYTHONPATH="$PWD/src:$PWD" python -m jat.cli doctor --json
+          verify_execution "$RUNNER_TEMP/linux-release-doctor.json"
           source="$PWD/devdata/synthetic-source"
           haul="$RUNNER_TEMP/linux-release-jat.tar.zst"
-          python3 - "$RUNNER_TEMP/linux-release-build.json" "$source" "$haul" <<'PY'
-          import json, sys
-          json.dump({"folder":sys.argv[2],"output":sys.argv[3],"rcc_environment":"off"},open(sys.argv[1],"w"))
-          PY
-          "$rcc" --no-build task run --robot "$PWD/robot.yaml" --task Build -- --json-input "$RUNNER_TEMP/linux-release-build.json"
-          python3 - "$RUNNER_TEMP/linux-release-restore.json" "$haul" "$RUNNER_TEMP/linux-release-restored" <<'PY'
-          import json, sys
-          json.dump({"haul":sys.argv[2],"destination":sys.argv[3]},open(sys.argv[1],"w"))
-          PY
-          "$rcc" --no-build task run --robot "$PWD/robot.yaml" --task Restore -- --json-input "$RUNNER_TEMP/linux-release-restore.json"
-          python3 - "$RUNNER_TEMP/linux-release-serve.json" "$haul" <<'PY'
-          import json, sys
-          json.dump({"haul":sys.argv[2]},open(sys.argv[1],"w"))
-          PY
+          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$RUNNER_TEMP/linux-release-build.json" -- env PYTHONPATH="$PWD/src:$PWD" python -m jat.cli build --folder "$source" --output "$haul" --rcc-environment off --json
+          verify_execution "$RUNNER_TEMP/linux-release-build.json"
+          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$RUNNER_TEMP/linux-release-restore.json" -- env PYTHONPATH="$PWD/src:$PWD" python -m jat.cli restore --haul "$haul" --destination "$RUNNER_TEMP/linux-release-restored" --json
+          verify_execution "$RUNNER_TEMP/linux-release-restore.json"
           export JAT_RUN_DIR="$RUNNER_TEMP/linux-release-serve-runtime"
           mkdir -p "$JAT_RUN_DIR"
-          "$rcc" --no-build task run --robot "$PWD/robot.yaml" --task Serve -- --json-input "$RUNNER_TEMP/linux-release-serve.json" > "$RUNNER_TEMP/linux-release-serve.log" 2>&1 &
-          serve_pid=$!
-          cleanup() { kill "$serve_pid" 2>/dev/null || true; wait "$serve_pid" 2>/dev/null || true; }
-          trap cleanup EXIT
-          served="$RUNNER_TEMP/linux-release-served.tar.zst"
-          ready=false
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error --output "$served" --max-time 2 http://127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst && [[ -s "$served" ]]; then ready=true; break; fi
-            sleep 1
-          done
-          [[ "$ready" == true ]] || { cat "$RUNNER_TEMP/linux-release-serve.log"; exit 1; }
+          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$RUNNER_TEMP/linux-release-serve.json" -- env PYTHONPATH="$PWD/src:$PWD" python "$RUNNER_TEMP/verify_jat_serve.py" --haul "$haul" --output "$RUNNER_TEMP/linux-release-serve-proof"
+          verify_execution "$RUNNER_TEMP/linux-release-serve.json"
 
 
       - name: Record Linux verification identity
@@ -184,6 +166,7 @@ jobs:
             ${{ runner.temp }}/linux-release-*.json
             ${{ runner.temp }}/linux-release-*.log
             ${{ runner.temp }}/linux-release-identity.txt
+            ${{ runner.temp }}/linux-release-serve-proof/
             ${{ runner.temp }}/jat-runtime-linux/*.json
 
   verify-published-windows:
@@ -204,7 +187,7 @@ jobs:
         run: |
           import os, pathlib, shutil, subprocess, sys
           root = pathlib.Path(os.environ["RUNNER_TEMP"])
-          for name in ("validate_runtime_receipt.py", "verify_hauler_runtime.py", "runtime-verifier-requirements.txt"):
+          for name in ("validate_runtime_receipt.py", "verify_hauler_runtime.py", "verify_jat_serve.py", "runtime-verifier-requirements.txt"):
               shutil.copyfile(pathlib.Path("scripts") / name, root / name)
           subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--target", str(root / "jat-receipt-tools"), "--requirement", str(root / "runtime-verifier-requirements.txt")], check=True)
 
@@ -294,35 +277,7 @@ jobs:
           # Let the supervised probe exit normally so RCC can persist its receipt.
           # Killing RCC itself would lose the receipt and bypass that final check.
           $serveReceipt = Join-Path $env:RUNNER_TEMP "release-windows-serve-receipt.json"
-          $env:JAT_VERIFY_HAUL = $haul
-          $serveCode = @'
-          import os, pathlib, subprocess, sys, time, urllib.error, urllib.request
-          root = pathlib.Path(os.environ["RUNNER_TEMP"])
-          output = root / "release-windows-serve.log"
-          downloaded = root / "release-windows-served.tar.zst"
-          with output.open("wb") as log:
-              process = subprocess.Popen([sys.executable, "-m", "jat.cli", "serve", "--haul", os.environ["JAT_VERIFY_HAUL"], "--mode", "files", "--fileserver-port", "8080", "--json"], stdout=log, stderr=log)
-              try:
-                  for attempt in range(30):
-                      if process.poll() is not None:
-                          raise RuntimeError("JAT Serve exited before readiness")
-                      try:
-                          with urllib.request.urlopen("http://127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst", timeout=2) as response:
-                              downloaded.write_bytes(response.read())
-                          if downloaded.stat().st_size > 0:
-                              break
-                      except (urllib.error.URLError, TimeoutError):
-                          pass
-                      time.sleep(1)
-                  else:
-                      raise RuntimeError("JAT Serve did not serve the published artifact workspace")
-              finally:
-                  if process.poll() is None:
-                      subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"], check=True)
-                  process.wait(timeout=10)
-                  print(output.read_text(errors="replace"))
-          '@
-          & $rcc --no-build env exec --artifact $artifact --permissive-local --inherit-streams --receipt-file $serveReceipt -- python -c $serveCode
+          & $rcc --no-build env exec --artifact $artifact --permissive-local --inherit-streams --receipt-file $serveReceipt -- python "$env:RUNNER_TEMP/verify_jat_serve.py" --haul $haul --output "$env:RUNNER_TEMP/release-windows-serve-proof"
           if ($LASTEXITCODE -ne 0) { throw "JAT Serve probe failed from the published Windows artifact" }
           Assert-ExecutionReceipt $serveReceipt
 
@@ -343,4 +298,5 @@ jobs:
           path: |
             ${{ runner.temp }}/release-windows-*.json
             ${{ runner.temp }}/release-windows-*.log
+            ${{ runner.temp }}/release-windows-serve-proof/
             ${{ runner.temp }}/jat-runtime-windows/*.json

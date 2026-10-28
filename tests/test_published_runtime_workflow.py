@@ -55,7 +55,7 @@ def test_windows_exec_keeps_raw_child_stdout_separate_from_validated_receipts():
     assert '$execution.verification.valid -ne $true' in workflow
     assert '$runtimeVariables = Get-Content -Raw $variablesPath | ConvertFrom-Json' in workflow
     assert 'taskkill.exe /PID $serve.Id' not in workflow
-    assert 'process.wait(timeout=10)' in workflow
+    assert 'process.wait(timeout=10)' in Path('scripts/verify_jat_serve.py').read_text()
 
 
 def test_verifier_retains_runtime_integrity_and_real_operation_gates():
@@ -66,8 +66,7 @@ def test_verifier_retains_runtime_integrity_and_real_operation_gates():
         '$acquired.verification.valid -ne $true',
         '$runtimeVariables.conda_prefix', 'hauler.exe version',
         'verify_hauler_runtime.py', 'doctor --json', 'build --folder',
-        'restore --haul', '"jat.cli", "serve"',
-        'joshs-all-the-things-workspace.tar.zst',
+        'restore --haul', 'verify_jat_serve.py',
     ):
         assert required in workflow
 
@@ -90,3 +89,18 @@ def test_linux_no_build_probe_uses_the_acquired_artifact_identity():
     assert '--no-build ht vars --robot "$PWD/robot.yaml"' not in workflow
     assert '--receipt-file "$RUNNER_TEMP/linux-release-no-build.json"' in workflow
     assert 'execution["verification"]["valid"] is not True' in workflow
+
+
+def test_linux_operations_execute_inside_the_acquired_artifact_without_robot_resolution():
+    workflow = verifier().split('  verify-published-linux:', 1)[1].split('  verify-published-windows:', 1)[0]
+    assert 'task run --robot' not in workflow
+    for operation in ('doctor', 'build', 'restore'):
+        assert 'python -m jat.cli '+operation in workflow
+    assert 'verify_jat_serve.py' in workflow
+    assert 'verify_execution "$RUNNER_TEMP/linux-release-serve.json"' in workflow
+
+
+def test_serving_probe_retains_the_canonical_workspace_route():
+    probe = Path('scripts/verify_jat_serve.py').read_text()
+    assert 'joshs-all-the-things-workspace.tar.zst' in probe
+    assert 'start_new_session=os.name !=' in probe
