@@ -1,4 +1,5 @@
 import io
+import os
 import sys
 import tarfile
 from pathlib import Path
@@ -335,6 +336,63 @@ def test_windows_archive_backend_rejects_traversal_before_extraction(tmp_path):
     with pytest.raises(ValueError, match="unsafe path"):
         adapter.extract(archive, destination)
     assert not (tmp_path / "outside.txt").exists()
+
+
+@pytest.mark.parametrize("selected_paths", [None, [".", "first.txt", "second.txt"]])
+def test_windows_archive_creation_preserves_each_hardlinked_path(tmp_path, selected_paths):
+    pytest.importorskip("zstandard")
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "first.txt").write_bytes(b"shared file contents")
+    os.link(source / "first.txt", source / "second.txt")
+    archive = tmp_path / "hardlinks.tar.zst"
+    adapter = ArchiveAdapter(RecordingRunner(), platform_name="windows")
+
+    adapter.create(source, archive, selected_paths=selected_paths)
+
+    members = adapter.members(archive)
+    validate_archive_members(members)
+    assert {(member.name, member.kind) for member in members} == {
+        ("project", "directory"), ("project/first.txt", "file"), ("project/second.txt", "file"),
+    }
+    destination = tmp_path / "restored"
+    adapter.extract(archive, destination)
+    assert (destination / "project/first.txt").read_bytes() == b"shared file contents"
+    assert (destination / "project/second.txt").read_bytes() == b"shared file contents"
+
+
+@pytest.mark.parametrize("names,strip_components", [
+    (("project/A.txt", "project/a.txt"), 0),
+    (("project/Dir/first.txt", "project/dir/second.txt"), 1),
+    (("project/one/A.txt", "project/two/a.txt"), 2),
+    (("project/file.txt", "project/file.txt."), 0),
+    (("project/file.txt", "project/file.txt "), 0),
+    (("project/file.txt:stream",), 0),
+    (("project/NUL.txt",), 0),
+])
+def test_windows_archive_rejects_aliased_output_names_before_writing(tmp_path, names, strip_components):
+    zstandard = pytest.importorskip("zstandard")
+    archive = tmp_path / "aliases.tar.zst"
+    with (
+        archive.open("wb") as raw,
+        zstandard.ZstdCompressor().stream_writer(raw, closefd=False) as compressed,
+        tarfile.open(fileobj=compressed, mode="w|") as tar,
+    ):
+        root = tarfile.TarInfo("project")
+        root.type = tarfile.DIRTYPE
+        tar.addfile(root)
+        for index, name in enumerate(names):
+            content = f"payload {index}".encode()
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            tar.addfile(member, io.BytesIO(content))
+    adapter = ArchiveAdapter(RecordingRunner(), platform_name="windows")
+    destination = tmp_path / "restored"
+
+    with pytest.raises(ValueError, match="Windows"):
+        adapter.extract(archive, destination, strip_components=strip_components)
+
+    assert not destination.exists()
 
 
 def test_hauler_adapter_owns_exact_argv(tmp_path):

@@ -366,6 +366,59 @@ def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):
     assert result.environment_artifact.artifact == "sha256:" + "b" * 64
 
 
+@pytest.mark.parametrize("saved", [False, True])
+@pytest.mark.parametrize("exclusion", ["[runtime]/robot.yaml", "[runtime]", "runtime"])
+def test_filtered_capture_requires_included_rcc_robot(tmp_path, saved, exclusion):
+    source = tmp_path / "source"
+    robot = source / "[runtime]/robot.yaml"
+    robot.parent.mkdir(parents=True)
+    robot.write_text("tasks: {}\n")
+    (source / "keep.txt").write_text("included")
+    options = {}
+    if saved:
+        archive_input = tmp_path / "saved.rcca"
+        archive_input.write_bytes(b"rcca")
+        metadata = tmp_path / "saved-rcc.json"
+        metadata.write_text(EnvironmentArtifactMetadata(
+            artifact="sha256:" + "b" * 64,
+            specification_digest="sha256:" + "c" * 64,
+            legacy_blueprint_key="d" * 16,
+            archive=archive_input,
+            archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
+            archive_size=4,
+            rcc_version="v18.19.7",
+            platform="linux_amd64",
+            robot=Path("[runtime]/robot.yaml"),
+        ).model_dump_json())
+        options.update(rcc_archive=archive_input, rcc_metadata=metadata)
+    else:
+        options.update(rcc_environment="required", rcc_robot=robot)
+
+    class SelectionArchive(FakeArchive):
+        def create(self, source, archive, selected_paths=None):
+            super().create(source, archive)
+
+    archive = SelectionArchive()
+    hauler = RccHauler()
+    rcc = FakeRcc()
+    output = tmp_path / "filtered.haul"
+    result = service(tmp_path, archive=archive, hauler=hauler, rcc=rcc).build(BuildRequest(
+        folder=source, output=output, workspace_exclusions=[exclusion], **options,
+    ))
+
+    if exclusion == "runtime":
+        assert result.success, result.diagnostics
+        assert result.capture_policy["workspace_exclusions"] == ["runtime"]
+        assert output.exists()
+        return
+
+    assert not result.success
+    assert "RCC robot descriptor is excluded from workspace capture" in result.diagnostics
+    assert not output.exists()
+    assert rcc.calls == []
+    assert hauler.calls == []
+
+
 def test_build_rejects_resolved_robocorp_home_beneath_source_before_archive_creation(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()

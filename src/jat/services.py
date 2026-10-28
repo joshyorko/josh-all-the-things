@@ -269,6 +269,8 @@ class JATService:
                     ):
                         raise ValueError("RCC environment metadata does not match the embedded archive")
                     saved_robot = _source_robot_path(folder, saved_rcc_metadata.robot)
+                    if filtered and saved_robot.relative_to(folder).as_posix() not in selection.paths:
+                        raise ValueError("RCC robot descriptor is excluded from workspace capture")
                 workspace_archive = stage.path / WORKSPACE_ARTIFACT
                 if filtered:
                     self.archive.create(folder, workspace_archive, selected_paths=selection.paths)
@@ -336,6 +338,8 @@ class JATService:
                         raise ValueError("RCC environment is required but no regular robot.yaml was found")
                     if rcc_robot is not None and request.rcc_environment != "off":
                         if self.rcc is not None or self.which("rcc"):
+                            if filtered and rcc_robot.relative_to(folder).as_posix() not in selection.paths:
+                                raise ValueError("RCC robot descriptor is excluded from workspace capture")
                             rcc_archive = stage.path / RCC_ARTIFACT
                             rcc_metadata = self._rcc_adapter().publish_and_export(folder, rcc_archive, rcc_robot)
                             rcc_metadata = rcc_metadata.model_copy(
