@@ -43,6 +43,8 @@ Do not infer authorization for one write from authorization for another. Do not 
 
 If a report is warranted and the assignment explicitly authorizes the specific external issue write, file in the confirmed owner repository using its current template. If a tool requests approval, seek that approval; do not rerun or circumvent a denied/pending action. Otherwise prepare a complete draft for an authorized maintainer.
 
+Keep upstream reports focused on the upstream defect. Mention JAT or another downstream consumer only when it adds concrete reproduction evidence or impact context. When it does, give a brief explanation and link to the exact relevant test or implementation using a commit-SHA permalink, rather than describing or promoting the project. A downstream link does not replace an independent upstream reproduction.
+
 Use these sections, adapting to upstream's issue template:
 
 ```markdown
@@ -59,7 +61,7 @@ Use these sections, adapting to upstream's issue template:
 - Dependency version, commit and executable digest:
 - Platform/architecture:
 - UTC reproduction time:
-- Downstream consumer: joshyorko/josh-all-the-things @ <SHA>
+- Downstream impact (optional, only when useful): <Brief impact and commit-SHA permalink to the relevant test or implementation>
 
 ## Evidence
 <Sanitized stdout/stderr, exit status, measurements,
@@ -73,7 +75,7 @@ Use these sections, adapting to upstream's issue template:
 <Options/tradeoffs, not an imposed design>
 ```
 
-Leave upstream labels, assignments, milestones, and prioritization to upstream maintainers. State any JAT dependency clearly but don't require their roadmap or workaround choice. Never impersonate a maintainer, claim a probe ran when it did not, or fabricate timestamps, versions, permissions, or links.
+Leave upstream labels, assignments, milestones, and prioritization to upstream maintainers. Do not require a change to their roadmap or workaround choice. Never impersonate a maintainer, claim a probe ran when it did not, or fabricate timestamps, versions, permissions, or links.
 
 ## When to contribute a PR upstream
 
