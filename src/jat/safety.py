@@ -103,8 +103,10 @@ def _resolve_symlink(
 
     directory_intent = bool(member.target and (member.target.endswith("/") or member.target.endswith("/.")))
     resolved: list[str] = []
+    remaining_expansions = 256
 
     def resolve_components(components: tuple[str, ...], active: list[tuple[str, ...]]) -> None:
+        nonlocal remaining_expansions
         for index, part in enumerate(components):
             if part in {"", "."}:
                 continue
@@ -116,11 +118,14 @@ def _resolve_symlink(
                 resolved.pop()
                 continue
 
-            candidate = tuple([*resolved, part])
+            candidate = (*resolved, part)
             candidate_member = member_map.get(candidate)
             if candidate_member is not None and candidate_member.kind == "symlink":
                 if candidate in active:
                     raise ValueError(f"archive member {member.name} has a symlink cycle")
+                remaining_expansions -= 1
+                if remaining_expansions < 0:
+                    raise ValueError(f"archive member {member.name} exceeds the symlink resolution limit")
                 active.append(candidate)
                 resolve_components(target_parts(candidate_member), active)
                 active.pop()

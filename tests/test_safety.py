@@ -142,6 +142,20 @@ def test_archive_members_allow_a_path_scoped_symlink_revisit():
     )
 
 
+def test_archive_members_bound_repeated_acyclic_symlink_expansion():
+    members = [ArchiveMember("root", "directory"), ArchiveMember("root/a0", "symlink", ".")]
+    members.extend(ArchiveMember(f"root/a{i}", "symlink", f"a{i - 1}/a{i - 1}") for i in range(1, 17))
+    with pytest.raises(ValueError, match="symlink resolution limit"):
+        validate_archive_members(members)
+
+
+def test_archive_members_bound_deep_acyclic_symlink_chain():
+    members = [ArchiveMember("root", "directory"), ArchiveMember("root/a0", "symlink", ".")]
+    members.extend(ArchiveMember(f"root/a{i}", "symlink", f"a{i - 1}") for i in range(1, 300))
+    with pytest.raises(ValueError, match="symlink resolution limit"):
+        validate_archive_members(members)
+
+
 def test_archive_members_allow_directory_intent_for_a_trailing_target_separator():
     validate_archive_members(
         [
