@@ -17,12 +17,14 @@ class RecordingRunner:
         self.calls = []
         self.cwds = []
         self.environments = []
+        self.line_sinks = []
         self.responses = list(responses or [])
 
     def run(self, argv, timeout=None, foreground=False, secrets=(), cwd=None, on_line=None, env=None):
         self.calls.append((argv, timeout, foreground, secrets))
         self.cwds.append(cwd)
         self.environments.append(env)
+        self.line_sinks.append(on_line)
         if self.responses:
             return self.responses.pop(0)
         return ProcessResult(argv=argv, exit_status=0)
@@ -703,7 +705,7 @@ def test_hauler_long_operations_stream_progress_when_a_sink_is_attached(tmp_path
 
     quiet = HaulerAdapter(RecordingRunner(), executable="/tools/hauler")
     quiet.sync(tmp_path / "store", tmp_path / "temp", "manifest.yaml")
-    assert all("on_line" not in str(call) for call in quiet.runner.calls)
+    assert all(sink is None for sink in quiet.runner.line_sinks)
 
 def test_hauler_v21_inventory_manifest_policy_and_hostile_environment(tmp_path, monkeypatch):
     digest = "sha256:" + "a" * 64
