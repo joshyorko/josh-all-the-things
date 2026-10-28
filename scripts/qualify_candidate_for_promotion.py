@@ -136,7 +136,9 @@ def qualify(root, archive, candidate_path, rcc, output, timeout=1800):
             "for name,digest in expected['files'].items()):\n"
             "    raise ValueError('embedded candidate source bytes do not match checkout')\n"), str(expected)])
         execute('embedded', ['python', str(root / 'scripts/qualify_filtered_candidate.py'), str(work / 'proof'), source_sha])
-        execute('hauler', list(HAULER_VERSION_COMMAND))
+        hauler_version = _hauler_version(root)
+        hauler_launcher = [*HAULER_VERSION_COMMAND, hauler_version]
+        execute('hauler', hauler_launcher)
         execute('warm', ['python', '-c', "print('jat-warm-reuse-proof')"], [
             '--provider', 'http://127.0.0.1:1', '--trust-carrier',
             str(Path(environment['ROBOCORP_HOME']) / 'artifacts/v1/content/trust'),
@@ -146,7 +148,7 @@ def qualify(root, archive, candidate_path, rcc, output, timeout=1800):
         receipt = {
             'format_version': 3, 'operation': 'build', 'success': True,
             'jat_git_sha': source_sha, 'rcc_executable': Path(rcc).name,
-            'rcc_version': version, 'hauler_version': _hauler_version(root),
+            'rcc_version': version, 'hauler_version': hauler_version,
             'rcc_source': candidate['rcc_source'], 'platform': candidate['platform'],
             'artifact_digest': artifact, 'specification_digest': candidate['specification_digest'],
             'legacy_blueprint_key': candidate['legacy_blueprint_key'], 'archive': candidate['archive'],
@@ -155,7 +157,7 @@ def qualify(root, archive, candidate_path, rcc, output, timeout=1800):
             'verified_exec': {'fresh_home': True},
             'verified_warm_reuse': {'fresh_home': True, 'no_build': True, 'provider_unavailable': True},
             'verified_hauler': {'fresh_home': True, 'command': ['hauler', 'version'],
-                                'launcher': list(HAULER_VERSION_COMMAND),
+                                'launcher': hauler_launcher,
                                 'resolved_under_conda_prefix': True, 'exit_code': 0},
         }
         if _sha256(archive) != candidate['archive']['sha256']:
