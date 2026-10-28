@@ -267,3 +267,35 @@ def test_scan_does_not_require_read_permission_on_ancestors(tmp_path):
         assert "keep.txt" in selected.paths
     finally:
         parent.chmod(0o700)
+
+
+def test_fallback_scan_accepts_windows_direntry_identity(tmp_path, monkeypatch):
+    import os
+    from contextlib import contextmanager
+
+    source = tmp_path / "source"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    (nested / "keep.txt").write_text("synthetic data")
+    original_scandir = os.scandir
+
+    class WindowsEntry:
+        def __init__(self, entry):
+            self.entry = entry
+            self.name = entry.name
+
+        def stat(self, *, follow_symlinks):
+            info = self.entry.stat(follow_symlinks=follow_symlinks)
+            # Windows DirEntry.stat omits inode, device and link count.
+            return os.stat_result((info.st_mode, 0, 0, 0, *info[4:]))
+
+    @contextmanager
+    def windows_scandir(directory):
+        with original_scandir(directory) as entries:
+            yield (WindowsEntry(entry) for entry in entries)
+
+    monkeypatch.setattr("jat.capture._FD_SCANDIR", False)
+    monkeypatch.setattr("jat.capture.os.scandir", windows_scandir)
+    selection = select_workspace(source, [], "source-only")
+    assert selection.complete and not selection.findings
+    assert selection.paths == [".", "nested", "nested/keep.txt"]
