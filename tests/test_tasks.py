@@ -29,6 +29,31 @@ def test_write_result_uses_output_result_json(tmp_path, monkeypatch):
     assert json.loads(destination.read_text())["operation"] == "doctor"
 
 
+@pytest.mark.parametrize("field", ["images_files", "hauler_manifests"])
+def test_load_request_never_retains_rejected_credentials(tmp_path, field):
+    import traceback
+
+    secret_url = "https://u:XY5@e.test/a"
+    request_path = tmp_path / "rejected.json"
+    request_path.write_text(json.dumps({"folder": "source", "output": "out", field: [secret_url]}))
+    with pytest.raises(ValueError) as raised:
+        load_request(BuildRequest, ["--json-input", str(request_path)])
+    assert "credentials" in str(raised.value)
+    assert secret_url not in "".join(traceback.format_exception(raised.value))
+    assert "XY5" not in str(raised.value)
+    assert raised.value.__context__ is None
+
+
+def test_load_request_does_not_log_unknown_input_keys(tmp_path):
+    secret_url = "https://u:XY5@e.test/a"
+    request_path = tmp_path / "unknown.json"
+    request_path.write_text(json.dumps({"folder": "source", "output": "out", secret_url: "synthetic"}))
+    with pytest.raises(ValueError) as raised:
+        load_request(BuildRequest, ["--json-input", str(request_path)])
+    assert "Extra inputs are not permitted" in str(raised.value)
+    assert "XY5" not in str(raised.value)
+
+
 def test_build_task_fails_when_required_rcc_is_unavailable(tmp_path, monkeypatch):
     from test_services import FakeArchive, FakeHauler
 
