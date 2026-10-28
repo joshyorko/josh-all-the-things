@@ -13,6 +13,16 @@ standalone Python `jat` command. Hauler (pinned: v2.1.1) owns the OCI content,
 store, transfer, and serving mechanics; JAT gives the capsule a small, safe,
 human-friendly contract.
 
+## Upstream bug reports and fixes
+
+JAT's agents use [the upstream-contribution skill](.agents/skills/upstream-contribution/SKILL.md)
+when a reproducible defect belongs to Hauler, Josh's RCC fork, or another
+dependency. The workflow routes evidence to the real upstream maintainer,
+deduplicates issues, proposes a focused upstream fix when permitted, and tracks
+the fix until JAT consumes and verifies it. JAT integration bugs stay in this
+repository. This is an agent contribution workflow, **not** a background service
+or new `jat` CLI command.
+
 ## What It Does
 
 ```text
