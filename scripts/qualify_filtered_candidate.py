@@ -15,17 +15,23 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
 def main():
     output = Path(sys.argv[1]).resolve()
     output.mkdir(parents=True, exist_ok=True)
     package = Path(jat.__file__).resolve().parent
     prefix = Path(sys.prefix).resolve()
-    assert prefix in package.parents, 'JAT did not load from acquired environment'
+    require(prefix in package.parents, 'JAT did not load from acquired environment')
     identity = json.loads((package / '_candidate.json').read_text())
-    assert identity['jat_git_sha'] == sys.argv[2]
-    assert all(digest(package / name) == expected for name, expected in identity['files'].items())
-    assert WORKSPACE_CAPTURE_POLICY_VERSION == 1
-    assert not os.environ.get('PYTHONPATH'), 'external source overlay is forbidden'
+    require(identity['jat_git_sha'] == sys.argv[2], 'candidate source SHA does not match')
+    require(all(digest(package / name) == expected for name, expected in identity['files'].items()),
+            'embedded candidate source bytes do not match')
+    require(WORKSPACE_CAPTURE_POLICY_VERSION == 1, 'unsupported workspace capture policy')
+    require(not os.environ.get('PYTHONPATH'), 'external source overlay is forbidden')
     source = output / 'project'
     source.mkdir()
     selected = {'main.py': b'print("preserved")\n', 'package-lock.json': b'lock\n',
@@ -41,18 +47,18 @@ def main():
     request = BuildRequest(folder=source, output=output / 'filtered.haul', capture_mode='source-only',
                            workspace_exclusions=['generated', 'build [literal]', 'worktree'])
     preview = service.build(request.model_copy(update={'dry_run': True}))
-    assert preview.success and preview.complete, preview.diagnostics
+    require(preview.success and preview.complete, preview.diagnostics)
     built = service.build(request)
-    assert built.success, built.diagnostics
-    assert before == {name: digest(source / name) for name in before}
+    require(built.success, built.diagnostics)
+    require(before == {name: digest(source / name) for name in before}, 'candidate capture changed its source')
     source.rename(output / 'original-unavailable')
     destination = output / 'restored'
     restored = service.restore(RestoreRequest(haul=request.output, destination=destination))
-    assert restored.success, restored.diagnostics
+    require(restored.success, restored.diagnostics)
     actual_root = destination / 'workspace' / 'project'
     actual = {path.relative_to(actual_root).as_posix(): path.read_bytes()
               for path in actual_root.rglob('*') if path.is_file()}
-    assert actual == selected
+    require(actual == selected, 'filtered restore did not preserve exactly the selected files')
     unsafe = output / 'unsafe-source'
     unsafe.mkdir()
     unsafe_verification = 'passed'
@@ -65,8 +71,8 @@ def main():
     else:
         rejected = service.build(BuildRequest(folder=unsafe, output=output / 'unsafe.haul',
                                                capture_mode='source-only'))
-        assert not rejected.success, 'retained unsafe link was accepted'
-        assert not (output / 'unsafe.haul').exists()
+        require(not rejected.success, 'retained unsafe link was accepted')
+        require(not (output / 'unsafe.haul').exists(), 'unsafe capture left an output capsule')
     receipt = {
         'format_version': 1, 'success': True, 'jat_git_sha': identity['jat_git_sha'],
         'capture_policy_version': WORKSPACE_CAPTURE_POLICY_VERSION,

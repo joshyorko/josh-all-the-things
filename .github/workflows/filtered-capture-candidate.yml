@@ -6,6 +6,7 @@ on:
     paths:
       - 'src/**'
       - 'scripts/**'
+      - 'runtime/**'
       - 'tests/**'
       - 'tasks.py'
       - 'robot.yaml'
