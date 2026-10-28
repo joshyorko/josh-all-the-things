@@ -332,6 +332,25 @@ def test_registry_config_uses_loopback_and_quotes_windows_root_path():
     assert 'addr: "127.0.0.1:5000"' in config
 
 
+@pytest.mark.parametrize("mode,success", [("required", False), ("auto", True)])
+def test_build_with_robot_and_unavailable_rcc_obeys_capture_requirement(tmp_path, mode, success):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "robot.yaml").write_text("tasks: {}\n")
+    output = tmp_path / "haul.tar.zst"
+    result = JATService(
+        archive=FakeArchive(),
+        hauler=FakeHauler(),
+        producer_version="synthetic-version",
+        which=lambda command: None if command == "rcc" else f"/tools/{command}",
+    ).build(BuildRequest(folder=source, output=output, rcc_environment=mode))
+
+    assert result.success is success
+    assert output.exists() is success
+    if not success:
+        assert "rcc is unavailable" in result.diagnostics
+
+
 def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
