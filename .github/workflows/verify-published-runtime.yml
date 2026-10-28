@@ -99,7 +99,7 @@ jobs:
           PYTHONPATH: ${{ runner.temp }}/jat-receipt-tools
         run: |
           set -euo pipefail
-          python3 "$RUNNER_TEMP/validate_runtime_receipt.py" \
+          python "$RUNNER_TEMP/validate_runtime_receipt.py" \
             --source-root "$GITHUB_WORKSPACE" --source-sha "$JAT_RELEASE_SOURCE_SHA" --platform linux_amd64 \
             --archive "$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.rcca" \
             --receipt "$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.json"
