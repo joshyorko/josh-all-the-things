@@ -79,12 +79,15 @@ class ProcessRunner:
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             self._stop(process)
-            stdout, stderr = process.communicate()
+            stdout, stderr = self._drain(process)
             log.warn(f"Process timed out: {Path(argv[0]).name}")
             return self._result(argv, 124, stdout, stderr or "operation timed out", secret_values, timed_out=True)
-        except KeyboardInterrupt:
-            self._stop(process)
-            process.communicate()
+        except BaseException as error:
+            try:
+                self._stop(process)
+                self._drain(process)
+            except BaseException as cleanup_error:  # noqa: BLE001 - preserve the original cancellation.
+                error.add_note(f"Process cleanup failed: {cleanup_error}")
             log.warn(f"Process cancelled: {Path(argv[0]).name}")
             raise
         log.info(f"Process finished with exit status {process.returncode}: {Path(argv[0]).name}")
@@ -106,10 +109,6 @@ class ProcessRunner:
             stdin=None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
             start_new_session=os.name != "nt",
             cwd=cwd,
             env=env,
@@ -117,13 +116,19 @@ class ProcessRunner:
         state = {"forwarded": 0}
         tails: dict[str, list[str]] = {"stdout": [], "stderr": []}
         counts: dict[str, int] = {"stdout": 0, "stderr": 0}
+        record_limit = max(1, self.diagnostics_limit)
+        # Keep enough lookahead to redact a secret crossing the retained prefix.
+        prefix_limit = record_limit + max((len(secret.encode()) for secret in secret_values), default=0)
 
         def sink(stream: str, line: str) -> None:
             redacted = self._redact(line.rstrip("\n"), secret_values)
+            redacted = redacted.encode()[:record_limit].decode("utf-8", errors="ignore")
             counts[stream] += 1
             tail = tails[stream]
             tail.append(redacted)
             del tail[:-50]
+            while len(tail) > 1 and sum(len(part.encode()) + 1 for part in tail) > record_limit:
+                del tail[0]
             if state["forwarded"] < line_limit:
                 state["forwarded"] += 1
                 try:
@@ -132,9 +137,15 @@ class ProcessRunner:
                     pass
 
         def pump(stream: str, pipe) -> None:
+            prefix = bytearray()
             try:
-                for line in iter(pipe.readline, ""):
-                    sink(stream, line)
+                for chunk in iter(lambda: pipe.readline(8192), b""):
+                    prefix.extend(chunk[: max(0, prefix_limit - len(prefix))])
+                    if chunk.endswith(b"\n"):
+                        sink(stream, prefix.decode("utf-8", errors="replace"))
+                        prefix.clear()
+                if prefix:
+                    sink(stream, prefix.decode("utf-8", errors="replace"))
             finally:
                 pipe.close()
 
@@ -142,9 +153,9 @@ class ProcessRunner:
             threading.Thread(target=pump, args=(stream, pipe), daemon=True)
             for stream, pipe in (("stdout", process.stdout), ("stderr", process.stderr))
         ]
-        for reader in readers:
-            reader.start()
         try:
+            for reader in readers:
+                reader.start()
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             self._stop(process)
@@ -158,9 +169,12 @@ class ProcessRunner:
                 secret_values,
                 timed_out=True,
             )
-        except KeyboardInterrupt:
-            self._stop(process)
-            self._join(readers)
+        except BaseException as error:
+            try:
+                self._stop(process)
+                self._join(readers)
+            except BaseException as cleanup_error:  # noqa: BLE001 - preserve the original cancellation.
+                error.add_note(f"Process cleanup failed: {cleanup_error}")
             log.warn(f"Process cancelled: {Path(argv[0]).name}")
             raise
         self._join(readers)
@@ -176,7 +190,22 @@ class ProcessRunner:
     @staticmethod
     def _join(readers: list[threading.Thread]) -> None:
         for reader in readers:
-            reader.join(timeout=10)
+            if reader.ident is not None:
+                reader.join(timeout=5)
+
+    @staticmethod
+    def _drain(process: subprocess.Popen) -> tuple[str, str]:
+        try:
+            return process.communicate(timeout=5)
+        except subprocess.TimeoutExpired as error:
+            # An escaped descendant may still hold a pipe after group shutdown.
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+            return tuple(
+                value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+                for value in (error.output, error.stderr)
+            )
 
     def _streamed_tail(self, tails, counts, stream: str, timed_out: bool) -> str:
         lines = list(tails[stream])
@@ -260,7 +289,7 @@ class ProcessRunner:
 
     def _stop_all(self, processes: list[subprocess.Popen]) -> None:
         for process in processes:
-            if process.poll() is None:
+            if os.name != "nt" or process.poll() is None:
                 self._stop(process)
 
     def _result(self, argv, status, stdout, stderr, secrets, timed_out=False) -> ProcessResult:
@@ -293,9 +322,11 @@ class ProcessRunner:
         except subprocess.TimeoutExpired:
             if os.name == "nt":
                 process.kill()
-            else:
+        finally:
+            # A reaped leader does not imply that its process group is gone.
+            if os.name != "nt":
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            process.wait()
+        process.wait(timeout=5)

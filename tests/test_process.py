@@ -1,3 +1,6 @@
+import os
+import signal
+import subprocess
 import sys
 import time
 
@@ -93,6 +96,7 @@ def test_supervise_stops_the_sibling_when_one_child_fails(tmp_path):
     assert elapsed < 20, "the failing child must stop the operation promptly"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group signal test")
 def test_supervise_stops_all_children_on_cancellation(monkeypatch):
     signals = []
     monkeypatch.setattr("jat.process.os.killpg", lambda pid, signum: signals.append((pid, signum)))
@@ -113,7 +117,11 @@ def test_supervise_stops_all_children_on_cancellation(monkeypatch):
     monkeypatch.setattr("jat.process.time.sleep", lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
     with pytest.raises(KeyboardInterrupt):
         ProcessRunner().supervise([["hauler", "one"], ["hauler", "two"]])
-    assert sorted(signals) == [(4242 + len(argv), __import__("signal").SIGTERM) for argv in (["hauler", "one"], ["hauler", "two"])]
+    assert sorted(signals) == sorted(
+        (4242 + len(argv), signum)
+        for argv in (["hauler", "one"], ["hauler", "two"])
+        for signum in (signal.SIGTERM, signal.SIGKILL)
+    )
 
 
 def test_supervise_rejects_an_empty_command_list():
@@ -138,3 +146,143 @@ def test_supervise_passes_explicit_environment_to_children(tmp_path):
 
     assert completed.success
     assert destination.read_text() == "scoped"
+
+
+def wait_for_file(path, timeout=5):
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        if time.monotonic() >= deadline:
+            pytest.fail(f"child did not become ready: {path}")
+        time.sleep(0.01)
+
+
+@pytest.fixture
+def child_groups(monkeypatch):
+    """Own and reap every subprocess created by these POSIX regressions."""
+    processes = []
+    original = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = original(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr("jat.process.subprocess.Popen", spawn)
+    yield processes
+    for process in processes:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+        for pipe in (process.stdout, process.stderr):
+            if pipe is not None:
+                pipe.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signal cancellation")
+@pytest.mark.parametrize("streaming", [False, True])
+def test_run_reaps_child_before_propagating_system_exit(tmp_path, child_groups, streaming):
+    ready = tmp_path / "ready"
+    script = streaming_script(tmp_path, f"from pathlib import Path\nimport time\nPath({str(ready)!r}).touch()\ntime.sleep(60)\n")
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def cancel(signum, frame):
+        wait_for_file(ready)
+        raise SystemExit(143)
+
+    signal.signal(signal.SIGALRM, cancel)
+    signal.setitimer(signal.ITIMER_REAL, 0.2)
+    try:
+        with pytest.raises(SystemExit) as raised:
+            ProcessRunner().run([sys.executable, str(script)], on_line=(lambda line: None) if streaming else None)
+        assert raised.value.code == 143
+        assert child_groups[0].poll() is not None, "cancellation left the child running"
+        assert all(pipe is None or pipe.closed for pipe in (child_groups[0].stdout, child_groups[0].stderr))
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper and POSIX groups")
+@pytest.mark.parametrize("streaming", [False, True])
+def test_timeout_kills_descendant_even_when_leader_exits(tmp_path, child_groups, streaming):
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    previous_subreaper = ctypes.c_int()
+    assert libc.prctl(37, ctypes.byref(previous_subreaper), 0, 0, 0) == 0
+    assert libc.prctl(36, 1, 0, 0, 0) == 0
+    descendant = tmp_path / "descendant"
+    child = (
+        "import os, signal, time\nfrom pathlib import Path\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"Path({str(descendant)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    script = streaming_script(
+        tmp_path,
+        f"import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', {child!r}])\ntime.sleep(60)\n",
+    )
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def deadline(signum, frame):
+        pytest.fail("timeout cleanup exceeded eight seconds")
+
+    signal.signal(signal.SIGALRM, deadline)
+    signal.setitimer(signal.ITIMER_REAL, 8)
+    try:
+        completed = ProcessRunner().run(
+            [sys.executable, str(script)], timeout=0.5, on_line=(lambda line: None) if streaming else None
+        )
+        assert completed.timed_out
+        wait_for_file(descendant)
+        pid = int(descendant.read_text())
+        end = time.monotonic() + 1
+        while time.monotonic() < end:
+            reaped, _ = os.waitpid(pid, os.WNOHANG)
+            if reaped:
+                break
+            time.sleep(0.01)
+        assert reaped == pid, "descendant survived the operation timeout"
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        for process in child_groups:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=5)
+        if descendant.exists():
+            try:
+                os.waitpid(int(descendant.read_text()), 0)
+            except ChildProcessError:
+                pass
+        assert libc.prctl(36, previous_subreaper.value, 0, 0, 0) == 0
+
+
+def test_streaming_bounds_unterminated_records_and_redacts_chunk_boundaries(tmp_path):
+    secret = "boundary-secret"
+    script = streaming_script(
+        tmp_path,
+        "import sys\n"
+        f"sys.stdout.write('a' * 8188 + {secret!r} + 'x' * 4000000)\n"
+        "sys.stderr.write('y' * 4000000)\n",
+    )
+    lines = []
+    completed = ProcessRunner(diagnostics_limit=8192).run(
+        [sys.executable, str(script)], timeout=5, on_line=lines.append, secrets=(secret,)
+    )
+    assert completed.success
+    assert max(len(line.encode()) for line in lines) <= 8192
+    assert len(completed.stdout.encode()) <= 8292
+    assert len(completed.stderr.encode()) <= 8292
+    assert secret not in "\n".join(lines)
+
+
+def test_streaming_bounds_total_tail_bytes(tmp_path):
+    script = streaming_script(tmp_path, "for _ in range(100):\n    print('é' * 1000)\n")
+    completed = ProcessRunner(diagnostics_limit=1024).run([sys.executable, str(script)], on_line=lambda line: None)
+    assert completed.success
+    assert len(completed.stdout.encode()) <= 1124
