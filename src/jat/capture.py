@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,6 +60,43 @@ class _ScanBoundReached(Exception):
     pass
 
 
+_FD_SCANDIR = os.scandir in os.supports_fd and os.open in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW")
+
+
+@contextmanager
+def _scan_directory(source: Path, directory: Path, expected, root_info):
+    """Open every directory component without following replacement links."""
+    descriptor = None
+    try:
+        if _FD_SCANDIR:
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            absolute = source.absolute()
+            components = [*absolute.parts[1:], *directory.relative_to(source).parts]
+            traversal_flags = os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_PATH", os.O_RDONLY)
+            descriptor = os.open(absolute.anchor, traversal_flags if components else flags)
+            root_depth = len(absolute.parts) - 1
+            for depth, component in enumerate(components, 1):
+                child = os.open(
+                    component, flags if depth == len(components) else traversal_flags,
+                    dir_fd=descriptor,
+                )
+                os.close(descriptor)
+                descriptor = child
+                if depth == root_depth and not os.path.samestat(root_info, os.fstat(descriptor)):
+                    raise OSError("workspace root changed during scan")
+            if not os.path.samestat(expected, os.fstat(descriptor)):
+                raise OSError("workspace directory changed during scan")
+        elif not os.path.samestat(expected, directory.stat(follow_symlinks=False)):
+            raise OSError("workspace directory changed during scan")
+        with os.scandir(descriptor if descriptor is not None else directory) as entries:
+            yield entries, descriptor
+        if not os.path.samestat(expected, directory.stat(follow_symlinks=False)):
+            raise OSError("workspace directory changed during scan")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def select_workspace(
     source: Path, exclusions: list[str], mode: str, limit: int = 1000000, timeout: float = 30.0,
 ) -> Selection:
@@ -69,12 +107,19 @@ def select_workspace(
     deadline = time.monotonic() + timeout
     members = [ArchiveMember(source.name, "directory")]
     exclusions = set(validate_exclusions(exclusions))
-    pending = [source]
+    try:
+        root_info = source.stat(follow_symlinks=False)
+    except OSError:
+        return Selection(complete=False, findings=["workspace subtree could not be read"])
+    pending = [(source, root_info)]
     visited = 0
     while pending:
-        directory = pending.pop()
+        directory, expected = pending.pop()
+        checkpoint = len(selection.paths), len(selection.excluded), len(members), len(pending)
         try:
-            with os.scandir(directory) as entries:
+            if time.monotonic() >= deadline:
+                raise _ScanBoundReached("workspace scan time limit reached")
+            with _scan_directory(source, directory, expected, root_info) as (entries, descriptor):
                 bounded_entries = []
                 for entry in entries:
                     visited += 1
@@ -83,10 +128,13 @@ def select_workspace(
                     if time.monotonic() >= deadline:
                         raise _ScanBoundReached("workspace scan time limit reached")
                     bounded_entries.append(entry)
+                if time.monotonic() >= deadline:
+                    raise _ScanBoundReached("workspace scan time limit reached")
                 for entry in sorted(bounded_entries, key=lambda item: item.name):
                     if time.monotonic() >= deadline:
                         raise _ScanBoundReached("workspace scan time limit reached")
-                    relative = Path(entry.path).relative_to(source).as_posix()
+                    entry_path = directory / entry.name
+                    relative = entry_path.relative_to(source).as_posix()
                     if (mode == "source-only" and entry.name == ".git") or any(
                         "/".join(relative.split("/")[:index]) in exclusions
                         for index in range(1, len(relative.split("/")) + 1)
@@ -97,16 +145,21 @@ def select_workspace(
                     target = None
                     if stat.S_ISDIR(info.st_mode):
                         kind = "directory"
-                        pending.append(Path(entry.path))
+                        pending.append((entry_path, info))
                     elif stat.S_ISREG(info.st_mode):
                         kind = "file"
                     elif stat.S_ISLNK(info.st_mode):
                         kind = "symlink"
-                        target = os.readlink(entry.path)
+                        target = (
+                            os.readlink(entry.name, dir_fd=descriptor)
+                            if descriptor is not None else os.readlink(entry_path)
+                        )
                     else:
                         kind = "other"
                     selection.paths.append(relative)
                     members.append(ArchiveMember(f"{source.name}/{relative}", kind, target))
+            if time.monotonic() >= deadline:
+                raise _ScanBoundReached("workspace scan time limit reached")
         except _ScanBoundReached as error:
             selection.complete = False
             selection.findings.append(str(error))
@@ -116,6 +169,11 @@ def select_workspace(
             selection.findings.append("workspace scan cancelled")
             break
         except OSError:
+            # Discard names collected through a directory that changed identity.
+            del selection.paths[checkpoint[0]:]
+            del selection.excluded[checkpoint[1]:]
+            del members[checkpoint[2]:]
+            del pending[checkpoint[3]:]
             selection.complete = False
             selection.findings.append("workspace subtree could not be read")
         if len(selection.findings) >= 100:

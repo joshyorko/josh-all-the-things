@@ -193,3 +193,77 @@ def test_rcc_json_request_matches_cli_contract(tmp_path):
     request_file = tmp_path / 'request.json'
     request_file.write_text(json.dumps(payload))
     assert load_request(BuildRequest, ['--json-input', str(request_file)]) == BuildRequest(**payload)
+
+
+def test_empty_workspace_obeys_deadline(tmp_path):
+    selection = select_workspace(tmp_path, [], "source-only", timeout=0)
+    assert not selection.complete
+    assert selection.findings == ["workspace scan time limit reached"]
+
+
+def test_empty_final_directory_cannot_finish_after_deadline(tmp_path, monkeypatch):
+    import os
+
+    original_scandir = os.scandir
+    clock = 0.0
+
+    def delayed_scan(directory):
+        nonlocal clock
+        entries = original_scandir(directory)
+        clock = 2.0
+        return entries
+
+    monkeypatch.setattr("jat.capture.time.monotonic", lambda: clock)
+    monkeypatch.setattr("jat.capture.os.scandir", delayed_scan)
+    selection = select_workspace(tmp_path, [], "source-only", timeout=1.0)
+    assert not selection.complete
+    assert selection.findings == ["workspace scan time limit reached"]
+
+
+@pytest.mark.parametrize("descriptor_scan", [True, False])
+def test_queued_directory_swap_cannot_select_outside_files(tmp_path, monkeypatch, descriptor_scan):
+    import os
+
+    source = tmp_path / "source"
+    source.mkdir()
+    slot = source / "slot"
+    slot.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "synthetic-name.txt").write_text("synthetic data")
+    original_scandir = os.scandir
+    calls = 0
+    if not descriptor_scan:
+        monkeypatch.setattr("jat.capture._FD_SCANDIR", False)
+
+    def swap(directory):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            slot.rename(source / "old")
+            slot.symlink_to(outside, target_is_directory=True)
+        return original_scandir(directory)
+
+    monkeypatch.setattr("jat.capture.os.scandir", swap)
+    selection = select_workspace(source, [], "source-only")
+    assert not selection.complete
+    assert "slot/synthetic-name.txt" not in selection.paths
+    assert selection.findings
+
+
+def test_scan_does_not_require_read_permission_on_ancestors(tmp_path):
+    import os
+
+    if not hasattr(os, "O_PATH"):
+        pytest.skip("Linux O_PATH traversal")
+    parent = tmp_path / "traverse-only"
+    source = parent / "source"
+    source.mkdir(parents=True)
+    (source / "keep.txt").write_text("synthetic data")
+    parent.chmod(0o111)
+    try:
+        selected = select_workspace(source, [], "source-only")
+        assert selected.complete and not selected.findings
+        assert "keep.txt" in selected.paths
+    finally:
+        parent.chmod(0o700)
