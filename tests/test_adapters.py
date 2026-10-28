@@ -1,4 +1,5 @@
 import io
+import os
 import sys
 import tarfile
 from pathlib import Path
@@ -16,12 +17,14 @@ class RecordingRunner:
         self.calls = []
         self.cwds = []
         self.environments = []
+        self.line_sinks = []
         self.responses = list(responses or [])
 
     def run(self, argv, timeout=None, foreground=False, secrets=(), cwd=None, on_line=None, env=None):
         self.calls.append((argv, timeout, foreground, secrets))
         self.cwds.append(cwd)
         self.environments.append(env)
+        self.line_sinks.append(on_line)
         if self.responses:
             return self.responses.pop(0)
         return ProcessResult(argv=argv, exit_status=0)
@@ -59,6 +62,7 @@ def test_process_runner_decodes_external_output_without_locale_failures():
     assert "�" in completed.stdout
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process-group cancellation")
 def test_process_runner_terminates_child_on_ctrl_c(monkeypatch):
     class InterruptedProcess:
         returncode = -15
@@ -93,7 +97,10 @@ def test_process_runner_terminates_child_on_ctrl_c(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         ProcessRunner().run(["hauler", "store", "serve"], foreground=True)
     assert popen_options["start_new_session"] is True
-    assert signals == [(process.pid, __import__("signal").SIGTERM)]
+    assert signals == [
+        (process.pid, __import__("signal").SIGTERM),
+        (process.pid, __import__("signal").SIGKILL),
+    ]
 
 
 def test_archive_resolves_gtar_then_capable_path_tar():
@@ -334,6 +341,63 @@ def test_windows_archive_backend_rejects_traversal_before_extraction(tmp_path):
     with pytest.raises(ValueError, match="unsafe path"):
         adapter.extract(archive, destination)
     assert not (tmp_path / "outside.txt").exists()
+
+
+@pytest.mark.parametrize("selected_paths", [None, [".", "first.txt", "second.txt"]])
+def test_windows_archive_creation_preserves_each_hardlinked_path(tmp_path, selected_paths):
+    pytest.importorskip("zstandard")
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "first.txt").write_bytes(b"shared file contents")
+    os.link(source / "first.txt", source / "second.txt")
+    archive = tmp_path / "hardlinks.tar.zst"
+    adapter = ArchiveAdapter(RecordingRunner(), platform_name="windows")
+
+    adapter.create(source, archive, selected_paths=selected_paths)
+
+    members = adapter.members(archive)
+    validate_archive_members(members)
+    assert {(member.name, member.kind) for member in members} == {
+        ("project", "directory"), ("project/first.txt", "file"), ("project/second.txt", "file"),
+    }
+    destination = tmp_path / "restored"
+    adapter.extract(archive, destination)
+    assert (destination / "project/first.txt").read_bytes() == b"shared file contents"
+    assert (destination / "project/second.txt").read_bytes() == b"shared file contents"
+
+
+@pytest.mark.parametrize("names,strip_components", [
+    (("project/A.txt", "project/a.txt"), 0),
+    (("project/Dir/first.txt", "project/dir/second.txt"), 1),
+    (("project/one/A.txt", "project/two/a.txt"), 2),
+    (("project/file.txt", "project/file.txt."), 0),
+    (("project/file.txt", "project/file.txt "), 0),
+    (("project/file.txt:stream",), 0),
+    (("project/NUL.txt",), 0),
+])
+def test_windows_archive_rejects_aliased_output_names_before_writing(tmp_path, names, strip_components):
+    zstandard = pytest.importorskip("zstandard")
+    archive = tmp_path / "aliases.tar.zst"
+    with (
+        archive.open("wb") as raw,
+        zstandard.ZstdCompressor().stream_writer(raw, closefd=False) as compressed,
+        tarfile.open(fileobj=compressed, mode="w|") as tar,
+    ):
+        root = tarfile.TarInfo("project")
+        root.type = tarfile.DIRTYPE
+        tar.addfile(root)
+        for index, name in enumerate(names):
+            content = f"payload {index}".encode()
+            member = tarfile.TarInfo(name)
+            member.size = len(content)
+            tar.addfile(member, io.BytesIO(content))
+    adapter = ArchiveAdapter(RecordingRunner(), platform_name="windows")
+    destination = tmp_path / "restored"
+
+    with pytest.raises(ValueError, match="Windows"):
+        adapter.extract(archive, destination, strip_components=strip_components)
+
+    assert not destination.exists()
 
 
 def test_hauler_adapter_owns_exact_argv(tmp_path):
@@ -641,7 +705,7 @@ def test_hauler_long_operations_stream_progress_when_a_sink_is_attached(tmp_path
 
     quiet = HaulerAdapter(RecordingRunner(), executable="/tools/hauler")
     quiet.sync(tmp_path / "store", tmp_path / "temp", "manifest.yaml")
-    assert all("on_line" not in str(call) for call in quiet.runner.calls)
+    assert all(sink is None for sink in quiet.runner.line_sinks)
 
 def test_hauler_v21_inventory_manifest_policy_and_hostile_environment(tmp_path, monkeypatch):
     digest = "sha256:" + "a" * 64
@@ -739,3 +803,20 @@ def test_hauler_inventory_accepts_legacy_v20_array_shape(tmp_path):
 
     assert inventory == [{"Reference": "ghcr.io/acme/api:v1", "Type": "image", "Digest": digest}]
     assert adapter.store_id is None
+
+
+@pytest.mark.parametrize("endpoint", ["registry", "files"])
+def test_foreground_hauler_server_outlives_acquisition_timeout(tmp_path, endpoint):
+    class SleepingProcessRunner(ProcessRunner):
+        def run(self, argv, **options):
+            return super().run([sys.executable, "-c", "import time; time.sleep(0.1)"], **options)
+
+    adapter = HaulerAdapter(SleepingProcessRunner(), timeout=0.01)
+    if endpoint == "registry":
+        completed = adapter.serve(tmp_path / "store", tmp_path / "temp", tmp_path / "directory", tmp_path / "config")
+    else:
+        completed = adapter.serve_files(tmp_path / "store", tmp_path / "temp", tmp_path / "directory")
+    assert completed.success
+    assert not completed.timed_out
+    with pytest.raises(RuntimeError, match="timed out"):
+        adapter.load(tmp_path / "store", tmp_path / "temp", tmp_path / "haul")

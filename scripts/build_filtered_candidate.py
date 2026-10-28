@@ -85,11 +85,13 @@ def main():
     producer_home.rename(output / 'producer-home-unavailable')
     (output / 'producer-rcc').rename(output / 'producer-rcc-unavailable')
     acquired = json.loads(run(['env', 'acquire', '--archive', str(payload), '--permissive-local', '--json'], verifier, output).stdout)
-    assert acquired['artifactDigest'] == artifact and acquired['verification']['valid']
+    if acquired['artifactDigest'] != artifact or acquired['verification']['valid'] is not True:
+        raise ValueError('fresh acquisition did not verify the exact candidate')
     proof = output / 'proof'
     execution = json.loads(run(['--no-build', 'env', 'exec', '--artifact', artifact, '--permissive-local',
                                '--json', '--', 'python', str(proof_script), str(proof), sha], verifier, output).stdout)
-    assert execution['exitCode'] == 0 and execution['artifactDigest'] == artifact
+    if execution['exitCode'] != 0 or execution['artifactDigest'] != artifact:
+        raise ValueError('filtered qualification did not execute the exact candidate successfully')
     receipt = {
         'format_version': 1, 'candidate_only': True, 'success': True, 'jat_git_sha': sha,
         'platform': platform_name, 'artifact_digest': artifact,

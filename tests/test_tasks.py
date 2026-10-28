@@ -29,6 +29,38 @@ def test_write_result_uses_output_result_json(tmp_path, monkeypatch):
     assert json.loads(destination.read_text())["operation"] == "doctor"
 
 
+def test_build_task_fails_when_required_rcc_is_unavailable(tmp_path, monkeypatch):
+    from test_services import FakeArchive, FakeHauler
+
+    import tasks
+    from jat.services import JATService
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "robot.yaml").write_text("tasks: {}\n")
+    output = tmp_path / "haul.tar.zst"
+    request_path = tmp_path / "build.json"
+    request_path.write_text(json.dumps({
+        "folder": str(source), "output": str(output), "rcc_environment": "required",
+    }))
+    service = JATService(
+        archive=FakeArchive(), hauler=FakeHauler(),
+        producer_version="synthetic", which=lambda command: None,
+    )
+    monkeypatch.setattr(tasks, "_service", lambda: service)
+    monkeypatch.setattr("jat.io.get_output_dir", lambda: tmp_path)
+
+    with pytest.raises(RuntimeError, match="rcc is unavailable"):
+        tasks.Build(str(request_path))
+
+    receipt = json.loads((tmp_path / "result.json").read_text())
+    assert receipt["operation"] == "build"
+    assert receipt["success"] is False
+    assert receipt["exit_status"] == 1
+    assert "rcc is unavailable" in receipt["diagnostics"]
+    assert not output.exists()
+
+
 def test_robot_declares_typed_task_surface():
     body = Path("robot.yaml").read_text()
     for task in ("Build", "Restore", "Serve"):
@@ -189,8 +221,9 @@ def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():
     assert 'export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"' in workflow
     assert 'JAT_RUN_DIR="$suite_root/run"' in workflow
     assert 'TMPDIR="$suite_root/tmp"' in workflow
-    assert "docker pull busybox:1.36" in workflow
-    assert "docker image inspect busybox:1.36" in workflow
+    assert "docker pull registry:2" in workflow
+    assert "docker image inspect registry:2" in workflow
+    assert workflow.index("docker pull registry:2") < workflow.index("-k manifest_local_publish")
     assert 'os.chdir(sys.argv[1])' in workflow
     assert 'pytest.main(sys.argv[2:])' in workflow
     assert '"$GITHUB_WORKSPACE" -q "$GITHUB_WORKSPACE/tests"' in workflow

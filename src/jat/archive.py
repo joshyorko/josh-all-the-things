@@ -1,5 +1,6 @@
 """Contained archive adapters for the JAT compressed archive boundary."""
 
+import ntpath
 import os
 import shlex
 import sys
@@ -28,7 +29,7 @@ class _WindowsArchiveBackend:
         with archive.open("wb") as raw:
             compressor = self.zstandard.ZstdCompressor(level=3)
             with compressor.stream_writer(raw, closefd=False) as compressed:
-                with tarfile.open(fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT) as tar:
+                with tarfile.open(fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT, dereference=True) as tar:
                     for path in paths:
                         if path.is_symlink():
                             raise ValueError(f"archive source contains an unsupported symbolic link: {path}")
@@ -72,11 +73,24 @@ class _WindowsArchiveBackend:
     def extract(self, archive: Path, destination: Path, strip_components: int = 0) -> None:
         members = self.members(archive)
         validate_archive_members(members)
+        output_names: dict[tuple[str, ...], tuple[str, ...]] = {}
         for member in members:
             if member.kind == "symlink":
                 raise ValueError(
                     f"archive member {member.name} cannot be extracted by the Windows backend: symbolic link"
                 )
+            parts = PurePosixPath(member.name).parts[strip_components:]
+            if not parts:
+                continue
+            if any(ntpath.isreserved(part) for part in parts):
+                raise ValueError(f"archive member contains an unsupported Windows filename: {member.name}")
+            for length in range(1, len(parts) + 1):
+                prefix = parts[:length]
+                normalized = tuple(ntpath.normcase(part) for part in prefix)
+                previous = output_names.setdefault(normalized, prefix)
+                if previous != prefix:
+                    raise ValueError(f"archive member has a Windows filename collision: {member.name}")
+            _safe_target(destination, "/".join(parts))
         destination.mkdir(parents=True, exist_ok=True)
         with self._open_reader(archive) as tar:
             for member in tar:

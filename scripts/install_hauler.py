@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -15,9 +16,8 @@ import subprocess
 import tarfile
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
-
 
 OFFICIAL_RELEASE_PREFIX = "https://github.com/hauler-dev/hauler/releases/download/"
 VERSION_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
@@ -126,12 +126,15 @@ def install(
     manifest_path: Path,
     conda_prefix: Path,
     *,
+    expected_version: str | None = None,
     system: str | None = None,
     machine: str | None = None,
     download: Callable[[str, Path], None] | None = None,
 ) -> Path:
     platform_name = resolve_platform(system, machine)
     version, pin = _read_manifest(manifest_path, platform_name)
+    if expected_version is not None and expected_version != version:
+        raise ValueError(f"JAT Hauler environment expects {expected_version}, but manifest pins {version}")
     windows = platform_name == "windows-amd64"
     target = conda_prefix / ("Scripts" if windows else "bin") / pin["executable"]
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -153,20 +156,23 @@ def install(
         staged_target = stage_directory / pin["executable"]
         staged_target.write_bytes(payload)
         staged_target.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        if not _version_matches(staged_target, version):
+            raise ValueError(f"staged Hauler failed the pinned version check: {staged_target}")
         os.replace(staged_target, target)
-        if not _version_matches(target, version):
-            raise ValueError(f"installed Hauler failed the pinned version check: {target}")
         return target
     finally:
         shutil.rmtree(stage_directory, ignore_errors=True)
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--expected-version", required=True, help="Hauler release bound into the RCC environment descriptor")
+    arguments = parser.parse_args()
     prefix = os.environ.get("CONDA_PREFIX")
     if not prefix:
         raise SystemExit("CONDA_PREFIX is required for the JAT Hauler installation.")
     manifest = Path(os.environ.get("HAULER_MANIFEST", Path(__file__).parents[1] / "runtime" / "hauler.json"))
-    target = install(manifest, Path(prefix))
+    target = install(manifest, Path(prefix), expected_version=arguments.expected_version)
     print(f"Using verified Hauler at {target}")
     return 0
 

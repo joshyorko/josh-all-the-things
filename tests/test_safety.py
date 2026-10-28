@@ -1,4 +1,6 @@
+import os
 import signal
+import threading
 
 import pytest
 
@@ -281,3 +283,81 @@ def test_owned_stage_cleans_before_forwarding_termination(tmp_path):
         stage.handle_signal(signal.SIGTERM, None)
     assert raised.value.code == 128 + signal.SIGTERM
     assert not path.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ignored signal disposition")
+def test_owned_stage_preserves_ignored_signal_until_context_exit(tmp_path):
+    previous = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    try:
+        with OwnedStage(tmp_path, "restore") as stage:
+            payload = stage.path / "payload"
+            payload.write_text("keep until exit")
+            os.kill(os.getpid(), signal.SIGTERM)
+            assert payload.read_text() == "keep until exit"
+        assert not stage.path.exists()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0), reason="unprivileged POSIX directory permissions")
+def test_owned_stage_removes_readonly_directories_without_following_symlinks(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("unrelated")
+    outside.chmod(0o555)
+    stage = OwnedStage(tmp_path, "restore")
+    path = None
+    try:
+        with stage:
+            path = stage.path
+            readonly = path / "readonly"
+            readonly.mkdir()
+            (readonly / "payload").write_text("staged")
+            (readonly / "outside").symlink_to(outside, target_is_directory=True)
+            readonly.chmod(0o555)
+        assert not path.exists()
+        assert outside.stat().st_mode & 0o777 == 0o555
+        assert (outside / "keep").read_text() == "unrelated"
+    finally:
+        outside.chmod(0o755)
+        if path is not None and path.exists():
+            (path / "readonly").chmod(0o755)
+            stage._active = True
+            stage.cleanup()
+
+
+def test_owned_stage_rolls_back_when_handler_registration_fails(tmp_path):
+    errors = []
+
+    def enter_from_worker():
+        try:
+            with OwnedStage(tmp_path, "restore"):
+                pytest.fail("worker-thread signal registration unexpectedly succeeded")
+        except ValueError as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=enter_from_worker)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert not list(tmp_path.glob(".jat-restore-*")), "failed entry leaked its stage"
+
+
+def test_owned_stage_preserves_primary_error_and_can_retry_cleanup(tmp_path, monkeypatch):
+    import shutil
+
+    original = shutil.rmtree
+    stage = OwnedStage(tmp_path, "restore")
+
+    def locked(*args, **kwargs):
+        raise PermissionError("locked stage")
+
+    monkeypatch.setattr("jat.staging.shutil.rmtree", locked)
+    with pytest.raises(ValueError, match="original failure") as raised, stage:
+        raise ValueError("original failure")
+    assert any("Stage cleanup failed" in note for note in raised.value.__notes__)
+    assert stage.path.exists()
+    monkeypatch.setattr("jat.staging.shutil.rmtree", original)
+    stage.cleanup()
+    assert not stage.path.exists()

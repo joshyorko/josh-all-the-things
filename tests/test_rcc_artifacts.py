@@ -100,6 +100,29 @@ def test_rcc_adapter_rejects_non_json_verification_output(tmp_path):
         raise AssertionError("non-JSON verification output was accepted")
 
 
+@pytest.mark.parametrize("size_delta", [-1, 0])
+def test_export_obeys_acquisition_archive_size_bound(tmp_path, monkeypatch, size_delta):
+    from jat import rcc_artifacts
+    source = tmp_path / "robot.yaml"
+    source.write_text("tasks: {}\n")
+    archive = tmp_path / "environment.rcca"
+    write_rcca(archive)
+    archive_size = archive.stat().st_size
+    monkeypatch.setattr(rcc_artifacts, "_MAX_RCC_ARCHIVE_SIZE", archive_size + size_delta)
+    runner = RecordingRunner([
+        result(stdout="rcc v18.19.7\n"),
+        result(stdout=json.dumps({"artifactDigest": "sha256:" + "a" * 64, "specificationDigest": "sha256:" + "b" * 64, "legacyBlueprintKey": "c" * 16})),
+        result(stdout="exported\n"),
+    ])
+    adapter = RCCArtifactAdapter(runner)
+
+    if size_delta < 0:
+        with pytest.raises(RuntimeError, match="bounded regular file"):
+            adapter.publish_and_export(source, archive)
+    else:
+        assert adapter.publish_and_export(source, archive).archive_size == archive_size
+
+
 def test_rcc_adapter_verifies_saved_archive_identity_in_private_runtime_home(tmp_path):
     archive = tmp_path / "saved.rcca"
     manifest = write_rcca(archive)

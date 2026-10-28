@@ -104,8 +104,11 @@ def _canonical_image_reference(reference: str) -> str:
     else:
         final = name.rsplit("/", 1)[-1]
         suffix = "" if ":" in final else ":latest"
-    if name.startswith("docker.io/"):
-        name = "index.docker.io/" + name.removeprefix("docker.io/")
+    if name.startswith(("docker.io/", "index.docker.io/")):
+        repository = name.split("/", 1)[1]
+        if "/" not in repository:
+            repository = "library/" + repository
+        name = "index.docker.io/" + repository
     return name + suffix
 
 
@@ -220,10 +223,12 @@ class JATService:
                     )
                 self._announce(CAPTURE_WARNING)
             output = new_output_path(request.output)
-            if filtered and (output == folder or folder in output.parents):
-                raise ValueError("filtered capture output must be outside the source workspace")
+            if folder in output.parents:
+                raise ValueError("capture output must be outside the source workspace")
             brew = existing_directory(request.brew) if request.brew else None
             if brew:
+                if brew in output.parents:
+                    raise ValueError("capture output must be outside the Homebrew recovery directory")
                 _validate_brew_recovery(brew)
             saved_brew_input = existing_file(request.brew_archive) if request.brew_archive else None
             saved_hauler_input = existing_file(request.hauler_archive) if request.hauler_archive else None
@@ -264,6 +269,8 @@ class JATService:
                     ):
                         raise ValueError("RCC environment metadata does not match the embedded archive")
                     saved_robot = _source_robot_path(folder, saved_rcc_metadata.robot)
+                    if filtered and saved_robot.relative_to(folder).as_posix() not in selection.paths:
+                        raise ValueError("RCC robot descriptor is excluded from workspace capture")
                 workspace_archive = stage.path / WORKSPACE_ARTIFACT
                 if filtered:
                     self.archive.create(folder, workspace_archive, selected_paths=selection.paths)
@@ -331,6 +338,8 @@ class JATService:
                         raise ValueError("RCC environment is required but no regular robot.yaml was found")
                     if rcc_robot is not None and request.rcc_environment != "off":
                         if self.rcc is not None or self.which("rcc"):
+                            if filtered and rcc_robot.relative_to(folder).as_posix() not in selection.paths:
+                                raise ValueError("RCC robot descriptor is excluded from workspace capture")
                             rcc_archive = stage.path / RCC_ARTIFACT
                             rcc_metadata = self._rcc_adapter().publish_and_export(folder, rcc_archive, rcc_robot)
                             rcc_metadata = rcc_metadata.model_copy(
@@ -344,8 +353,8 @@ class JATService:
                             rcc_metadata_path.write_text(
                                 json.dumps(rcc_metadata.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
                             )
-                    elif request.rcc_environment == "required":
-                        raise ValueError("RCC environment is required but rcc is unavailable")
+                        elif request.rcc_environment == "required":
+                            raise ValueError("RCC environment is required but rcc is unavailable")
                 manifest = stage.path / "manifest.yaml"
                 _write_manifest(manifest, workspace_archive, brew_archive, rcc_archive, rcc_metadata_path, images)
                 policy_path = None
@@ -477,6 +486,7 @@ class JATService:
             output = new_output_path(request.output)
             if request.ca_file is not None:
                 existing_file(request.ca_file)
+            images_files = _validate_capture_sources(request.images_files, "images-file")
             with OwnedStage(output.parent, "manifest") as stage:
                 temp = stage.path / "hauler-temp"
                 temp.mkdir()
@@ -510,6 +520,11 @@ class JATService:
                         raise ValueError(
                             "local-only images require --registry-prefix and explicit --publish-local; "
                             "use a registry-qualified remote reference to pull without publishing"
+                        )
+                    if request.ca_file is not None:
+                        raise ValueError(
+                            "--ca-file is unsupported for local image publication because "
+                            "Hauler 2.1.1 store copy does not support custom CA files"
                         )
                     docker = self.which("docker")
                     if not docker or not self._docker_ready(docker, required=True):
@@ -545,7 +560,7 @@ class JATService:
                 images_txt = stage.path / "images.txt"
                 images_txt.write_text("".join(f"{image}\n" for image in remote_images))
                 sources = [str(images_txt)] if remote_images else []
-                sources.extend(_validate_capture_sources(request.images_files, "images-file"))
+                sources.extend(images_files)
                 if not sources:
                     raise ValueError("manifest acquisition has no registry image references")
                 self.hauler.sync_image_txt(

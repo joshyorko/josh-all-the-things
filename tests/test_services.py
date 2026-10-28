@@ -332,6 +332,25 @@ def test_registry_config_uses_loopback_and_quotes_windows_root_path():
     assert 'addr: "127.0.0.1:5000"' in config
 
 
+@pytest.mark.parametrize("mode,success", [("required", False), ("auto", True)])
+def test_build_with_robot_and_unavailable_rcc_obeys_capture_requirement(tmp_path, mode, success):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "robot.yaml").write_text("tasks: {}\n")
+    output = tmp_path / "haul.tar.zst"
+    result = JATService(
+        archive=FakeArchive(),
+        hauler=FakeHauler(),
+        producer_version="synthetic-version",
+        which=lambda command: None if command == "rcc" else f"/tools/{command}",
+    ).build(BuildRequest(folder=source, output=output, rcc_environment=mode))
+
+    assert result.success is success
+    assert output.exists() is success
+    if not success:
+        assert "rcc is unavailable" in result.diagnostics
+
+
 def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
@@ -345,6 +364,59 @@ def test_build_publishes_one_rcc_environment_artifact_when_selected(tmp_path):
     assert rcc.calls[0][0] == "publish_and_export"
     assert rcc.calls[0][3] == source / "robot.yaml"
     assert result.environment_artifact.artifact == "sha256:" + "b" * 64
+
+
+@pytest.mark.parametrize("saved", [False, True])
+@pytest.mark.parametrize("exclusion", ["[runtime]/robot.yaml", "[runtime]", "runtime"])
+def test_filtered_capture_requires_included_rcc_robot(tmp_path, saved, exclusion):
+    source = tmp_path / "source"
+    robot = source / "[runtime]/robot.yaml"
+    robot.parent.mkdir(parents=True)
+    robot.write_text("tasks: {}\n")
+    (source / "keep.txt").write_text("included")
+    options = {}
+    if saved:
+        archive_input = tmp_path / "saved.rcca"
+        archive_input.write_bytes(b"rcca")
+        metadata = tmp_path / "saved-rcc.json"
+        metadata.write_text(EnvironmentArtifactMetadata(
+            artifact="sha256:" + "b" * 64,
+            specification_digest="sha256:" + "c" * 64,
+            legacy_blueprint_key="d" * 16,
+            archive=archive_input,
+            archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
+            archive_size=4,
+            rcc_version="v18.19.7",
+            platform="linux_amd64",
+            robot=Path("[runtime]/robot.yaml"),
+        ).model_dump_json())
+        options.update(rcc_archive=archive_input, rcc_metadata=metadata)
+    else:
+        options.update(rcc_environment="required", rcc_robot=robot)
+
+    class SelectionArchive(FakeArchive):
+        def create(self, source, archive, selected_paths=None):
+            super().create(source, archive)
+
+    archive = SelectionArchive()
+    hauler = RccHauler()
+    rcc = FakeRcc()
+    output = tmp_path / "filtered.haul"
+    result = service(tmp_path, archive=archive, hauler=hauler, rcc=rcc).build(BuildRequest(
+        folder=source, output=output, workspace_exclusions=[exclusion], **options,
+    ))
+
+    if exclusion == "runtime":
+        assert result.success, result.diagnostics
+        assert result.capture_policy["workspace_exclusions"] == ["runtime"]
+        assert output.exists()
+        return
+
+    assert not result.success
+    assert "RCC robot descriptor is excluded from workspace capture" in result.diagnostics
+    assert not output.exists()
+    assert rcc.calls == []
+    assert hauler.calls == []
 
 
 def test_build_rejects_resolved_robocorp_home_beneath_source_before_archive_creation(tmp_path, monkeypatch):
@@ -1946,3 +2018,95 @@ def test_registry_reference_matching_accepts_hauler_canonicalization():
     assert _canonical_image_reference("index.docker.io/library/alpine:latest") == "index.docker.io/library/alpine:latest"
     digest = "sha256:" + "a" * 64
     assert _canonical_image_reference(f"ghcr.io/acme/api@{digest}") == f"ghcr.io/acme/api@{digest}"
+
+
+@pytest.mark.parametrize("reference", ["docker.io/busybox:1.36", "index.docker.io/busybox:1.36", "docker.io/library/busybox:1.36"])
+def test_manifest_matches_docker_hub_official_image_inventory(reference, tmp_path):
+    class CanonicalHubHauler(ManifestHauler):
+        def sync_image_txt(self, store, temp, sources, **options):
+            super().sync_image_txt(store, temp, sources, **options)
+            self.inventory_data[0]["Reference"] = "index.docker.io/library/busybox:1.36"
+
+    service = JATService(hauler=CanonicalHubHauler(), producer_version="synthetic-version")
+    result = service.manifest(ManifestRequest(output=tmp_path / "manifest.yaml", images=[reference]))
+    assert result.success, result.diagnostics
+    assert result.inventory[0].reference == "index.docker.io/library/busybox:1.36"
+
+
+@pytest.mark.parametrize("source_kind", ["missing", "directory"])
+def test_manifest_validates_local_image_lists_before_publication(tmp_path, source_kind):
+    images_file = tmp_path / "images.txt"
+    if source_kind == "directory":
+        images_file.mkdir()
+    hauler = ManifestHauler()
+    runner = ManifestRunner()
+    service = JATService(hauler=hauler, runner=runner, producer_version="synthetic-version", which=lambda _command: "/tools/docker")
+    output = tmp_path / "manifest.yaml"
+    result = service.manifest(ManifestRequest(output=output, images=["api:dev"], images_files=[str(images_file)], registry_prefix="ghcr.io/acme", publish_local=True))
+    assert not result.success
+    assert str(images_file) in result.diagnostics
+    assert not hauler.calls
+    assert not runner.calls
+    assert not output.exists()
+
+
+def test_manifest_rejects_custom_ca_local_publication_before_hauler_runs(tmp_path):
+    ca = tmp_path / "ca.pem"
+    ca.write_text("test CA")
+    hauler = ManifestHauler()
+    runner = ManifestRunner()
+    service = JATService(hauler=hauler, runner=runner, producer_version="synthetic-version", which=lambda _command: "/tools/docker")
+    output = tmp_path / "manifest.yaml"
+    result = service.manifest(ManifestRequest(output=output, images=["api:dev"], registry_prefix="ghcr.io/acme", publish_local=True, ca_file=ca))
+    assert not result.success
+    assert "--ca-file" in result.diagnostics and "local image publication" in result.diagnostics
+    assert not hauler.calls
+    assert not runner.calls
+    assert not output.exists()
+
+
+def test_manifest_keeps_custom_ca_for_remote_acquisition(tmp_path):
+    ca = tmp_path / "ca.pem"
+    ca.write_text("test CA")
+    hauler = ManifestHauler()
+    service = JATService(hauler=hauler, producer_version="synthetic-version")
+    result = service.manifest(ManifestRequest(output=tmp_path / "manifest.yaml", images=["ghcr.io/acme/api:v1"], ca_file=ca))
+    assert result.success, result.diagnostics
+    assert result.manifest.tls_verification == "custom-ca"
+    assert next(call for call in hauler.calls if call[0] == "sync")[3]["ca_file"] == ca
+
+
+@pytest.mark.parametrize(("reference", "expected"), [
+    ("docker.io/busybox", "index.docker.io/library/busybox:latest"),
+    ("index.docker.io/busybox:1.36", "index.docker.io/library/busybox:1.36"),
+    ("docker.io/acme/api:dev", "index.docker.io/acme/api:dev"),
+    ("docker.io/busybox@sha256:" + "a" * 64, "index.docker.io/library/busybox@sha256:" + "a" * 64),
+])
+def test_docker_hub_reference_aliases_match_hauler(reference, expected):
+    from jat.services import _canonical_image_reference
+
+    assert _canonical_image_reference(reference) == expected
+
+
+@pytest.mark.parametrize("capture_root", ["workspace", "brew"])
+@pytest.mark.parametrize("capture_mode", ["full-repository", "source-only"])
+def test_build_rejects_output_within_captured_roots_before_staging(tmp_path, capture_root, capture_mode):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "file.txt").write_text("workspace")
+    brew = tmp_path / "brew"
+    brew.mkdir()
+    (brew / "Brewfile").write_text("brew 'example'\n")
+    output = (source if capture_root == "workspace" else brew) / "haul.tar.zst"
+
+    class RecordingArchive(FakeArchive):
+        def create(self, source, archive, **_options):
+            super().create(source, archive)
+
+    archive = RecordingArchive()
+    result = service(tmp_path, archive=archive).build(BuildRequest(folder=source, brew=brew, output=output, capture_mode=capture_mode))
+    assert not result.success
+    assert "outside" in result.diagnostics
+    assert archive.calls == []
+    assert not output.exists()
+    assert not list(output.parent.glob(".jat-build-*"))

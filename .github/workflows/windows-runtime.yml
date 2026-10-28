@@ -10,6 +10,7 @@ on:
   push:
     paths:
       - "conda.yaml"
+      - "environment_windows_amd64.yaml"
       - "robot.yaml"
       - "runtime/rcc.json"
       - "runtime/hauler.json"
@@ -160,9 +161,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log"); throw "hauler.exe version execution failed" }
           $executed = Get-Content -Raw $execPath | ConvertFrom-Json
           if ($executed.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $executed.exitCode -ne 0) { throw "hauler.exe did not execute from the acquired Windows artifact" }
-          $haulerVersionCode = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
+          $haulerVersionCode = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); result = subprocess.run([resolved, 'version'], check=False, capture_output=True, text=True) if inside and python_inside else None; reported = [line.split(':', 1)[1].strip().removeprefix('v') for line in (result.stdout + '\n' + result.stderr).splitlines() if line.startswith('GitVersion:')] if result else []; sys.stdout.write(result.stdout if result else ''); sys.stderr.write(result.stderr if result else ''); sys.exit(127 if result is None else result.returncode or (0 if len(sys.argv) == 2 and reported == [sys.argv[1].removeprefix('v')] else 1))"
+          $expectedHaulerVersion = (Get-Content -Raw runtime/hauler.json | ConvertFrom-Json).hauler.version
           $pythonExecPath = Join-Path $env:RUNNER_TEMP "windows-hauler-python-exec.json"
-          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- python -c $haulerVersionCode 1> $pythonExecPath 2> (Join-Path $env:RUNNER_TEMP "windows-hauler-python-exec.log")
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- python -c $haulerVersionCode $expectedHaulerVersion 1> $pythonExecPath 2> (Join-Path $env:RUNNER_TEMP "windows-hauler-python-exec.log")
           if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-hauler-python-exec.log"); throw "artifact Python Hauler version proof failed" }
           $pythonExecuted = Get-Content -Raw $pythonExecPath | ConvertFrom-Json
           if ($pythonExecuted.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $pythonExecuted.exitCode -ne 0) { throw "artifact Python Hauler version proof did not validate" }
@@ -239,7 +241,7 @@ jobs:
             sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $env:WINDOWS_ARCHIVE).Hash.ToLowerInvariant()
             size = [int64](Get-Item -LiteralPath $env:WINDOWS_ARCHIVE).Length
           }
-          $haulerVersionCode = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
+          $haulerVersionCode = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); result = subprocess.run([resolved, 'version'], check=False, capture_output=True, text=True) if inside and python_inside else None; reported = [line.split(':', 1)[1].strip().removeprefix('v') for line in (result.stdout + '\n' + result.stderr).splitlines() if line.startswith('GitVersion:')] if result else []; sys.stdout.write(result.stdout if result else ''); sys.stderr.write(result.stderr if result else ''); sys.exit(127 if result is None else result.returncode or (0 if len(sys.argv) == 2 and reported == [sys.argv[1].removeprefix('v')] else 1))"
           $warmExecutionPath = Join-Path $env:RUNNER_TEMP "windows-warm-reuse.json"
           $trustCarrier = Join-Path $env:ROBOCORP_HOME "artifacts\v1\content\trust"
           & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --provider "http://127.0.0.1:1" --trust-carrier $trustCarrier --trust-carrier-type filesystem --json -- python -c "print('jat-warm-reuse-proof')" 1> $warmExecutionPath 2> (Join-Path $env:RUNNER_TEMP "windows-warm-reuse.log")
@@ -275,7 +277,7 @@ jobs:
             verified_hauler = [ordered]@{
               fresh_home = $true
               command = @("hauler", "version")
-              launcher = @("python", "-c", $haulerVersionCode)
+              launcher = @("python", "-c", $haulerVersionCode, $haulerManifest.hauler.version)
               resolved_under_conda_prefix = $true
               exit_code = 0
             }
@@ -381,8 +383,8 @@ jobs:
           assert acquired["verification"]["valid"] is True
           PY
           "$RCC_PATH" --no-build ht vars --robot "$PWD/robot.yaml" --json > "$RUNNER_TEMP/linux-no-build-vars.json"
-          hauler_probe="import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
-          "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --json -- python -c "$hauler_probe" > "$RUNNER_TEMP/linux-hauler-exec.json"
+          hauler_probe="import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); result = subprocess.run([resolved, 'version'], check=False, capture_output=True, text=True) if inside and python_inside else None; reported = [line.split(':', 1)[1].strip().removeprefix('v') for line in (result.stdout + '\n' + result.stderr).splitlines() if line.startswith('GitVersion:')] if result else []; sys.stdout.write(result.stdout if result else ''); sys.stderr.write(result.stderr if result else ''); sys.exit(127 if result is None else result.returncode or (0 if len(sys.argv) == 2 and reported == [sys.argv[1].removeprefix('v')] else 1))"
+          "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --json -- python -c "$hauler_probe" "$(jq -r .hauler.version runtime/hauler.json)" > "$RUNNER_TEMP/linux-hauler-exec.json"
           python3 - "$RUNNER_TEMP/linux-hauler-exec.json" "$artifact" <<'PY'
           import json
           import sys
@@ -463,6 +465,7 @@ jobs:
           command -v docker
           command -v htpasswd
           docker info >/dev/null
+          docker pull registry:2
           artifact=$(python3 -c 'import json; print(json.load(open("dist/jat-runtime.json"))["artifact_digest"])')
           export JAT_TEST_DOCKER="$(command -v docker)"
           export JAT_TEST_HTPASSWD="$(command -v htpasswd)"
@@ -481,8 +484,8 @@ jobs:
       - name: Prepare the Docker fixture for the Linux Python suite
         run: |
           set -euo pipefail
-          docker pull busybox:1.36
-          docker image inspect busybox:1.36 >/dev/null
+          docker pull registry:2
+          docker image inspect registry:2 >/dev/null
 
       - name: Run the JAT Python suite in the pinned RCC environment
         run: |

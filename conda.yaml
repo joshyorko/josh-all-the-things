@@ -19,4 +19,4 @@ dependencies:
       - pydantic==2.12.5
 
 rccPostInstall:
-  - python scripts/install_hauler.py
+  - python scripts/install_hauler.py --expected-version v2.1.1

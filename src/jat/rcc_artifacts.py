@@ -48,13 +48,16 @@ class RCCArtifactAdapter:
                 str(archive),
             ]
         )
+        archive_info = archive.lstat()
+        if not stat.S_ISREG(archive_info.st_mode) or not 0 < archive_info.st_size <= _MAX_RCC_ARCHIVE_SIZE:
+            raise RuntimeError("RCCA archive was not a bounded regular file")
         return EnvironmentArtifactMetadata(
             artifact=artifact,
             specification_digest=specification,
             legacy_blueprint_key=legacy,
             archive=archive,
             archive_sha256=_sha256(archive),
-            archive_size=archive.stat().st_size,
+            archive_size=archive_info.st_size,
             rcc_version=version,
             robot=robot or source,
         )

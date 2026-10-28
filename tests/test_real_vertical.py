@@ -1,14 +1,18 @@
 import base64
+import hashlib
+import io
 import json
 import os
 import signal
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.request
 import urllib.error
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from shutil import which
@@ -31,8 +35,10 @@ from jat.services import (
     WORKSPACE_REFERENCE,
 )
 
+GNU_TAR = which("gtar") or which("tar")
+
 pytestmark = pytest.mark.skipif(
-    not which("hauler") or not (which("gtar") or which("tar")),
+    not which("hauler") or not GNU_TAR,
     reason="real Hauler and GNU tar are required",
 )
 
@@ -84,33 +90,48 @@ def write_manifest(path: Path, body: str) -> Path:
 
 
 @contextmanager
-def local_registry():
-    """A hermetic loopback OCI registry; go-containerregistry uses plain HTTP
-    for loopback, so no Docker Hub access or TLS is involved."""
-    port = free_port()
-    registry = subprocess.Popen(
-        [DOCKER, "run", "--rm", "-p", f"127.0.0.1:{port}:5000", "registry:2"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+def registry_container(port, *options):
+    """Run a cached registry image and remove only this fixture's container ID."""
+    image = os.environ.get("JAT_TEST_REGISTRY_IMAGE", "registry:2")
+    inspected = subprocess.run(
+        [DOCKER, "image", "inspect", "--format", "{{.Id}}", image],
+        check=False, capture_output=True, text=True, timeout=30,
     )
-    try:
+    if inspected.returncode:
+        pytest.skip(f"cached registry image required: {image}; fixtures never pull")
+    image_id = inspected.stdout.strip()
+    with tempfile.TemporaryDirectory(prefix="jat-registry-container-") as directory:
+        cidfile = Path(directory) / "container.cid"
+        try:
+            subprocess.run(
+                [DOCKER, "run", "--detach", "--pull=never", "--cidfile", str(cidfile),
+                 "-p", f"127.0.0.1:{port}:5000", *options, image_id],
+                check=True, capture_output=True, timeout=30,
+            )
+            yield
+        finally:
+            if cidfile.is_file():
+                subprocess.run(
+                    [DOCKER, "rm", "--force", cidfile.read_text().strip()],
+                    check=True, capture_output=True, timeout=30,
+                )
+
+
+@contextmanager
+def local_registry():
+    """A cached, test-owned loopback OCI registry with no network image pulls."""
+    port = free_port()
+    with registry_container(port):
         deadline = time.monotonic() + 60
         while True:
             try:
-                urllib.request.urlopen(f"http://127.0.0.1:{port}/v2/", timeout=2)
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/v2/", timeout=2).close()
                 break
             except OSError:
                 if time.monotonic() > deadline:
                     pytest.fail("local registry fixture did not become ready")
                 time.sleep(0.5)
         yield port
-    finally:
-        registry.terminate()
-        try:
-            registry.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            registry.kill()
-
 
 
 @contextmanager
@@ -129,31 +150,15 @@ def authenticated_local_registry(monkeypatch):
             json.dumps({"auths": {f"127.0.0.1:{port}": {"auth": auth}}})
         )
         monkeypatch.setenv("DOCKER_CONFIG", str(config_dir))
-        registry = subprocess.Popen(
-            [
-                DOCKER,
-                "run",
-                "--rm",
-                "-p",
-                f"127.0.0.1:{port}:5000",
-                "-v",
-                f"{auth_dir}:/auth:ro",
-                "-e",
-                "REGISTRY_AUTH=htpasswd",
-                "-e",
-                "REGISTRY_AUTH_HTPASSWD_REALM=JAT",
-                "-e",
-                "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd",
-                "registry:2",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        try:
+        with registry_container(
+            port, "-v", f"{auth_dir}:/auth:ro", "-e", "REGISTRY_AUTH=htpasswd",
+            "-e", "REGISTRY_AUTH_HTPASSWD_REALM=JAT",
+            "-e", "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd",
+        ):
             deadline = time.monotonic() + 60
             while True:
                 try:
-                    urllib.request.urlopen(f"http://127.0.0.1:{port}/v2/", timeout=2)
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/v2/", timeout=2).close()
                     break
                 except urllib.error.HTTPError as error:
                     if error.code == 401:
@@ -164,24 +169,50 @@ def authenticated_local_registry(monkeypatch):
                     pytest.fail("authenticated local registry fixture did not become ready")
                 time.sleep(0.5)
             yield port
-        finally:
-            registry.terminate()
-            try:
-                registry.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                registry.kill()
 
-def seed_local_image(port: int, image: str = "busybox:1.36") -> str:
-    """Pull a deterministic seed image, then publish it into the loopback registry."""
-    if subprocess.run([DOCKER, "image", "inspect", image], capture_output=True).returncode != 0:
-        subprocess.run([DOCKER, "pull", image], check=True, capture_output=True)
-    reference = f"127.0.0.1:{port}/{image}"
-    subprocess.run([DOCKER, "tag", image, reference], check=True, capture_output=True)
-    subprocess.run([DOCKER, "push", reference], check=True, capture_output=True)
+
+@pytest.fixture
+def local_images(tmp_path):
+    """Import a tiny synthetic rootfs; never retag or remove developer references."""
+    prefix = f"jat-fixture-{uuid.uuid4().hex}"
+    images = (f"{prefix}-api:test", f"{prefix}-worker:test")
+    archive = tmp_path / "fixture-rootfs.tar"
+    with tarfile.open(archive, "w") as rootfs:
+        content = b"JAT synthetic image fixture\n"
+        member = tarfile.TarInfo("jat-fixture.txt")
+        member.size = len(content)
+        member.mode = 0o644
+        rootfs.addfile(member, io.BytesIO(content))
+    owned = []
+    try:
+        for image in images:
+            existing = subprocess.run([DOCKER, "image", "inspect", image], check=False, capture_output=True)
+            assert existing.returncode != 0, f"fixture reference already exists: {image}"
+        owned.append(images[0])
+        subprocess.run(
+            [DOCKER, "import", "--platform=linux/amd64", str(archive), images[0]],
+            check=True, capture_output=True, timeout=30,
+        )
+        owned.append(images[1])
+        subprocess.run([DOCKER, "tag", images[0], images[1]], check=True, capture_output=True)
+        yield images
+    finally:
+        for image in reversed(owned):
+            subprocess.run([DOCKER, "image", "rm", image], check=False, capture_output=True, timeout=30)
+
+
+def seed_local_image(port: int, image: str) -> str:
+    """Publish an existing owned image, then discard only the temporary alias."""
+    reference = f"127.0.0.1:{port}/jat-fixture-{uuid.uuid4().hex}:test"
+    try:
+        subprocess.run([DOCKER, "tag", image, reference], check=True, capture_output=True)
+        subprocess.run([DOCKER, "push", reference], check=True, capture_output=True)
+    finally:
+        subprocess.run([DOCKER, "image", "rm", reference], check=False, capture_output=True, timeout=30)
     return reference
 
 
-def test_real_files_only_capsule_build_inspect_extract_and_restore(tmp_path):
+def test_real_files_only_capsule_build_inspect_extract_and_restore(tmp_path, monkeypatch):
     source = make_workspace(tmp_path)
     haul = tmp_path / "capsule.tar.zst"
     service = make_service()
@@ -190,6 +221,9 @@ def test_real_files_only_capsule_build_inspect_extract_and_restore(tmp_path):
     assert built.success, built.diagnostics
     assert built.format_version == 1, "unchanged non-chunked builds keep the v1 receipt"
 
+    run_dir = tmp_path / "inspect-run"
+    run_dir.mkdir()
+    monkeypatch.setenv("JAT_RUN_DIR", str(run_dir))
     inspected = service.inspect(InspectRequest(haul=haul))
     assert inspected.success, inspected.diagnostics
     assert inspected.format_version == 2
@@ -202,8 +236,6 @@ def test_real_files_only_capsule_build_inspect_extract_and_restore(tmp_path):
         "rcc_environment": False,
         "rcc_metadata": False,
     }
-    run_dir = tmp_path / "inspect-run"
-    run_dir.mkdir()
     assert not any(run_dir.iterdir()), "inspect must leave no workspace materialization"
 
     extracted_dir = tmp_path / "extracted"
@@ -213,7 +245,7 @@ def test_real_files_only_capsule_build_inspect_extract_and_restore(tmp_path):
     assert extracted.success, extracted.diagnostics
     payload = extracted_dir / WORKSPACE_ARTIFACT
     assert payload.is_file()
-    assert extracted.payloads[0].sha256 == extracted.payloads[0].sha256
+    assert extracted.payloads[0].sha256 == hashlib.sha256(payload.read_bytes()).hexdigest()
     assert len(extracted.payloads[0].sha256) == 64
 
     restored = tmp_path / "restored"
@@ -223,7 +255,7 @@ def test_real_files_only_capsule_build_inspect_extract_and_restore(tmp_path):
 
 
 @requires_docker
-def test_real_mixed_capsule_keeps_extras_visible_and_restore_selective(tmp_path):
+def test_real_mixed_capsule_keeps_extras_visible_and_restore_selective(tmp_path, local_images):
     source = make_workspace(tmp_path)
     extra = write_manifest(
         tmp_path / "extras.yaml",
@@ -249,7 +281,7 @@ def test_real_mixed_capsule_keeps_extras_visible_and_restore_selective(tmp_path)
         BuildRequest(
             folder=source,
             output=haul,
-            images=["busybox:1.36"],
+            images=[local_images[0]],
             hauler_manifests=[str(extra)],
         )
     )
@@ -259,7 +291,7 @@ def test_real_mixed_capsule_keeps_extras_visible_and_restore_selective(tmp_path)
     assert inspected.success, inspected.diagnostics
     entries = {entry.reference: entry for entry in inspected.inventory}
     assert WORKSPACE_REFERENCE in entries
-    assert "hauler/busybox:1.36" in entries or any("busybox" in reference for reference in entries), sorted(entries)
+    assert any(local_images[0] in reference for reference in entries), sorted(entries)
     assert "hauler/extra-note.txt:latest" in entries
     image_entries = [entry for entry in entries.values() if entry.type == "image"]
     assert image_entries and image_entries[0].platform == "linux/amd64"
@@ -272,10 +304,10 @@ def test_real_mixed_capsule_keeps_extras_visible_and_restore_selective(tmp_path)
 
 
 @requires_docker
-def test_real_images_file_and_http_manifest_are_hauler_native(tmp_path):
+def test_real_images_file_and_http_manifest_are_hauler_native(tmp_path, local_images):
     source = make_workspace(tmp_path)
     with local_registry() as registry_port:
-        image_reference = seed_local_image(registry_port)
+        image_reference = seed_local_image(registry_port, local_images[0])
         images_file = tmp_path / "images.txt"
         images_file.write_text(f"# synthetic list\n{image_reference}\n")
         remote_manifest = write_manifest(
@@ -329,23 +361,19 @@ def test_real_images_file_and_http_manifest_are_hauler_native(tmp_path):
 
         inspected = service.inspect(InspectRequest(haul=haul))
         references = {entry.reference for entry in inspected.inventory}
-        assert any("busybox" in reference for reference in references), sorted(references)
+        assert any(image_reference in reference for reference in references), sorted(references)
         assert "hauler/http-note.txt:latest" in references
 
 
 @requires_authenticated_registry
-def test_real_manifest_local_publish_fresh_pull_and_multi_image_bootstrap(tmp_path, monkeypatch):
+def test_real_manifest_local_publish_fresh_pull_and_multi_image_bootstrap(tmp_path, monkeypatch, local_images):
     source = make_workspace(tmp_path)
     with authenticated_local_registry(monkeypatch) as registry_port:
-        seed_image = "ghcr.io/stefanprodan/podinfo:6.7.1"
-        seed_local_image(registry_port, seed_image)
-        subprocess.run([DOCKER, "tag", seed_image, "jat-api:dev"], check=True, capture_output=True)
-        subprocess.run([DOCKER, "tag", seed_image, "jat-worker:dev"], check=True, capture_output=True)
         output = tmp_path / "hauler-manifest.yaml"
         result = make_service().manifest(
             ManifestRequest(
                 output=output,
-                images=["jat-api:dev", "jat-worker:dev"],
+                images=list(local_images),
                 registry_prefix=f"127.0.0.1:{registry_port}/jat",
                 publish_local=True,
                 plain_http=True,
@@ -356,16 +384,16 @@ def test_real_manifest_local_publish_fresh_pull_and_multi_image_bootstrap(tmp_pa
     assert result.success, result.diagnostics
     assert result.complete is True
     assert output.is_file()
-    assert {mapping.source_local for mapping in result.manifest.mappings} == {"jat-api:dev", "jat-worker:dev"}
+    assert {mapping.source_local for mapping in result.manifest.mappings} == set(local_images)
     assert all(mapping.digest and mapping.digest.startswith("sha256:") for mapping in result.manifest.mappings)
     assert result.manifest.registry_prefix == f"127.0.0.1:{registry_port}/jat"
 
 
 @requires_docker
-def test_real_helm_manifest_valuesfiles_and_image_closure(tmp_path, monkeypatch):
+def test_real_helm_manifest_valuesfiles_and_image_closure(tmp_path, monkeypatch, local_images):
     source = make_workspace(tmp_path)
     with local_registry() as registry_port:
-        image_reference = seed_local_image(registry_port)
+        image_reference = seed_local_image(registry_port, local_images[0])
         chart = tmp_path / "chart"
         (chart / "templates").mkdir(parents=True)
         (chart / "charts" / "sub").mkdir(parents=True)
@@ -430,7 +458,7 @@ def test_real_helm_manifest_valuesfiles_and_image_closure(tmp_path, monkeypatch)
         inspected = service.inspect(InspectRequest(haul=haul))
         references = {entry.reference for entry in inspected.inventory}
         assert any("jat-synthetic" in reference for reference in references), sorted(references)
-        assert any("busybox" in reference for reference in references), (
+        assert any(image_reference in reference for reference in references), (
             "Hauler must discover chart-declared images during acquisition",
             sorted(references),
         )
@@ -486,7 +514,7 @@ def test_real_containerd_export_produces_hauler_containerd_layout(tmp_path):
     # tarfile, so read the member list through GNU tar like the archive
     # boundary does.
     listing = subprocess.run(
-        ["tar", "--zstd", "-tf", str(output)], capture_output=True, text=True, check=True
+        [GNU_TAR, "--zstd", "-tf", str(output)], capture_output=True, text=True, check=True
     )
     names = listing.stdout.splitlines()
     assert any(name.startswith("blobs/sha256/") for name in names)
@@ -586,10 +614,10 @@ def test_real_serve_both_endpoints_cancel_and_leave_no_orphans(tmp_path):
 
 
 @requires_docker
-def test_real_streamed_progress_flows_during_remote_acquisition(tmp_path):
+def test_real_streamed_progress_flows_during_remote_acquisition(tmp_path, local_images):
     source = make_workspace(tmp_path)
     with local_registry() as registry_port:
-        image_reference = seed_local_image(registry_port)
+        image_reference = seed_local_image(registry_port, local_images[0])
         images_file = tmp_path / "images.txt"
         images_file.write_text(f"{image_reference}\n")
         haul = tmp_path / "streamed.tar.zst"

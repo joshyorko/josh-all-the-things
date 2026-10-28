@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 
 from build_environment_artifact import (
@@ -86,6 +87,18 @@ def qualify(root, archive, candidate_path, rcc, output, timeout=1800):
         acquired = json.loads(run(['env', 'acquire', '--archive', str(archive), '--permissive-local', '--json']).stdout)
         if acquired.get('artifactDigest') != artifact or acquired.get('verification', {}).get('valid') is not True:
             raise ValueError('fresh acquisition did not verify the exact candidate')
+        # RCC verified this archive's manifest and content closure. Acquisition
+        # JSON does not expose the specification or legacy blueprint identity.
+        with zipfile.ZipFile(archive) as payload:
+            members = [entry for entry in payload.infolist()
+                       if entry.filename == 'rcc-environment/manifest.json']
+            if len(members) != 1 or members[0].file_size > 1024 * 1024:
+                raise ValueError('candidate archive must contain one bounded canonical manifest')
+            metadata = json.loads(payload.read(members[0]))
+        if (metadata['artifactDigest'] != artifact
+                or metadata['specification']['digest'] != candidate['specification_digest']
+                or metadata['legacyBlueprint']['legacyBlueprintKey'] != candidate['legacy_blueprint_key']):
+            raise ValueError('candidate identities do not match the verified archive manifest')
         # Reconstruct only the matching descriptors. No project source or
         # installer is present, and --no-build forbids executing postinstall.
         descriptors = work / 'descriptors'
@@ -96,6 +109,10 @@ def qualify(root, archive, candidate_path, rcc, output, timeout=1800):
         variables = json.loads(run(['--no-build', 'ht', 'vars', '--robot', str(descriptors / 'robot.yaml'), '--json']).stdout)
         if not isinstance(variables, list):
             raise TypeError('no-build descriptor resolution did not return variables')
+        blueprints = [entry.get('value') for entry in variables
+                      if isinstance(entry, dict) and entry.get('key') == 'RCC_ENVIRONMENT_HASH']
+        if blueprints != [candidate['legacy_blueprint_key']]:
+            raise ValueError('resolved descriptors do not match the candidate blueprint identity')
         def execute(label, command, extra=()):
             receipt = work / f'{label}.json'
             run(['--no-build', 'env', 'exec', '--artifact', artifact, '--permissive-local',
@@ -107,17 +124,21 @@ def qualify(root, archive, candidate_path, rcc, output, timeout=1800):
         expected = work / 'expected-source.json'
         expected.write_text(json.dumps({'jat_git_sha': source_sha, 'files': expected_files}))
         execute('source', ['python', '-c',
-            ("import hashlib,json,sys; from pathlib import Path; import jat; "
-            "package=Path(jat.__file__).resolve().parent; "
-            "assert Path(sys.prefix).resolve() in package.parents; "
-            "expected=json.loads(Path(sys.argv[1]).read_text()); "
-            "embedded=json.loads((package/'_candidate.json').read_text()); "
-            "assert embedded['jat_git_sha']==expected['jat_git_sha']; "
-            "assert embedded['files']==expected['files']; "
-            "assert all(hashlib.sha256((package/name).read_bytes()).hexdigest()==digest "
-            "for name,digest in expected['files'].items())"), str(expected)])
+            ("import hashlib,json,sys\nfrom pathlib import Path\nimport jat\n"
+            "package=Path(jat.__file__).resolve().parent\n"
+            "if Path(sys.prefix).resolve() not in package.parents:\n"
+            "    raise ValueError('JAT did not load from acquired environment')\n"
+            "expected=json.loads(Path(sys.argv[1]).read_text())\n"
+            "embedded=json.loads((package/'_candidate.json').read_text())\n"
+            "if embedded['jat_git_sha'] != expected['jat_git_sha'] or embedded['files'] != expected['files']:\n"
+            "    raise ValueError('embedded candidate source identity does not match checkout')\n"
+            "if not all(hashlib.sha256((package/name).read_bytes()).hexdigest()==digest "
+            "for name,digest in expected['files'].items()):\n"
+            "    raise ValueError('embedded candidate source bytes do not match checkout')\n"), str(expected)])
         execute('embedded', ['python', str(root / 'scripts/qualify_filtered_candidate.py'), str(work / 'proof'), source_sha])
-        execute('hauler', list(HAULER_VERSION_COMMAND))
+        hauler_version = _hauler_version(root)
+        hauler_launcher = [*HAULER_VERSION_COMMAND, hauler_version]
+        execute('hauler', hauler_launcher)
         execute('warm', ['python', '-c', "print('jat-warm-reuse-proof')"], [
             '--provider', 'http://127.0.0.1:1', '--trust-carrier',
             str(Path(environment['ROBOCORP_HOME']) / 'artifacts/v1/content/trust'),
@@ -127,7 +148,7 @@ def qualify(root, archive, candidate_path, rcc, output, timeout=1800):
         receipt = {
             'format_version': 3, 'operation': 'build', 'success': True,
             'jat_git_sha': source_sha, 'rcc_executable': Path(rcc).name,
-            'rcc_version': version, 'hauler_version': _hauler_version(root),
+            'rcc_version': version, 'hauler_version': hauler_version,
             'rcc_source': candidate['rcc_source'], 'platform': candidate['platform'],
             'artifact_digest': artifact, 'specification_digest': candidate['specification_digest'],
             'legacy_blueprint_key': candidate['legacy_blueprint_key'], 'archive': candidate['archive'],
@@ -136,7 +157,7 @@ def qualify(root, archive, candidate_path, rcc, output, timeout=1800):
             'verified_exec': {'fresh_home': True},
             'verified_warm_reuse': {'fresh_home': True, 'no_build': True, 'provider_unavailable': True},
             'verified_hauler': {'fresh_home': True, 'command': ['hauler', 'version'],
-                                'launcher': list(HAULER_VERSION_COMMAND),
+                                'launcher': hauler_launcher,
                                 'resolved_under_conda_prefix': True, 'exit_code': 0},
         }
         if _sha256(archive) != candidate['archive']['sha256']:
