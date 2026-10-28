@@ -141,7 +141,12 @@ def select_workspace(
                     ):
                         selection.excluded.append(relative)
                         continue
-                    info = entry.stat(follow_symlinks=False)
+                    # Windows DirEntry.stat omits st_ino/st_dev. Use the same
+                    # uncached identity source as the fallback scan checks.
+                    info = (
+                        entry.stat(follow_symlinks=False) if descriptor is not None
+                        else entry_path.stat(follow_symlinks=False)
+                    )
                     target = None
                     if stat.S_ISDIR(info.st_mode):
                         kind = "directory"
