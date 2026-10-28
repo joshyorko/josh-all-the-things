@@ -344,8 +344,8 @@ class JATService:
                             rcc_metadata_path.write_text(
                                 json.dumps(rcc_metadata.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
                             )
-                    elif request.rcc_environment == "required":
-                        raise ValueError("RCC environment is required but rcc is unavailable")
+                        elif request.rcc_environment == "required":
+                            raise ValueError("RCC environment is required but rcc is unavailable")
                 manifest = stage.path / "manifest.yaml"
                 _write_manifest(manifest, workspace_archive, brew_archive, rcc_archive, rcc_metadata_path, images)
                 policy_path = None
