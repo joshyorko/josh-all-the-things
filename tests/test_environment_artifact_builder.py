@@ -62,7 +62,7 @@ def write_fake_rcc(path: Path, log: Path) -> None:
 def write_fake_oras(path: Path, log: Path) -> None:
     path.write_text(
         f"#!{sys.executable}\n"
-        "import json, pathlib, sys\n"
+        "import json, os, pathlib, sys\n"
         f"log = pathlib.Path({str(log)!r})\n"
         "args = sys.argv[1:]\n"
         "log.open('a').write(json.dumps(args) + '\\n')\n"
@@ -72,9 +72,11 @@ def write_fake_oras(path: Path, log: Path) -> None:
         "elif args[:2] == ['manifest', 'fetch']:\n"
         "    print(json.dumps({'digest': 'sha256:' + 'd' * 64}))\n"
         "elif args[:1] == ['push']:\n"
-        "    for item in args[4:]:\n"
+        "    layers = [item for item in args if ':application/' in item]\n"
+        "    for item in layers:\n"
         "        pathlib.Path(item.split(':application/', 1)[0]).read_bytes()\n"
-        "    pathlib.Path(str(log) + '.receipt').write_bytes(pathlib.Path(args[-1].split(':application/', 1)[0]).read_bytes())\n"
+        "    pathlib.Path(str(log) + '.receipt').write_bytes(pathlib.Path(layers[-1].split(':application/', 1)[0]).read_bytes())\n"
+        "    print(json.dumps({'digest': os.environ.get('ORAS_PUSH_DIGEST', 'sha256:' + 'a' * 64)}))\n"
     )
     path.chmod(0o755)
 
@@ -412,7 +414,8 @@ def test_builder_rejects_existing_outputs(tmp_path):
 
 
 @pytest.mark.parametrize("receipt_location", ["same", "separate", "conflict", "same_filename"])
-def test_publish_wrapper_validates_selected_structured_receipt(tmp_path, receipt_location):
+@pytest.mark.parametrize("push_digest", ["sha256:" + "a" * 64, "invalid-descriptor"])
+def test_publish_wrapper_validates_selected_structured_receipt(tmp_path, receipt_location, push_digest):
     root = Path(__file__).parents[1]
     if shutil.which("jq") is None:
         pytest.fail("jq is required to exercise the publication wrapper")
@@ -476,6 +479,7 @@ def test_publish_wrapper_validates_selected_structured_receipt(tmp_path, receipt
     )
     reference = "ghcr.io/example/jat-runtime:linux_amd64-" + "a" * 64
 
+    environment["ORAS_PUSH_DIGEST"] = push_digest
     result = subprocess.run(
         [
             str(root / "scripts/publish_environment_artifact.sh"),
@@ -500,11 +504,16 @@ def test_publish_wrapper_validates_selected_structured_receipt(tmp_path, receipt
         assert not oras_log.exists(), "colliding carrier filenames reached ORAS"
         return
 
+    if push_digest == "invalid-descriptor":
+        assert result.returncode != 0, "invalid push descriptor was accepted"
+        assert "ghcr.io/example/jat-runtime@" not in result.stdout
+        return
+
     assert result.returncode == 0, (
         "wrapper rejected a schema-valid structured receipt before ORAS: "
         f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
-    assert result.stdout.strip() == "ghcr.io/example/jat-runtime@sha256:" + "d" * 64
+    assert result.stdout.strip() == "ghcr.io/example/jat-runtime@sha256:" + "a" * 64
     assert Path(str(oras_log) + ".receipt").read_bytes() == receipt.read_bytes()
     assert [json.loads(line) for line in oras_log.read_text().splitlines()] == [
         ["login", "ghcr.io", "--username", "fake-user", "--password-stdin"],
@@ -515,8 +524,9 @@ def test_publish_wrapper_validates_selected_structured_receipt(tmp_path, receipt
             "application/vnd.joshyorko.rcc-environment-artifact.v2",
             "jat-runtime.rcca:application/vnd.joshyorko.rcc-environment-artifact.v2+rcca",
             "jat-runtime.json:application/vnd.joshyorko.rcc-environment-artifact-receipt.v3+json",
+            "--format",
+            "json",
         ],
-        ["manifest", "fetch", "--descriptor", reference],
     ]
 
     valid_receipt = json.loads(receipt.read_text())
@@ -649,7 +659,7 @@ def test_publish_wrapper_accepts_windows_archive_and_keeps_platform_tag(tmp_path
         check=False,
     )
     assert result.returncode == 0, f"Windows receipt was rejected: stdout={result.stdout!r} stderr={result.stderr!r}"
-    assert result.stdout.strip() == "ghcr.io/example/jat-runtime@sha256:" + "d" * 64
+    assert result.stdout.strip() == "ghcr.io/example/jat-runtime@sha256:" + "a" * 64
     calls = [json.loads(line) for line in oras_log.read_text().splitlines()]
     assert calls[1][1] == "ghcr.io/example/jat-runtime:windows_amd64-" + "e" * 64
 

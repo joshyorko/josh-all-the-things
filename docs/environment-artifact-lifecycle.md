@@ -70,3 +70,7 @@ Josh Room consumer work is tracked separately in
 [joshyorko/josh-room#83](https://github.com/joshyorko/josh-room/issues/83).
 JAT produces and proves its own runtime archive; Josh Room consumes its
 immutable identity and independently owns its controller Environment Artifact.
+
+## Carrier publication identity
+
+The platform and RCC digest tag is a mutable discovery alias. The publisher returns the immutable OCI manifest digest reported by that exact ORAS push operation, not a later resolution of the alias. Concurrent publishers cannot change the returned reference to another carrier. Release verification validates producer receipts against the schema and dependency pins from the exact original release source, using trusted verifier code staged before checkout. Existing immutable release bytes and receipt contracts are not rewritten.

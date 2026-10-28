@@ -67,16 +67,16 @@ jq -e --arg hauler_launcher "$hauler_launcher" \
 [[ $(sha256sum "$archive" | cut -d' ' -f1) == "$(jq -r .archive.sha256 "$receipt")" ]] || { printf 'Artifact does not match its receipt.\n' >&2; exit 2; }
 [[ $(stat --printf='%s' "$archive") == "$(jq -r .archive.size "$receipt")" ]] || { printf 'Artifact size does not match its receipt.\n' >&2; exit 2; }
 artifact=$(jq -r .artifact_digest "$receipt")
-# Push one platform-specific immutable carrier tag; artifact identity is unchanged.
+# Update a platform-specific discovery alias; the returned manifest digest is immutable.
 reference="$repository:$(jq -r .platform "$receipt")-${artifact#sha256:}"
-printf '%s' "$GITHUB_TOKEN" | oras login ghcr.io --username "$username" --password-stdin
+printf '%s' "$GITHUB_TOKEN" | oras login ghcr.io --username "$username" --password-stdin >&2
 publish_directory=$(mktemp -d)
 trap 'rm -rf -- "$publish_directory"' EXIT
 cp -- "$archive" "$publish_directory/$archive_filename"
 cp -- "$receipt" "$publish_directory/$receipt_filename"
-(cd "$publish_directory" && oras push "$reference" --artifact-type application/vnd.joshyorko.rcc-environment-artifact.v2 \
+descriptor=$(cd "$publish_directory" && oras push "$reference" --artifact-type application/vnd.joshyorko.rcc-environment-artifact.v2 \
   "$archive_filename:application/vnd.joshyorko.rcc-environment-artifact.v2+rcca" \
-  "$receipt_filename:application/vnd.joshyorko.rcc-environment-artifact-receipt.v3+json")
-digest=$(oras manifest fetch --descriptor "$reference" | jq -r .digest)
+  "$receipt_filename:application/vnd.joshyorko.rcc-environment-artifact-receipt.v3+json" --format json)
+digest=$(jq -er '.digest | select(type == "string")' <<< "$descriptor")
 [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'Registry did not return a valid manifest digest.\n' >&2; exit 2; }
 printf '%s@%s\n' "$repository" "$digest"
