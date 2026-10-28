@@ -25,3 +25,27 @@ Hauler content (files, images, charts).
 Run Python tests and lint through the declared RCC environment. The Bash
 compatibility filename is a thin RCC-to-`jat` shim and must not regain domain
 or orchestration behavior.
+
+## Upstream dependency defects and contributions
+
+When a real run, integration test, pin update, or build exposes a suspected
+third-party defect, **read and follow**
+[`.agents/skills/upstream-contribution/SKILL.md`](.agents/skills/upstream-contribution/SKILL.md)
+before opening an upstream issue, submitting a patch, or adding a JAT
+workaround. The skill is the repository's evidence-first reporting and
+follow-through contract, adapted from Bluefin Contribute's upstream-Hive
+workflow. Do not silently bury an upstream bug in JAT documentation.
+
+Reproduce and distinguish a JAT caller/integration bug from independently
+broken upstream behavior. Search for existing reports; route confirmed Hauler
+bugs to `hauler-dev/hauler`, Josh RCC fork bugs to `joshyorko/rcc`, and
+other defects to their verified owners. When permitted, file an evidence-backed
+upstream report and offer a small upstream PR with a regression test. Track
+JAT-impacting upstream fixes until the corrected pinned dependency passes
+JAT qualification; an upstream merge alone is not downstream resolution.
+Use private vulnerability disclosure for security-sensitive findings.
+
+This policy grants **no new external repository permissions**: honor current
+authenticated write scope, approval gates, maintainers' contribution rules,
+and the existing no-daemon/no-provider JAT product boundary.
+
