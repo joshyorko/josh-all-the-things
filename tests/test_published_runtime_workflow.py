@@ -83,3 +83,10 @@ def test_receipt_validation_uses_trusted_tools_and_release_source_before_acquire
         assert body.index('Validate the complete '+platform+' producer receipt') < body.index('env acquire')
         assert '--source-root' in body and '--source-sha' in body
         assert 'PYTHONPATH: ${{ runner.temp }}/jat-receipt-tools' in body
+
+
+def test_linux_no_build_probe_uses_the_acquired_artifact_identity():
+    workflow = verifier().split('  verify-published-linux:', 1)[1].split('  verify-published-windows:', 1)[0]
+    assert '--no-build ht vars --robot "$PWD/robot.yaml"' not in workflow
+    assert '--receipt-file "$RUNNER_TEMP/linux-release-no-build.json"' in workflow
+    assert 'execution["verification"]["valid"] is not True' in workflow

@@ -124,7 +124,13 @@ jobs:
           acquired = json.load(open(sys.argv[1]))
           assert acquired["artifactDigest"] == sys.argv[2] and acquired["verification"]["valid"] is True
           PY
-          "$rcc" --no-build ht vars --robot "$PWD/robot.yaml" --json > "$RUNNER_TEMP/linux-release-vars.json"
+          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --inherit-streams --receipt-file "$RUNNER_TEMP/linux-release-no-build.json" -- python -c "print('jat-release-no-build-proof')"
+          python3 - "$RUNNER_TEMP/linux-release-no-build.json" "$artifact" <<'PY'
+          import json, sys
+          execution = json.load(open(sys.argv[1]))
+          if execution["artifactDigest"] != sys.argv[2] or execution["exitCode"] != 0 or execution["verification"]["valid"] is not True:
+              raise SystemExit("no-build execution did not verify the acquired release artifact")
+          PY
           expected_hauler=$(python3 -c 'import json; print(json.load(open("runtime/hauler.json"))["hauler"]["version"])')
           "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --json -- python "$RUNNER_TEMP/verify_hauler_runtime.py" --expected-version "$expected_hauler" > "$RUNNER_TEMP/linux-release-hauler.json"
           python3 - "$RUNNER_TEMP/linux-release-hauler.json" "$artifact" <<'PY'
