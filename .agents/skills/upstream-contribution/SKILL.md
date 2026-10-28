@@ -26,8 +26,8 @@ JAT currently pins **Hauler v2.1.1** in `runtime/hauler.json` and Josh RCC versi
 
 ## Evidence gate (before external writes)
 
-1. **Reproduce and isolate.** Capture the smallest failing JAT command and try an equivalent direct invocation of the pinned dependency without JAT. Keep a failing fixture or script that someone else can run; record whether a minimal external reproduction was possible. Use an actual installed/pinned binary; don't confuse a mock/test-double mismatch with upstream failure.
-2. **Identify the exact implementation.** Record operating system and architecture, JAT commit, dependency release, actual binary/source commit and checksum or digest when available, and the relevant configuration/flags. Quote exact upstream source locations using **commit-SHA permalinks with line anchors**, not mutable branch links.
+1. **Reproduce and isolate.** Capture the smallest failing JAT command and try an equivalent direct invocation of the pinned dependency without JAT. Keep a failing fixture or script that someone else can run; record whether a minimal external reproduction was possible. Use an actual installed/pinned binary; don't confuse a mock/test-double mismatch with upstream failure. When useful, try a clean independent environment or existing test harness to distinguish host-specific behavior from a general defect. A second environment strengthens evidence; it is not required to report an otherwise verified upstream bug.
+2. **Identify the exact implementation and conditions.** Record the observed platform/architecture, JAT commit, dependency release, actual binary/source commit and checksum or digest when available, and the runtime configuration needed to understand the failure. Separate **where it was discovered** from **what reproduction has shown matters**: describe concrete conditions such as selected container endpoint, privilege mode, or filesystem behavior rather than workstation names or distro variants unless those are material. Preserve accurate environment details when requested. Quote exact upstream source locations using **commit-SHA permalinks with line anchors**, not mutable branch links.
 3. **Capture observations.** Show expected behavior, actual behavior, sanitized output, exit status, and the **UTC date/time** of live probes. Make any claims about current upstream behavior from current source/evidence, not assumptions about another release.
 4. **Prove attribution.** Contrast the standalone dependency reproducer with the JAT adapter or RCC task. If direct reproduction fails or ownership is still ambiguous, classify as **unconfirmed** and investigate further or open a local JAT investigation issue—**do not present a suspected upstream failure as confirmed**.
 5. **Search and deduplicate.** Search the exact upstream repository's open and closed issues, PRs, releases, and current documentation for matching symptoms and version. If a suitable report exists, add *new* evidence there when appropriate and link it; do not open a duplicate.
@@ -59,7 +59,8 @@ Use these sections, adapting to upstream's issue template:
 
 ## Environment
 - Dependency version, commit and executable digest:
-- Platform/architecture:
+- Observed platform/architecture and relevant runtime conditions:
+- Independent environment reproduction (if performed, with result):
 - UTC reproduction time:
 - Downstream impact (optional, only when useful): <Brief impact and commit-SHA permalink to the relevant test or implementation>
 
