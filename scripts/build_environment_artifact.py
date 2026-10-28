@@ -26,7 +26,10 @@ HAULER_VERSION_COMMAND = (
     "python_resolved = os.path.realpath(sys.executable); "
     "inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); "
     "python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); "
-    "sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)",
+    "result = subprocess.run([resolved, 'version'], check=False, capture_output=True, text=True) if inside and python_inside else None; "
+    "reported = [line.split(':', 1)[1].strip().removeprefix('v') for line in (result.stdout + '\\n' + result.stderr).splitlines() if line.startswith('GitVersion:')] if result else []; "
+    "sys.stdout.write(result.stdout if result else ''); sys.stderr.write(result.stderr if result else ''); "
+    "sys.exit(127 if result is None else result.returncode or (0 if len(sys.argv) == 2 and reported == [sys.argv[1].removeprefix('v')] else 1))",
 )
 
 
@@ -74,7 +77,8 @@ def _stage_copy(source: Path, destination: Path) -> Path:
 
 
 def _platform_name() -> str:
-    machine = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine(), platform.machine())
+    machine = platform.machine().lower()
+    machine = {"x86_64": "amd64", "aarch64": "arm64"}.get(machine, machine)
     return f"{platform.system().lower()}_{machine}"
 
 
@@ -145,6 +149,10 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(f"RCC {EXPECTED_RCC_VERSION} is required; found {version or 'unknown'}")
         rcc_source = _rcc_identity(root, args.rcc)
         hauler_version = _hauler_version(root)
+        hauler_command = (*HAULER_VERSION_COMMAND, hauler_version)
+        jat_sha = _git_sha(root, producer_env, args.timeout)
+        if len(jat_sha) != 40 or any(character not in "0123456789abcdef" for character in jat_sha):
+            raise ValueError("JAT git SHA must be a full lowercase commit digest")
         publish = _json(_run([args.rcc, "env", "publish", "--robot", str(robot), "--provider", "local", "--json"], cwd=root, env=producer_env, timeout=args.timeout))
         artifact = publish["artifactDigest"]
         specification = publish["specificationDigest"]
@@ -175,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
                     "--permissive-local",
                     "--json",
                     "--",
-                    *HAULER_VERSION_COMMAND,
+                    *hauler_command,
                 ],
                 cwd=root,
                 env=verifier_env,
@@ -214,9 +222,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if warm_execution.get("artifactDigest") != artifact or warm_execution.get("exitCode") != 0:
             raise RuntimeError("warm no-build execution with an unreachable provider failed")
-        jat_sha = _git_sha(root, producer_env, args.timeout)
-        if len(jat_sha) != 40 or any(character not in "0123456789abcdef" for character in jat_sha):
-            raise ValueError("JAT git SHA must be a full lowercase commit digest")
+        if _git_sha(root, producer_env, args.timeout) != jat_sha:
+            raise RuntimeError("JAT source checkout changed while building its runtime artifact")
         archive_info = {"filename": output.name, "sha256": _sha256(archive), "size": archive.stat().st_size}
         receipt = {
             "format_version": 3,
@@ -243,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
             "verified_hauler": {
                 "fresh_home": True,
                 "command": ["hauler", "version"],
-                "launcher": list(HAULER_VERSION_COMMAND),
+                "launcher": list(hauler_command),
                 "resolved_under_conda_prefix": True,
                 "exit_code": 0,
             },
@@ -251,9 +258,10 @@ def main(argv: list[str] | None = None) -> int:
         staged_receipt = work / "jat-runtime.json"
         staged_receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
         staged_archive_output = _stage_copy(archive, output)
-        staged_receipt_output = _stage_copy(staged_receipt, receipt_path)
+        staged_receipt_output = None
         archive_promoted = False
         try:
+            staged_receipt_output = _stage_copy(staged_receipt, receipt_path)
             os.link(staged_archive_output, output)
             archive_promoted = True
             os.link(staged_receipt_output, receipt_path)
@@ -263,7 +271,8 @@ def main(argv: list[str] | None = None) -> int:
             raise
         finally:
             staged_archive_output.unlink(missing_ok=True)
-            staged_receipt_output.unlink(missing_ok=True)
+            if staged_receipt_output is not None:
+                staged_receipt_output.unlink(missing_ok=True)
     print(json.dumps(receipt, sort_keys=True))
     return 0
 

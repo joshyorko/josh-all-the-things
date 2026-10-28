@@ -34,9 +34,11 @@ case "$platform" in
   *) printf 'Unsupported JAT artifact platform: %s\n' "$platform" >&2; exit 2;;
 esac
 archive_filename=$(basename -- "$archive")
+receipt_filename=$(basename -- "$receipt")
+[[ $archive_filename != "$receipt_filename" ]] || { printf 'Archive and receipt filenames must differ.\n' >&2; exit 2; }
 hauler_launcher=$(jq -er '
   .properties.verified_hauler.properties.launcher.const
-  | select(type == "array" and length == 3 and .[0] == "python" and .[1] == "-c" and (.[2] | type == "string"))
+  | select(type == "array" and length == 4 and .[0] == "python" and .[1] == "-c" and (.[2] | type == "string"))
   | .[2]
 ' "$schema")
 jq -e --arg hauler_launcher "$hauler_launcher" \
@@ -54,7 +56,7 @@ jq -e --arg hauler_launcher "$hauler_launcher" \
   .verified_exec.fresh_home == true and
   .verified_warm_reuse.fresh_home == true and .verified_warm_reuse.no_build == true and .verified_warm_reuse.provider_unavailable == true and
   .verified_hauler.fresh_home == true and .verified_hauler.command == ["hauler", "version"] and
-  .verified_hauler.launcher == ["python", "-c", $hauler_launcher] and
+  .verified_hauler.launcher == ["python", "-c", $hauler_launcher, $expected_hauler_version] and
   .verified_hauler.resolved_under_conda_prefix == true and .verified_hauler.exit_code == 0 and
   (.artifact_digest | test("^sha256:[0-9a-f]{64}$")) and
   (.specification_digest | test("^sha256:[0-9a-f]{64}$")) and
@@ -68,9 +70,13 @@ artifact=$(jq -r .artifact_digest "$receipt")
 # Push one platform-specific immutable carrier tag; artifact identity is unchanged.
 reference="$repository:$(jq -r .platform "$receipt")-${artifact#sha256:}"
 printf '%s' "$GITHUB_TOKEN" | oras login ghcr.io --username "$username" --password-stdin
-(cd "$(dirname "$archive")" && oras push "$reference" --artifact-type application/vnd.joshyorko.rcc-environment-artifact.v2 \
-  "$(basename "$archive"):application/vnd.joshyorko.rcc-environment-artifact.v2+rcca" \
-  "$(basename "$receipt"):application/vnd.joshyorko.rcc-environment-artifact-receipt.v3+json")
+publish_directory=$(mktemp -d)
+trap 'rm -rf -- "$publish_directory"' EXIT
+cp -- "$archive" "$publish_directory/$archive_filename"
+cp -- "$receipt" "$publish_directory/$receipt_filename"
+(cd "$publish_directory" && oras push "$reference" --artifact-type application/vnd.joshyorko.rcc-environment-artifact.v2 \
+  "$archive_filename:application/vnd.joshyorko.rcc-environment-artifact.v2+rcca" \
+  "$receipt_filename:application/vnd.joshyorko.rcc-environment-artifact-receipt.v3+json")
 digest=$(oras manifest fetch --descriptor "$reference" | jq -r .digest)
 [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'Registry did not return a valid manifest digest.\n' >&2; exit 2; }
 printf '%s@%s\n' "$repository" "$digest"

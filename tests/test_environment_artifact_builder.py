@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -9,7 +10,7 @@ from pathlib import Path
 import pytest
 from jsonschema import validate
 
-from scripts.build_environment_artifact import HAULER_VERSION_COMMAND, RCC_SOURCE, _stage_copy, build_parser, main
+from scripts.build_environment_artifact import HAULER_VERSION_COMMAND, RCC_SOURCE, _platform_name, _rcc_identity, _stage_copy, build_parser, main
 
 
 HAULER_VERSION_CHECK = (
@@ -19,18 +20,25 @@ HAULER_VERSION_CHECK = (
     "python_resolved = os.path.realpath(sys.executable); "
     "inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); "
     "python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); "
-    "sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
+    "result = subprocess.run([resolved, 'version'], check=False, capture_output=True, text=True) if inside and python_inside else None; "
+    "reported = [line.split(':', 1)[1].strip().removeprefix('v') for line in (result.stdout + '\\n' + result.stderr).splitlines() if line.startswith('GitVersion:')] if result else []; "
+    "sys.stdout.write(result.stdout if result else ''); sys.stderr.write(result.stderr if result else ''); "
+    "sys.exit(127 if result is None else result.returncode or (0 if len(sys.argv) == 2 and reported == [sys.argv[1].removeprefix('v')] else 1))"
 )
 
 
 def write_fake_rcc(path: Path, log: Path) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, os, pathlib, sys\n"
+        "import json, os, pathlib, subprocess, sys\n"
         f"log = pathlib.Path({str(log)!r})\n"
         "log.open('a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
         "args = sys.argv[1:]\n"
         "if args[:2] == ['env', 'publish']:\n"
+        "    if os.environ.get('JAT_FAKE_RCC_SOURCE_HEAD'):\n"
+        "        subprocess.run(['git', 'checkout', '--quiet', os.environ['JAT_FAKE_RCC_SOURCE_HEAD']], check=True)\n"
+        "    if os.environ.get('JAT_FAKE_RCC_DIRTY_SOURCE'):\n"
+        "        pathlib.Path('robot.yaml').write_text('tasks: {changed: {}}\\n')\n"
         "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'specificationDigest': 'sha256:' + 'b' * 64, 'legacyBlueprintKey': 'c' * 16}))\n"
         "elif args[:2] == ['env', 'export']:\n"
         "    pathlib.Path(args[args.index('--output') + 1]).write_bytes(b'RCCA')\n"
@@ -42,6 +50,8 @@ def write_fake_rcc(path: Path, log: Path) -> None:
         "elif args[:2] == ['env', 'exec'] or args[:3] == ['--no-build', 'env', 'exec']:\n"
         "    command = args[args.index('--') + 1:]\n"
         "    exit_code = 127 if command == ['hauler', 'version'] else 0\n"
+        "    if os.environ.get('JAT_FAKE_RCC_RUN_HAULER_PROOF') and command[:2] == ['python', '-c'] and \"shutil.which('hauler')\" in command[2]:\n"
+        "        exit_code = subprocess.run(command, check=False, capture_output=True).returncode\n"
         "    print(json.dumps({'artifactDigest': 'sha256:' + 'a' * 64, 'exitCode': exit_code}))\n"
         "elif args == ['version']:\n"
         "    print(os.environ.get('JAT_FAKE_RCC_VERSION', 'v18.19.7'))\n"
@@ -61,6 +71,10 @@ def write_fake_oras(path: Path, log: Path) -> None:
         "        raise SystemExit(3)\n"
         "elif args[:2] == ['manifest', 'fetch']:\n"
         "    print(json.dumps({'digest': 'sha256:' + 'd' * 64}))\n"
+        "elif args[:1] == ['push']:\n"
+        "    for item in args[4:]:\n"
+        "        pathlib.Path(item.split(':application/', 1)[0]).read_bytes()\n"
+        "    pathlib.Path(str(log) + '.receipt').write_bytes(pathlib.Path(args[-1].split(':application/', 1)[0]).read_bytes())\n"
     )
     path.chmod(0o755)
 
@@ -103,6 +117,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "python",
         "-c",
         HAULER_VERSION_CHECK,
+        "v2.1.1",
     ]
     assert calls[7][:3] == ["--no-build", "env", "exec"]
 
@@ -132,7 +147,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "verified_hauler": {
             "fresh_home": True,
             "command": ["hauler", "version"],
-            "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+            "launcher": ["python", "-c", HAULER_VERSION_CHECK, "v2.1.1"],
             "resolved_under_conda_prefix": True,
             "exit_code": 0,
         },
@@ -164,6 +179,61 @@ def test_hauler_proof_rejects_host_python_even_when_hauler_is_under_prefix(tmp_p
     assert not marker.exists()
 
 
+@pytest.fixture
+def prefix_local_hauler(tmp_path, monkeypatch):
+    prefix = tmp_path / "prefix"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", "--copies", str(prefix)], check=True)
+    bin_directory = prefix / "bin"
+    monkeypatch.setenv("CONDA_PREFIX", str(prefix))
+    monkeypatch.setenv("PATH", str(bin_directory) + os.pathsep + os.environ["PATH"])
+    hauler = bin_directory / "hauler"
+    hauler.write_text("#!/bin/sh\nprintf 'GitVersion:    2.1.1\\n'\n")
+    hauler.chmod(0o755)
+    return bin_directory / "python", hauler
+
+
+@pytest.mark.parametrize("reported,expected_exit", [
+    ("2.1.1", 0), ("v2.1.1", 0), ("2.1.10", 1), ("2.1.0", 1), ("unknown", 1),
+])
+def test_prefix_local_hauler_proof_compares_exact_release(prefix_local_hauler, reported, expected_exit):
+    python, hauler = prefix_local_hauler
+    hauler.write_text(f"#!/bin/sh\nprintf 'GitVersion:    {reported}\\n'\n")
+    result = subprocess.run([str(python), *HAULER_VERSION_COMMAND[1:], "v2.1.1"], capture_output=True, text=True, check=False)
+    assert result.returncode == expected_exit
+
+
+@pytest.mark.parametrize("probe_index", [0, 1, 2])
+@pytest.mark.parametrize("reported,expected_exit", [("2.1.1", 0), ("2.1.10", 1)])
+def test_workflow_hauler_probes_compare_exact_release(prefix_local_hauler, probe_index, reported, expected_exit):
+    python, hauler = prefix_local_hauler
+    hauler.write_text(f"#!/bin/sh\nprintf 'GitVersion:    {reported}\\n'\n")
+    workflow = (Path(__file__).parents[1] / ".github/workflows/windows-runtime.yml").read_text()
+    probes = re.findall(r'(?:\$haulerVersionCode = |hauler_probe=)"([^"]+)"', workflow)
+    result = subprocess.run([str(python), "-c", probes[probe_index], "v2.1.1"], capture_output=True, text=True, check=False)
+    assert result.returncode == expected_exit
+
+
+def test_builder_rejects_prefix_local_hauler_release_mismatch(tmp_path, monkeypatch, prefix_local_hauler):
+    _, hauler = prefix_local_hauler
+    hauler.write_text("#!/bin/sh\nprintf 'GitVersion:    2.1.0\\n'\n")
+    robot = tmp_path / "robot.yaml"
+    robot.write_text("tasks: {}\n")
+    rcc = tmp_path / "rcc"
+    write_fake_rcc(rcc, tmp_path / "rcc.log")
+    monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: RCC_SOURCE)
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    monkeypatch.setattr("scripts.build_environment_artifact._git_sha", lambda root, env, timeout: "d" * 40)
+    monkeypatch.setenv("JAT_FAKE_RCC_RUN_HAULER_PROOF", "1")
+    output = tmp_path / "runtime.rcca"
+    receipt = tmp_path / "runtime.json"
+
+    with pytest.raises(RuntimeError, match="Hauler version execution proof failed"):
+        main(["--robot", str(robot), "--rcc", str(rcc), "--output", str(output), "--receipt", str(receipt)])
+
+    assert not output.exists()
+    assert not receipt.exists()
+
+
 def test_builder_defaults_to_rcc_and_does_not_export_to_final_output(tmp_path, monkeypatch):
     assert build_parser().parse_args([]).rcc == "rcc"
 
@@ -187,6 +257,104 @@ def test_create_only_promotion_stages_on_destination_filesystem(tmp_path, monkey
         staged.unlink(missing_ok=True)
 
     assert destination.read_bytes() == b"artifact"
+
+
+def test_receipt_staging_failure_removes_staged_archive(tmp_path, monkeypatch):
+    robot = tmp_path / "robot.yaml"
+    robot.write_text("tasks: {}\n")
+    rcc = tmp_path / "rcc"
+    write_fake_rcc(rcc, tmp_path / "rcc.log")
+    monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: RCC_SOURCE)
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    monkeypatch.setattr("scripts.build_environment_artifact._git_sha", lambda root, env, timeout: "d" * 40)
+    output = tmp_path / "dist" / "jat-runtime.rcca"
+    blocked_parent = tmp_path / "blocked-parent"
+    blocked_parent.write_bytes(b"not a directory")
+    receipt = blocked_parent / "jat-runtime.json"
+
+    with pytest.raises(FileExistsError):
+        main(["--robot", str(robot), "--rcc", str(rcc), "--output", str(output), "--receipt", str(receipt)])
+
+    assert not output.exists()
+    assert not receipt.exists()
+    assert list(output.parent.iterdir()) == []
+
+
+@pytest.mark.parametrize("system,machine,expected", [
+    ("Windows", "AMD64", "windows_amd64"),
+    ("Linux", "x86_64", "linux_amd64"),
+    ("Linux", "aarch64", "linux_arm64"),
+])
+def test_platform_architecture_names_are_normalized(system, machine, expected, monkeypatch):
+    monkeypatch.setattr("scripts.build_environment_artifact.platform.system", lambda: system)
+    monkeypatch.setattr("scripts.build_environment_artifact.platform.machine", lambda: machine)
+    assert _platform_name() == expected
+
+
+def test_simulated_windows_amd64_selects_pinned_rcc(tmp_path, monkeypatch):
+    root = Path(__file__).parents[1]
+    manifest = json.loads((root / "runtime/rcc.json").read_text())
+    executable = tmp_path / "rcc.exe"
+    executable.write_bytes(b"controlled Windows binary stand-in")
+    monkeypatch.setattr("scripts.build_environment_artifact.platform.system", lambda: "Windows")
+    monkeypatch.setattr("scripts.build_environment_artifact.platform.machine", lambda: "AMD64")
+    monkeypatch.setattr("scripts.build_environment_artifact.shutil.which", lambda name: str(executable))
+    monkeypatch.setattr("scripts.build_environment_artifact._sha256", lambda path: manifest["platforms"]["windows_amd64"]["sha256"])
+
+    assert _rcc_identity(root, str(executable)) == {
+        **RCC_SOURCE,
+        "asset": "rcc-windows64.exe",
+        "sha256": manifest["platforms"]["windows_amd64"]["sha256"],
+    }
+
+
+@pytest.fixture
+def committed_builder_source(tmp_path, monkeypatch):
+    root = tmp_path / "source"
+    root.mkdir()
+    robot = root / "robot.yaml"
+    robot.write_text("tasks: {}\n")
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "robot.yaml"], check=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=JAT test", "-c", "user.email=jat@example.invalid", "commit", "--quiet", "-m", "source A"], check=True)
+    rcc = tmp_path / "rcc"
+    log = tmp_path / "rcc.log"
+    write_fake_rcc(rcc, log)
+    monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: RCC_SOURCE)
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    return root, robot, rcc, log
+
+
+@pytest.mark.parametrize("change", ["head", "dirty"])
+def test_builder_rejects_source_changes_during_construction(tmp_path, monkeypatch, committed_builder_source, change):
+    root, robot, rcc, _ = committed_builder_source
+    if change == "head":
+        original = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        robot.write_text("tasks: {changed: {}}\n")
+        subprocess.run(["git", "-C", str(root), "-c", "user.name=JAT test", "-c", "user.email=jat@example.invalid", "commit", "--quiet", "-am", "source B"], check=True)
+        changed = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        subprocess.run(["git", "-C", str(root), "checkout", "--quiet", original], check=True)
+        monkeypatch.setenv("JAT_FAKE_RCC_SOURCE_HEAD", changed)
+    else:
+        monkeypatch.setenv("JAT_FAKE_RCC_DIRTY_SOURCE", "1")
+    output = tmp_path / "dist" / "runtime.rcca"
+    receipt = tmp_path / "dist" / "runtime.json"
+
+    with pytest.raises(RuntimeError, match="source checkout"):
+        main(["--robot", str(robot), "--rcc", str(rcc), "--output", str(output), "--receipt", str(receipt)])
+
+    assert not output.exists()
+    assert not receipt.exists()
+
+
+def test_builder_rejects_dirty_source_before_publish(tmp_path, committed_builder_source):
+    _, robot, rcc, log = committed_builder_source
+    robot.write_text("tasks: {uncommitted: {}}\n")
+
+    with pytest.raises(RuntimeError, match="source checkout must be clean"):
+        main(["--robot", str(robot), "--rcc", str(rcc), "--output", str(tmp_path / "runtime.rcca"), "--receipt", str(tmp_path / "runtime.json")])
+
+    assert not any(call[:2] == ["env", "publish"] for call in map(json.loads, log.read_text().splitlines()))
 
 
 def test_builder_rejects_unsupported_rcc_before_publish(tmp_path, monkeypatch):
@@ -243,7 +411,8 @@ def test_builder_rejects_existing_outputs(tmp_path):
         raise AssertionError("existing output was accepted")
 
 
-def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tmp_path):
+@pytest.mark.parametrize("receipt_location", ["same", "separate", "conflict", "same_filename"])
+def test_publish_wrapper_validates_selected_structured_receipt(tmp_path, receipt_location):
     root = Path(__file__).parents[1]
     if shutil.which("jq") is None:
         pytest.fail("jq is required to exercise the publication wrapper")
@@ -252,6 +421,13 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
     archive_bytes = b"schema-valid RCCA archive"
     archive.write_bytes(archive_bytes)
     receipt = tmp_path / "jat-runtime.json"
+    if receipt_location != "same":
+        receipt = tmp_path / "receipts" / receipt.name
+        receipt.parent.mkdir()
+    if receipt_location == "same_filename":
+        receipt = receipt.with_name(archive.name)
+    if receipt_location == "conflict":
+        (archive.parent / receipt.name).write_bytes(b"unvalidated receipt namesake")
     receipt.write_text(
         json.dumps(
             {
@@ -279,7 +455,7 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
                 "verified_hauler": {
                     "fresh_home": True,
                     "command": ["hauler", "version"],
-                    "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+                    "launcher": ["python", "-c", HAULER_VERSION_CHECK, "v2.1.1"],
                     "resolved_under_conda_prefix": True,
                     "exit_code": 0,
                 },
@@ -319,11 +495,17 @@ def test_publish_wrapper_accepts_schema_valid_structured_verification_receipt(tm
         check=False,
     )
 
+    if receipt_location == "same_filename":
+        assert result.returncode != 0
+        assert not oras_log.exists(), "colliding carrier filenames reached ORAS"
+        return
+
     assert result.returncode == 0, (
         "wrapper rejected a schema-valid structured receipt before ORAS: "
         f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
     assert result.stdout.strip() == "ghcr.io/example/jat-runtime@sha256:" + "d" * 64
+    assert Path(str(oras_log) + ".receipt").read_bytes() == receipt.read_bytes()
     assert [json.loads(line) for line in oras_log.read_text().splitlines()] == [
         ["login", "ghcr.io", "--username", "fake-user", "--password-stdin"],
         [
@@ -443,7 +625,7 @@ def test_publish_wrapper_accepts_windows_archive_and_keeps_platform_tag(tmp_path
         "verified_hauler": {
             "fresh_home": True,
             "command": ["hauler", "version"],
-            "launcher": ["python", "-c", HAULER_VERSION_CHECK],
+            "launcher": ["python", "-c", HAULER_VERSION_CHECK, "v2.1.1"],
             "resolved_under_conda_prefix": True,
             "exit_code": 0,
         },
