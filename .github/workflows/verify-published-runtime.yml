@@ -9,7 +9,7 @@ on:
         type: string
       release_tag:
         description: Existing immutable runtime release to verify, never publish
-        default: v0.1.13-jat-runtime
+        default: v0.1.15-jat-runtime
         required: true
         type: string
   workflow_call:
@@ -62,6 +62,21 @@ jobs:
     needs: validate-release
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout trusted verifier code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.JAT_VERIFIER_CODE_SHA }}
+          persist-credentials: false
+
+      - name: Stage trusted receipt and runtime validators
+        shell: python
+        run: |
+          import os, pathlib, shutil, subprocess, sys
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          for name in ("validate_runtime_receipt.py", "verify_hauler_runtime.py", "runtime-verifier-requirements.txt"):
+              shutil.copyfile(pathlib.Path("scripts") / name, root / name)
+          subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--target", str(root / "jat-receipt-tools"), "--requirement", str(root / "runtime-verifier-requirements.txt")], check=True)
+
       - name: Checkout the exact merged JAT source
         uses: actions/checkout@v4
         with:
@@ -79,23 +94,21 @@ jobs:
             --pattern jat-runtime-linux-amd64.json \
             --dir "$RUNNER_TEMP/jat-runtime-linux"
 
+      - name: Validate the complete Linux producer receipt
+        env:
+          PYTHONPATH: ${{ runner.temp }}/jat-receipt-tools
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/validate_runtime_receipt.py" \
+            --source-root "$GITHUB_WORKSPACE" --source-sha "$JAT_RELEASE_SOURCE_SHA" --platform linux_amd64 \
+            --archive "$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.rcca" \
+            --receipt "$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.json"
+
       - name: Verify fresh Linux acquire, no-build, Hauler, and real JAT tasks
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.rcca"
           receipt="$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.json"
-          python3 - "$archive" "$receipt" "$JAT_RELEASE_SOURCE_SHA" <<'PY'
-          import hashlib, json, pathlib, sys
-          archive, receipt, source_sha = pathlib.Path(sys.argv[1]), json.loads(pathlib.Path(sys.argv[2]).read_text()), sys.argv[3]
-          assert receipt["jat_git_sha"] == source_sha
-          assert receipt["hauler_version"] == "v2.1.1"
-          manifest = json.loads(pathlib.Path("runtime/rcc.json").read_text())
-          assert receipt["platform"] == "linux_amd64"
-          assert receipt["rcc_version"] == manifest["version"]
-          assert receipt["rcc_source"]["commit"] == manifest["source"]["commit"]
-          assert hashlib.sha256(archive.read_bytes()).hexdigest() == receipt["archive"]["sha256"]
-          assert archive.stat().st_size == receipt["archive"]["size"]
-          PY
           mapfile -t pin < <(python3 -c 'import json; p=json.load(open("runtime/rcc.json")); x=p["platforms"]["linux_amd64"]; print(p["version"]); print(x["url"]); print(x["sha256"])')
           rcc="$RUNNER_TEMP/rcc"
           curl --fail --location --silent --show-error --retry 3 "${pin[1]}" --output "$rcc"
@@ -112,8 +125,8 @@ jobs:
           assert acquired["artifactDigest"] == sys.argv[2] and acquired["verification"]["valid"] is True
           PY
           "$rcc" --no-build ht vars --robot "$PWD/robot.yaml" --json > "$RUNNER_TEMP/linux-release-vars.json"
-          hauler_probe="import os,shutil,subprocess,sys; e=shutil.which('hauler'); p=os.path.realpath(os.environ['CONDA_PREFIX']); r=os.path.realpath(e) if e else ''; result=subprocess.run([r,'version'],check=False,capture_output=True,text=True) if r.startswith(p+os.sep) else None; sys.exit(127 if result is None else (result.returncode if '2.1.1' in result.stdout else 1))"
-          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --json -- python -c "$hauler_probe" > "$RUNNER_TEMP/linux-release-hauler.json"
+          expected_hauler=$(python3 -c 'import json; print(json.load(open("runtime/hauler.json"))["hauler"]["version"])')
+          "$rcc" --no-build env exec --artifact "$artifact" --permissive-local --json -- python "$RUNNER_TEMP/verify_hauler_runtime.py" --expected-version "$expected_hauler" > "$RUNNER_TEMP/linux-release-hauler.json"
           python3 - "$RUNNER_TEMP/linux-release-hauler.json" "$artifact" <<'PY'
           import json, sys
           execution = json.load(open(sys.argv[1]))
@@ -174,6 +187,21 @@ jobs:
       run:
         shell: pwsh
     steps:
+      - name: Checkout trusted verifier code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.JAT_VERIFIER_CODE_SHA }}
+          persist-credentials: false
+
+      - name: Stage trusted receipt and runtime validators
+        shell: python
+        run: |
+          import os, pathlib, shutil, subprocess, sys
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          for name in ("validate_runtime_receipt.py", "verify_hauler_runtime.py", "runtime-verifier-requirements.txt"):
+              shutil.copyfile(pathlib.Path("scripts") / name, root / name)
+          subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--target", str(root / "jat-receipt-tools"), "--requirement", str(root / "runtime-verifier-requirements.txt")], check=True)
+
       - name: Checkout the exact merged JAT source
         uses: actions/checkout@v4
         with:
@@ -190,15 +218,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "could not download published Windows runtime assets" }
           "RELEASE_DIR=$releaseDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Validate the complete Windows producer receipt
+        env:
+          PYTHONPATH: ${{ runner.temp }}/jat-receipt-tools
+        run: |
+          python "$env:RUNNER_TEMP/validate_runtime_receipt.py" --source-root "$env:GITHUB_WORKSPACE" --source-sha "$env:JAT_RELEASE_SOURCE_SHA" --platform windows_amd64 --archive "$env:RELEASE_DIR/jat-runtime-windows-amd64.rcca" --receipt "$env:RELEASE_DIR/jat-runtime-windows-amd64.json"
+          if ($LASTEXITCODE -ne 0) { throw "Windows producer receipt validation failed" }
+
       - name: Verify fresh Windows acquire, no-build, Hauler, and real JAT tasks
         run: |
           $archive = Join-Path $env:RELEASE_DIR "jat-runtime-windows-amd64.rcca"
           $receiptPath = Join-Path $env:RELEASE_DIR "jat-runtime-windows-amd64.json"
           $receipt = Get-Content -Raw -LiteralPath $receiptPath | ConvertFrom-Json
-          if ($receipt.jat_git_sha -cne $env:JAT_RELEASE_SOURCE_SHA -or $receipt.hauler_version -cne "v2.1.1") { throw "Windows receipt source or Hauler version mismatch" }
-          $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
-          $size = (Get-Item -LiteralPath $archive).Length
-          if ($sha -cne $receipt.archive.sha256 -or $size -ne $receipt.archive.size) { throw "downloaded Windows archive does not match its receipt" }
           $manifest = Get-Content -Raw -LiteralPath (Join-Path $PWD "runtime/rcc.json") | ConvertFrom-Json
           $pin = $manifest.platforms.windows_amd64
           $rcc = Join-Path $env:RUNNER_TEMP "release-rcc.exe"
@@ -232,9 +263,9 @@ jobs:
           & $rcc --no-build env exec --artifact $artifact --permissive-local --inherit-streams --receipt-file $haulerReceipt -- cmd.exe /d /c hauler.exe version 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler.exe.log")
           if ($LASTEXITCODE -ne 0) { throw "Windows release hauler.exe proof failed" }
           Assert-ExecutionReceipt $haulerReceipt
-          $haulerCode = "import os,shutil,subprocess,sys; e=shutil.which('hauler'); p=os.path.realpath(os.environ['CONDA_PREFIX']); r=os.path.realpath(e) if e else ''; result=subprocess.run([r,'version'],check=False,capture_output=True,text=True) if r.startswith(p+os.sep) else None; sys.exit(127 if result is None else (result.returncode if '2.1.1' in result.stdout else 1))"
+          $expectedHauler = (Get-Content -Raw runtime/hauler.json | ConvertFrom-Json).hauler.version
           $haulerPythonReceipt = Join-Path $env:RUNNER_TEMP "release-windows-haulerPython-receipt.json"
-          & $rcc --no-build env exec --artifact $artifact --permissive-local --inherit-streams --receipt-file $haulerPythonReceipt -- python -c $haulerCode 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler-python.log")
+          & $rcc --no-build env exec --artifact $artifact --permissive-local --inherit-streams --receipt-file $haulerPythonReceipt -- python "$env:RUNNER_TEMP/verify_hauler_runtime.py" --expected-version $expectedHauler 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler-python.log")
           if ($LASTEXITCODE -ne 0) { throw "Windows release environment-owned Hauler proof failed" }
           Assert-ExecutionReceipt $haulerPythonReceipt
           $doctorReceipt = Join-Path $env:RUNNER_TEMP "release-windows-doctor-receipt.json"

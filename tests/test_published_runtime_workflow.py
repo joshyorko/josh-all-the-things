@@ -21,7 +21,7 @@ def test_published_verifier_has_no_publication_dependency_or_write_permissions()
         assert forbidden not in workflow
     assert 'needs: validate-release' in workflow
     assert 'JAT_RELEASE_TAG: ${{ inputs.release_tag }}' in workflow
-    assert 'default: v0.1.13-jat-runtime' in workflow
+    assert 'default: v0.1.15-jat-runtime' in workflow
     assert 'JAT_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}' in workflow
     assert 'JAT_VERIFIER_CODE_SHA: ${{ github.workflow_sha }}' in workflow
     assert 'release["immutable"] is True' in workflow
@@ -61,13 +61,25 @@ def test_windows_exec_keeps_raw_child_stdout_separate_from_validated_receipts():
 def test_verifier_retains_runtime_integrity_and_real_operation_gates():
     workflow = verifier()
     for required in (
-        'receipt["archive"]["sha256"]', 'receipt["archive"]["size"]',
-        '$receipt.archive.sha256', '$receipt.archive.size',
+        'validate_runtime_receipt.py', '--archive', '--receipt', '--source-sha', '--platform',
         '$acquired.artifactDigest -ne $receipt.artifact_digest',
         '$acquired.verification.valid -ne $true',
         '$runtimeVariables.conda_prefix', 'hauler.exe version',
-        'r.startswith(p+os.sep)', 'doctor --json', 'build --folder',
+        'verify_hauler_runtime.py', 'doctor --json', 'build --folder',
         'restore --haul', '"jat.cli", "serve"',
         'joshs-all-the-things-workspace.tar.zst',
     ):
         assert required in workflow
+
+
+def test_receipt_validation_uses_trusted_tools_and_release_source_before_acquire():
+    workflow = verifier()
+    assert workflow.count('ref: ${{ env.JAT_VERIFIER_CODE_SHA }}') == 2
+    assert workflow.count('shell: python') == 2
+    assert workflow.count('runtime-verifier-requirements.txt') >= 2
+    for platform, job in [('Linux', 'verify-published-linux'), ('Windows', 'verify-published-windows')]:
+        body = workflow.split('  '+job+':', 1)[1]
+        assert body.index('Stage trusted receipt and runtime validators') < body.index('ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}')
+        assert body.index('Validate the complete '+platform+' producer receipt') < body.index('env acquire')
+        assert '--source-root' in body and '--source-sha' in body
+        assert 'PYTHONPATH: ${{ runner.temp }}/jat-receipt-tools' in body
