@@ -15,6 +15,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -122,6 +123,17 @@ def _version_matches(target: Path, version: str) -> bool:
     ) is not None
 
 
+def _promote_executable(source: Path, destination: Path, *, windows: bool) -> None:
+    for attempt in range(6):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError as error:
+            if not windows or getattr(error, "winerror", None) not in (32, 33) or attempt == 5:
+                raise
+            time.sleep(0.1 * 2 ** attempt)
+
+
 def install(
     manifest_path: Path,
     conda_prefix: Path,
@@ -158,7 +170,7 @@ def install(
         staged_target.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
         if not _version_matches(staged_target, version):
             raise ValueError(f"staged Hauler failed the pinned version check: {staged_target}")
-        os.replace(staged_target, target)
+        _promote_executable(staged_target, target, windows=windows)
         return target
     finally:
         shutil.rmtree(stage_directory, ignore_errors=True)

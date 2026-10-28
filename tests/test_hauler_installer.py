@@ -251,6 +251,48 @@ def test_wrong_downloaded_version_is_not_promoted_and_corrected_retry_succeeds(t
     assert target.read_bytes() == b"test-hauler\nGitVersion:    v2.1.1\n"
 
 
+@pytest.mark.parametrize("winerror", [32, 33])
+def test_windows_promotion_retries_sharing_violation(tmp_path, simulated_hauler_process, monkeypatch, winerror):
+    payload = _archive(tmp_path / "archive.tar.gz", executable="hauler.exe")
+    manifest = _manifest(tmp_path, platform="windows-amd64", asset="hauler.tar.gz", payload=payload)
+    original_replace = os.replace
+    attempts = []
+    delays = []
+
+    def replace(source, destination):
+        attempts.append((source, destination))
+        if len(attempts) == 1:
+            error = PermissionError("synthetic Windows sharing violation")
+            error.winerror = winerror
+            raise error
+        original_replace(source, destination)
+
+    monkeypatch.setattr("scripts.install_hauler.os.replace", replace)
+    monkeypatch.setattr("time.sleep", delays.append)
+    target = install(manifest, tmp_path / "conda", system="Windows", machine="AMD64", download=_download(payload))
+    assert target.read_bytes() == b"test-hauler\nGitVersion:    v2.1.1\n"
+    assert len(attempts) == 2 and delays
+    assert not list((tmp_path / "conda").glob(".hauler-install-*"))
+
+
+@pytest.mark.parametrize("windows,winerror", [(True, 5), (False, 32)])
+def test_promotion_does_not_retry_other_permission_errors(tmp_path, monkeypatch, windows, winerror):
+    from unittest.mock import Mock
+
+    from scripts.install_hauler import _promote_executable
+
+    error = PermissionError("synthetic permission denial")
+    error.winerror = winerror
+    replace = Mock(side_effect=error)
+    sleep = Mock()
+    monkeypatch.setattr("scripts.install_hauler.os.replace", replace)
+    monkeypatch.setattr("scripts.install_hauler.time.sleep", sleep)
+    with pytest.raises(PermissionError):
+        _promote_executable(tmp_path / "source", tmp_path / "target", windows=windows)
+    replace.assert_called_once()
+    sleep.assert_not_called()
+
+
 @pytest.mark.parametrize("descriptor", ["conda.yaml", "environment_linux_amd64_freeze.yaml", "environment_windows_amd64.yaml"])
 def test_rcc_descriptor_pin_matches_canonical_manifest(descriptor, tmp_path, simulated_hauler_process):
     command = (ROOT / descriptor).read_text().split("rccPostInstall:\n", 1)[1].strip().removeprefix("- ")
