@@ -88,11 +88,21 @@ jobs:
           archive_hash="$(sha256sum "$archive" | cut -d ' ' -f1)"
           test_python="$(python -c 'import sys; print(sys.executable)')"
           prefix=()
-          if [[ "$RUNNER_OS" == Linux ]]; then prefix=(sudo -n); fi
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            # Only this checkout is trusted by the root test process; no global Git setting changes.
+            prefix=(sudo -n env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory "GIT_CONFIG_VALUE_0=$PWD")
+          fi
           "${prefix[@]}" "$test_python" scripts/verify_portable_capsule.py \
             --rcc "$candidate" --rcc-sha256 "$candidate_hash" --rcc-source "$RCC_CAPSULE_CANDIDATE_SHA" \
             --archive "$archive" --archive-sha256 "$archive_hash" \
             --work "$RUNNER_TEMP/capsule-qualification" --network '${{ matrix.network }}'
+      - name: Return fixture evidence to the runner
+        if: always() && runner.os == 'Linux'
+        run: |
+          if [[ -d "$RUNNER_TEMP/capsule-qualification" ]]; then
+            # Test-owned tree only; never follow runtime symlinks outside it.
+            sudo chown -hR -- "$(id -u):$(id -g)" "$RUNNER_TEMP/capsule-qualification"
+          fi
       - name: RCC affected native packages
         working-directory: rcc
         env:

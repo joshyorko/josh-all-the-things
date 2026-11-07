@@ -72,6 +72,7 @@ def main(argv=None):
     carrier = work / 'publisher-carrier'
     for directory in (publisher, consumer, operator_home, authority, deployment):
         directory.mkdir(mode=0o700)
+    trusted_source_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     base_env = {key: value for key, value in os.environ.items() if key.upper() in {
         'PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'TMPDIR',
         'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
@@ -80,7 +81,8 @@ def main(argv=None):
 
     def environment(home, source=ROOT):
         result = dict(base_env)
-        result.update(HOME=str(home), USERPROFILE=str(home), ROBOCORP_HOME=str(home / 'rcc'), PYTHONPATH=str(source / 'src'))
+        result.update(HOME=str(home), USERPROFILE=str(home), ROBOCORP_HOME=str(home / 'rcc'), PYTHONPATH=str(source / 'src'),
+                      JAT_RUN_DIR=str(home / 'jat-run'), JAT_GIT_SHA=trusted_source_commit)
         return result
 
     def run(label, command, home=operator_home, source=ROOT, isolated=False, deny=None):
@@ -221,6 +223,7 @@ def main(argv=None):
     assert sha256(unpacked / 'workspace-haul.tar.zst') == content_manifest['workspaceHaulSHA256']
     actual_source = {str(path.relative_to(source)).replace('\\', '/'): sha256(path) for path in source.rglob('*') if path.is_file()}
     assert actual_source == content_manifest['files'], 'transported source bytes must match authenticated manifest before execution'
+    trusted_source_commit = content_manifest['sourceCommit']
     task('offline-doctor', ['python', '-m', 'jat.cli', 'doctor', '--json'], source=source)
     _, observed = task('offline-inspect-content', ['python', '-m', 'jat.cli', 'inspect', '--haul', str(unpacked / 'workspace-haul.tar.zst'), '--json'], source=source)
     content_inventory = json.loads(observed)['inventory']
