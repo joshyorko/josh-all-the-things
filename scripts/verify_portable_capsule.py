@@ -74,7 +74,7 @@ def main(argv=None):
         directory.mkdir(mode=0o700)
     base_env = {key: value for key, value in os.environ.items() if key.upper() in {
         'PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'TMPDIR',
-        'LANG', 'LC_ALL', 'LD_LIBRARY_PATH', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+        'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
     }}
     base_env.update(RCC_HOLOTREE_MODE='private', RCC_AUTOUPDATES_RCC_INDEX='', RCC_AUTOUPDATES_TEMPLATES='', PYTHONDONTWRITEBYTECODE='1')
 
