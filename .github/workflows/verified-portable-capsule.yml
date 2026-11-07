@@ -1,0 +1,113 @@
+name: Verified Portable JAT Capsule candidate
+on:
+  pull_request:
+    paths:
+      - scripts/verify_portable_capsule.py
+      - tests/test_verified_portable_capsule.py
+      - .github/workflows/verified-portable-capsule.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+# Test-only immutable source. This is deliberately not runtime/rcc.json.
+env:
+  RCC_CAPSULE_CANDIDATE_SHA: 10a77c0c8318aaceb485dfb272d48f3009269dae
+jobs:
+  qualify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-amd64
+            legacy_asset: rcc-linux64
+            executable: rcc
+            network: isolated
+          - os: windows-latest
+            platform: windows-amd64
+            legacy_asset: rcc-windows64.exe
+            executable: rcc.exe
+            network: providerless
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          path: jat
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          repository: joshyorko/rcc
+          ref: ${{ env.RCC_CAPSULE_CANDIDATE_SHA }}
+          path: rcc
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version: 1.26.9
+          cache-dependency-path: rcc/go.sum
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.13'
+      - name: Prepare isolated test driver
+        run: python -m pip install invoke==2.2.0 cryptography pytest jsonschema
+      - name: Build exact source candidate
+        working-directory: rcc
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RCC_CAPSULE_CANDIDATE_SHA"
+          python -m invoke assets
+          test -z "$(git status --porcelain --untracked-files=no)"
+          mkdir -p "$RUNNER_TEMP/capsule-evidence"
+          CGO_ENABLED=0 go build -buildvcs=true -o "$RUNNER_TEMP/${{ matrix.executable }}" ./cmd/rcc
+          go version -m "$RUNNER_TEMP/${{ matrix.executable }}" > "$RUNNER_TEMP/capsule-evidence/rcc-buildinfo.txt"
+          python -c "import os,pathlib; s=pathlib.Path(os.environ['RUNNER_TEMP'],'capsule-evidence/rcc-buildinfo.txt').read_text(); assert 'vcs.revision='+os.environ['RCC_CAPSULE_CANDIDATE_SHA'] in s and 'vcs.modified=false' in s"
+      - name: Reuse shipped runtime without rebuilding or repinning
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/shipped-runtime"
+          gh release download v0.1.16-jat-runtime --repo joshyorko/josh-all-the-things \
+            --pattern 'jat-runtime-${{ matrix.platform }}.rcca' --pattern SHA256SUMS \
+            --dir "$RUNNER_TEMP/shipped-runtime"
+          cd "$RUNNER_TEMP/shipped-runtime"
+          sha256sum --ignore-missing --check SHA256SUMS
+          mkdir -p "$RUNNER_TEMP/legacy-rcc"
+          gh release download v18.19.9 --repo joshyorko/rcc --pattern '${{ matrix.legacy_asset }}' --dir "$RUNNER_TEMP/legacy-rcc"
+          cd "$GITHUB_WORKSPACE/jat"
+          python -c "import hashlib,json,os,pathlib; p=json.loads(pathlib.Path('runtime/rcc.json').read_text())['platforms']['${{ matrix.platform }}'.replace('-','_')]; b=pathlib.Path(os.environ['RUNNER_TEMP'],'legacy-rcc',p['asset']); assert hashlib.sha256(b.read_bytes()).hexdigest()==p['sha256']"
+      - name: Prepare Linux offline namespace
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Real signed capsule and retained evidence
+        working-directory: jat
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/${{ matrix.executable }}"
+          archive="$RUNNER_TEMP/shipped-runtime/jat-runtime-${{ matrix.platform }}.rcca"
+          candidate_hash="$(sha256sum "$candidate" | cut -d ' ' -f1)"
+          archive_hash="$(sha256sum "$archive" | cut -d ' ' -f1)"
+          test_python="$(python -c 'import sys; print(sys.executable)')"
+          prefix=()
+          if [[ "$RUNNER_OS" == Linux ]]; then prefix=(sudo -n); fi
+          "${prefix[@]}" "$test_python" scripts/verify_portable_capsule.py \
+            --rcc "$candidate" --rcc-sha256 "$candidate_hash" --rcc-source "$RCC_CAPSULE_CANDIDATE_SHA" \
+            --archive "$archive" --archive-sha256 "$archive_hash" \
+            --work "$RUNNER_TEMP/capsule-qualification" --network '${{ matrix.network }}'
+      - name: RCC affected native packages
+        working-directory: rcc
+        env:
+          RCC_ACCEPTANCE_BINARY: ${{ runner.temp }}/${{ matrix.executable }}
+          RCC_BUNDLE_TEST_ARCHIVE: ${{ runner.temp }}/shipped-runtime/jat-runtime-${{ matrix.platform }}.rcca
+          RCC_INVENTORY_LEGACY_BINARY: ${{ runner.temp }}/legacy-rcc/${{ matrix.legacy_asset }}
+          RCC_INVENTORY_EVIDENCE: ${{ runner.temp }}/capsule-evidence/inventory-migration
+        run: go test ./artifacttrust ./environmentlifecycle ./cmd -count=1
+      - name: Preserve receipts without test private keys
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verified-portable-jat-capsule-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/capsule-evidence/
+            ${{ runner.temp }}/capsule-qualification/receipt.json
+            ${{ runner.temp }}/capsule-qualification/package-observation.json
+            ${{ runner.temp }}/capsule-qualification/logs/
