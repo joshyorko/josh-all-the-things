@@ -64,7 +64,8 @@ def test_verifier_retains_runtime_integrity_and_real_operation_gates():
         'validate_runtime_receipt.py', '--archive', '--receipt', '--source-sha', '--platform',
         '$acquired.artifactDigest -ne $receipt.artifact_digest',
         '$acquired.verification.valid -ne $true',
-        '$runtimeVariables.conda_prefix', 'hauler.exe version',
+        '$runtimeVariables.conda_prefix', '-- $haulerExecutable version',
+        '$haulerExecutable = Join-Path $runtimeVariables.conda_prefix',
         'verify_hauler_runtime.py', 'doctor --json', 'build --folder',
         'restore --haul', 'verify_jat_serve.py',
     ):

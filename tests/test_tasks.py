@@ -133,9 +133,10 @@ def test_linux_source_contract_keeps_archive_tools():
         assert dependency in freeze
 
 
-def test_windows_artifact_proof_uses_cmd_to_resolve_hauler_inside_child_path():
+def test_windows_artifact_proof_resolves_hauler_directly_in_acquired_environment():
     workflow = Path(".github/workflows/windows-runtime.yml").read_text()
-    assert "-- cmd.exe /d /c hauler.exe version" in workflow
+    assert "-- hauler.exe version" in workflow
+    assert "-- cmd.exe" not in workflow
 
 
 def test_windows_local_file_probe_uses_artifact_python_argv():
