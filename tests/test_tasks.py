@@ -133,9 +133,10 @@ def test_linux_source_contract_keeps_archive_tools():
         assert dependency in freeze
 
 
-def test_windows_artifact_proof_uses_cmd_to_resolve_hauler_inside_child_path():
+def test_windows_artifact_proof_resolves_hauler_directly_in_acquired_environment():
     workflow = Path(".github/workflows/windows-runtime.yml").read_text()
-    assert "-- cmd.exe /d /c hauler.exe version" in workflow
+    assert "-- hauler.exe version" in workflow
+    assert "-- cmd.exe" not in workflow
 
 
 def test_windows_local_file_probe_uses_artifact_python_argv():
@@ -172,22 +173,22 @@ def test_rcc_manifest_pins_current_linux_and_windows_assets_without_future_place
     manifest_text = manifest_path.read_text()
     manifest = json.loads(manifest_text)
     assert manifest["schema_version"] == 1
-    assert manifest["version"] == "v18.19.7"
+    assert manifest["version"] == "v18.19.9"
     assert manifest["source"] == {
         "repository": "https://github.com/joshyorko/rcc",
-        "tag": "v18.19.7",
-        "commit": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+        "tag": "v18.19.9",
+        "commit": "1eef8de8bd4b2b01c2f99a5fdfab95ec98f89674",
     }
     assert manifest["platforms"] == {
         "linux_amd64": {
             "asset": "rcc-linux64",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-linux64",
-            "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.9/rcc-linux64",
+            "sha256": "e1b20ca222708981e2e18b81ae6ca1e9d9c17abc2b837779c5fc0d6bd53798b8",
         },
         "windows_amd64": {
             "asset": "rcc-windows64.exe",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-windows64.exe",
-            "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.9/rcc-windows64.exe",
+            "sha256": "0a74ffaf2f7c34be139cdf87101574a1048eb872bc0096510a4f7cce2eef7efc",
         },
     }
     for pin in manifest["platforms"].values():
@@ -216,7 +217,7 @@ def test_runtime_release_dispatch_binds_publication_to_exact_current_main_sha():
     assert "source_sha:" in workflow
     assert "Exact current main commit whose JAT runtimes should be qualified and published" in workflow
     assert "JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}" in workflow
-    assert "JAT_RELEASE_TAG: v0.1.15-jat-runtime" in workflow
+    assert "JAT_RELEASE_TAG: v0.1.16-jat-runtime" in workflow
     assert "reject-non-main-release-dispatch:" in workflow
     assert "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in workflow
     assert 'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' in workflow

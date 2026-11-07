@@ -35,7 +35,7 @@ permissions:
 # Dispatch from main with the exact source SHA; candidate runs on pushes never publish.
 env:
   JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
-  JAT_RELEASE_TAG: v0.1.15-jat-runtime
+  JAT_RELEASE_TAG: v0.1.16-jat-runtime
 
 jobs:
   reject-non-main-release-dispatch:
@@ -162,7 +162,7 @@ jobs:
           & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --inherit-streams --receipt-file $diagnosticReceipt -- python -c "import json,os,shutil; from pathlib import Path; prefix=Path(os.environ['CONDA_PREFIX']); print(json.dumps({'condaPrefix':str(prefix),'scriptsHauler':(prefix/'Scripts'/'hauler.exe').is_file(),'rootHauler':(prefix/'hauler.exe').is_file(),'whichHauler':shutil.which('hauler'),'whichHaulerExe':shutil.which('hauler.exe')}))"
           if ($LASTEXITCODE -ne 0) { Get-Content $diagnosticReceipt; throw "acquired Windows artifact diagnostic command failed" }
           $execPath = Join-Path $env:RUNNER_TEMP "windows-hauler-exec.json"
-          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- cmd.exe /d /c hauler.exe version 1> $execPath 2> (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log")
+          & $env:RCC_PATH --no-build env exec --artifact $env:WINDOWS_ARTIFACT --permissive-local --json -- hauler.exe version 1> $execPath 2> (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log")
           if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:RUNNER_TEMP "windows-hauler-exec.log"); throw "hauler.exe version execution failed" }
           $executed = Get-Content -Raw $execPath | ConvertFrom-Json
           if ($executed.artifactDigest -ne $env:WINDOWS_ARTIFACT -or $executed.exitCode -ne 0) { throw "hauler.exe did not execute from the acquired Windows artifact" }
@@ -824,4 +824,4 @@ jobs:
     uses: ./.github/workflows/verify-published-runtime.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      release_tag: v0.1.15-jat-runtime
+      release_tag: v0.1.16-jat-runtime

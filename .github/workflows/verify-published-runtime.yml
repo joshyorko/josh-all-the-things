@@ -9,7 +9,7 @@ on:
         type: string
       release_tag:
         description: Existing immutable runtime release to verify, never publish
-        default: v0.1.15-jat-runtime
+        default: v0.1.16-jat-runtime
         required: true
         type: string
   workflow_call:
@@ -249,7 +249,8 @@ jobs:
           $runtimeVariables = Get-Content -Raw $variablesPath | ConvertFrom-Json
           if ([string]::IsNullOrWhiteSpace($runtimeVariables.conda_prefix) -or -not $runtimeVariables.python.StartsWith($runtimeVariables.conda_prefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Windows release variables did not come from the acquired artifact" }
           $haulerReceipt = Join-Path $env:RUNNER_TEMP "release-windows-hauler-receipt.json"
-          & $rcc --no-build env exec --artifact $artifact --permissive-local --inherit-streams --receipt-file $haulerReceipt -- cmd.exe /d /c hauler.exe version 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler.exe.log")
+          $haulerExecutable = Join-Path $runtimeVariables.conda_prefix "Scripts/hauler.exe"
+          & $rcc --no-build env exec --artifact $artifact --permissive-local --inherit-streams --receipt-file $haulerReceipt -- $haulerExecutable version 1> (Join-Path $env:RUNNER_TEMP "release-windows-hauler.exe.log")
           if ($LASTEXITCODE -ne 0) { throw "Windows release hauler.exe proof failed" }
           Assert-ExecutionReceipt $haulerReceipt
           $expectedHauler = (Get-Content -Raw runtime/hauler.json | ConvertFrom-Json).hauler.version

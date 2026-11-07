@@ -21,7 +21,7 @@ def test_published_verifier_has_no_publication_dependency_or_write_permissions()
         assert forbidden not in workflow
     assert 'needs: validate-release' in workflow
     assert 'JAT_RELEASE_TAG: ${{ inputs.release_tag }}' in workflow
-    assert 'default: v0.1.15-jat-runtime' in workflow
+    assert 'default: v0.1.16-jat-runtime' in workflow
     assert 'JAT_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}' in workflow
     assert 'JAT_VERIFIER_CODE_SHA: ${{ github.workflow_sha }}' in workflow
     assert 'release["immutable"] is True' in workflow
@@ -64,7 +64,8 @@ def test_verifier_retains_runtime_integrity_and_real_operation_gates():
         'validate_runtime_receipt.py', '--archive', '--receipt', '--source-sha', '--platform',
         '$acquired.artifactDigest -ne $receipt.artifact_digest',
         '$acquired.verification.valid -ne $true',
-        '$runtimeVariables.conda_prefix', 'hauler.exe version',
+        '$runtimeVariables.conda_prefix', '-- $haulerExecutable version',
+        '$haulerExecutable = Join-Path $runtimeVariables.conda_prefix',
         'verify_hauler_runtime.py', 'doctor --json', 'build --folder',
         'restore --haul', 'verify_jat_serve.py',
     ):
