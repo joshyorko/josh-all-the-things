@@ -386,7 +386,7 @@ def test_filtered_capture_requires_included_rcc_robot(tmp_path, saved, exclusion
             archive=archive_input,
             archive_sha256=hashlib.sha256(b"rcca").hexdigest(),
             archive_size=4,
-            rcc_version="v18.19.7",
+            rcc_version="v18.19.9",
             platform="linux_amd64",
             robot=Path("[runtime]/robot.yaml"),
         ).model_dump_json())

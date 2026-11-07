@@ -9,7 +9,7 @@ on:
         type: string
       release_tag:
         description: Existing immutable runtime release to verify, never publish
-        default: v0.1.15-jat-runtime
+        default: v0.1.16-jat-runtime
         required: true
         type: string
   workflow_call:
