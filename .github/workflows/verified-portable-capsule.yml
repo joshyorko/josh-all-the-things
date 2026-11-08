@@ -21,11 +21,13 @@ jobs:
             platform: linux-amd64
             legacy_asset: rcc-linux64
             executable: rcc
+            freeze: environment_linux_amd64_freeze.yaml
             network: isolated
           - os: windows-latest
             platform: windows-amd64
             legacy_asset: rcc-windows64.exe
             executable: rcc.exe
+            freeze: environment_windows_amd64_freeze.yaml
             network: providerless
     runs-on: ${{ matrix.os }}
     defaults:
@@ -67,14 +69,19 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/shipped-runtime"
           gh release download v0.1.16-jat-runtime --repo joshyorko/josh-all-the-things \
-            --pattern 'jat-runtime-${{ matrix.platform }}.rcca' --pattern SHA256SUMS \
+            --pattern 'jat-runtime-${{ matrix.platform }}.rcca' --pattern '${{ matrix.freeze }}' --pattern SHA256SUMS \
             --dir "$RUNNER_TEMP/shipped-runtime"
           cd "$RUNNER_TEMP/shipped-runtime"
           sha256sum --ignore-missing --check SHA256SUMS
+          # The shipped Windows archive uses its released generated freeze, not the unfrozen source contract.
+          python -c "import os,pathlib,shutil; src=pathlib.Path('${{ matrix.freeze }}'); dst=pathlib.Path(os.environ['GITHUB_WORKSPACE'],'jat',src.name); assert not dst.exists() or dst.read_bytes()==src.read_bytes(); shutil.copyfile(src,dst) if not dst.exists() else None"
           mkdir -p "$RUNNER_TEMP/legacy-rcc"
           gh release download v18.19.9 --repo joshyorko/rcc --pattern '${{ matrix.legacy_asset }}' --dir "$RUNNER_TEMP/legacy-rcc"
           cd "$GITHUB_WORKSPACE/jat"
           python -c "import hashlib,json,os,pathlib; p=json.loads(pathlib.Path('runtime/rcc.json').read_text())['platforms']['${{ matrix.platform }}'.replace('-','_')]; b=pathlib.Path(os.environ['RUNNER_TEMP'],'legacy-rcc',p['asset']); assert hashlib.sha256(b.read_bytes()).hexdigest()==p['sha256']"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            chmod +x "$RUNNER_TEMP/legacy-rcc/${{ matrix.legacy_asset }}"
+          fi
       - name: Prepare Linux offline namespace
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
