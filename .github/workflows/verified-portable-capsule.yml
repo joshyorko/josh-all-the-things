@@ -10,7 +10,7 @@ permissions:
   contents: read
 # Test-only immutable source. This is deliberately not runtime/rcc.json.
 env:
-  RCC_CAPSULE_CANDIDATE_SHA: 10a77c0c8318aaceb485dfb272d48f3009269dae
+  RCC_CAPSULE_CANDIDATE_SHA: 72c00808c96296eb4f0b4972c8a4991e6c15dacf
 jobs:
   qualify:
     strategy:
@@ -51,6 +51,9 @@ jobs:
           python-version: '3.13'
       - name: Prepare isolated test driver
         run: python -m pip install invoke==2.2.0 cryptography pytest jsonschema
+      - name: Verify candidate source boundary
+        working-directory: jat
+        run: python -m unittest discover -s tests -p test_verified_portable_capsule.py -v
       - name: Build exact source candidate
         working-directory: rcc
         run: |
