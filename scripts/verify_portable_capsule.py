@@ -33,6 +33,17 @@ def write_json(path, value):
     Path(path).write_text(json.dumps(value, separators=(',', ':'), ensure_ascii=True), encoding='utf-8')
 
 
+
+def republished_specification_digest(specification, builder_version):
+    """RCC includes its version in semantic identity; all other bytes must match."""
+    previous = json.loads(specification)['builder']['rccVersion']
+    token = b'"rccVersion":' + json.dumps(previous).encode('ascii')
+    if specification.count(token) != 1:
+        raise ValueError('expected exactly one canonical RCC builder version')
+    updated = specification.replace(token, b'"rccVersion":' + json.dumps(builder_version).encode('ascii'), 1)
+    return 'sha256:' + hashlib.sha256(updated).hexdigest()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rcc', type=Path, required=True)
@@ -134,7 +145,11 @@ def main(argv=None):
         names = [name for name in original_archive.namelist() if name.endswith('/manifest.json')]
         assert len(names) == 1
         input_manifest = json.loads(original_archive.read(names[0]))
-    assert published['specificationDigest'] == input_manifest['specification']['digest']
+        input_specification_digest = input_manifest['specification']['digest']
+        specification = original_archive.read('rcc-environment/specifications/' + input_specification_digest.removeprefix('sha256:'))
+    assert 'sha256:' + hashlib.sha256(specification).hexdigest() == input_specification_digest
+    builder_version = run('candidate-version', ['version']).stdout.strip()
+    assert published['specificationDigest'] == republished_specification_digest(specification, builder_version)
     assert published['legacyBlueprintKey'] == input_manifest['legacyBlueprint']['legacyBlueprintKey']
     attachment_dir = carrier / 'sha256' / artifact.removeprefix('sha256:')
     issuer = ['--artifact', artifact, '--metadata-trust-roots', deployment / 'metadata-roots.json', '--metadata-state', authority / 'issuer-state',
@@ -330,7 +345,8 @@ def main(argv=None):
     receipt = {'formatVersion': 1, 'operation': 'verified-portable-jat-capsule-acceptance', 'success': True,
                'acceptanceDriverSHA256': sha256(Path(__file__)), 'rccSource': args.rcc_source, 'rccBinarySHA256': args.rcc_sha256, 'inputArchiveSHA256': args.archive_sha256,
                'packageObservationDriverSHA256': sha256(observation_driver), 'consumerBuildSHA256': sha256(rebuilt_haul),
-               'inputArtifactDigest': original['artifactDigest'], 'specificationDigest': published['specificationDigest'],
+               'inputArtifactDigest': original['artifactDigest'], 'inputSpecificationDigest': input_specification_digest,
+               'specificationBuilderVersion': builder_version, 'specificationDigest': published['specificationDigest'],
                'artifactDigest': artifact, 'signedArchiveSHA256': sha256(signed), 'capsuleSHA256': sha256(capsule),
                'jatSource': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                'platform': platform.platform(), 'network': args.network, 'ociManifestDigest': None, 'haulerContentInventory': content_inventory,
