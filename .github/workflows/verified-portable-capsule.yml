@@ -2,6 +2,7 @@ name: Verified Portable JAT Capsule candidate
 on:
   pull_request:
     paths:
+      - runtime/rcc.json
       - scripts/verify_portable_capsule.py
       - scripts/observe_capsule_packages.py
       - tests/test_verified_portable_capsule.py
@@ -11,7 +12,7 @@ permissions:
   contents: read
 # Test-only immutable source. This is deliberately not runtime/rcc.json.
 env:
-  RCC_CAPSULE_CANDIDATE_SHA: 72c00808c96296eb4f0b4972c8a4991e6c15dacf
+  RCC_CAPSULE_CANDIDATE_SHA: cf7a47e7b9430db4abebae68776f65f3e309624e
 jobs:
   qualify:
     strategy:
@@ -20,6 +21,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             platform: linux-amd64
+            legacy_sha256: e1b20ca222708981e2e18b81ae6ca1e9d9c17abc2b837779c5fc0d6bd53798b8
             legacy_asset: rcc-linux64
             n_minus_one_sha256: f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48
             executable: rcc
@@ -27,6 +29,7 @@ jobs:
             network: isolated
           - os: windows-latest
             platform: windows-amd64
+            legacy_sha256: 0a74ffaf2f7c34be139cdf87101574a1048eb872bc0096510a4f7cce2eef7efc
             legacy_asset: rcc-windows64.exe
             n_minus_one_sha256: d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be
             executable: rcc.exe
@@ -84,7 +87,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/legacy-rcc"
           gh release download v18.19.9 --repo joshyorko/rcc --pattern '${{ matrix.legacy_asset }}' --dir "$RUNNER_TEMP/legacy-rcc"
           cd "$GITHUB_WORKSPACE/jat"
-          python -c "import hashlib,json,os,pathlib; p=json.loads(pathlib.Path('runtime/rcc.json').read_text())['platforms']['${{ matrix.platform }}'.replace('-','_')]; b=pathlib.Path(os.environ['RUNNER_TEMP'],'legacy-rcc',p['asset']); assert hashlib.sha256(b.read_bytes()).hexdigest()==p['sha256']"
+          python -c "import hashlib,os,pathlib; b=pathlib.Path(os.environ['RUNNER_TEMP'],'legacy-rcc','${{ matrix.legacy_asset }}'); assert hashlib.sha256(b.read_bytes()).hexdigest()=='${{ matrix.legacy_sha256 }}'"
           if [[ "$RUNNER_OS" == Linux ]]; then
             chmod +x "$RUNNER_TEMP/legacy-rcc/${{ matrix.legacy_asset }}"
           fi
@@ -154,6 +157,7 @@ jobs:
           go test ./environmentlifecycle -run '^Test(Metadata|GeneratedJATClassInventoryFitsAuthenticatedV2)' -count=1
           go test ./cmd -run '^Test(MetadataSecurityRealCLI|ObjectInventoryMigrationRealCLI|RevocationOperatorRealCLI)$' -count=1 -v \
             | tee "$RUNNER_TEMP/capsule-evidence/rcc-native-test-output.txt"
+          grep -F -- '--- PASS: TestObjectInventoryMigrationRealCLI' "$RUNNER_TEMP/capsule-evidence/rcc-native-test-output.txt"
           grep -F -- '--- PASS: TestMetadataSecurityRealCLI/N-minus-one-migration' \
             "$RUNNER_TEMP/capsule-evidence/rcc-native-test-output.txt"
           if grep -F -- '--- SKIP: TestMetadataSecurityRealCLI/N-minus-one-migration' \

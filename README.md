@@ -64,7 +64,7 @@ its RCC-managed runtime; it is not the haul itself.
 ## Build a verified RCC Environment Artifact
 
 Build the canonical JAT runtime artifact with the checksum-pinned Josh RCC
-v18.19.9 release. The builder uses separate producer and fresh-verifier homes,
+v18.19.10 release. The builder uses separate producer and fresh-verifier homes,
 publishes and exports with RCC's Environment Artifact commands, makes the
 producer unavailable, and proves fresh acquire, no-build resolution, env exec,
 and a second warm execution. Its receipt binds the exact JAT commit and RCC
@@ -79,7 +79,7 @@ The Actions workflow builds candidate runtimes on relevant pushes and pull
 requests without publishing them. Publication requires a manual dispatch from
 `main` with the exact current `source_sha`; the workflow checks that both the
 checkout and `origin/main` match that SHA before it publishes. The next runtime
-targets the new immutable `v0.1.16-jat-runtime` tag; the published `v0.1.15-jat-runtime`
+targets the new immutable `v0.1.17-jat-runtime` tag; the published `v0.1.16-jat-runtime`
 release remains unchanged.
 
 ```bash
