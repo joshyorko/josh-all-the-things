@@ -8,7 +8,10 @@ The fixture reuses the checksum-verified, already shipped JAT runtime `.rcca`.
 Only the disposable publisher imports and runs that existing unsigned runtime
 with an explicit local policy to prepare the synthetic content. It publishes the imported runtime through `--no-build env publish`,
 issues a complete v2 snapshot with RCC's operator CLI, and exports selected signed
-attachments with RCC's archive CLI. The environment specification and legacy blueprint must remain identical.
+attachments with RCC's archive CLI. The legacy blueprint must remain identical. RCC includes its builder version in
+the specification digest, so only that version field may change during republish.
+Every other specification byte must match the input archive; both digests and
+the candidate builder version are retained in the receipt.
 Publishing the consumer-derived catalog can change the Artifact digest, so both
 input and candidate identities are recorded. Renewal and revocation must retain
 the signed candidate's Artifact digest. No environment rebuild, public artifact

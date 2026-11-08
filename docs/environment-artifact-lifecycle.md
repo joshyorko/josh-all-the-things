@@ -3,8 +3,8 @@
 ## Current RCC contract
 
 The newest stable Josh fork release checked on 2026-11-07 is
-`joshyorko/rcc` v18.19.9 at
-[`1eef8de8bd4b2b01c2f99a5fdfab95ec98f89674`](https://github.com/joshyorko/rcc/tree/1eef8de8bd4b2b01c2f99a5fdfab95ec98f89674).
+`joshyorko/rcc` v18.19.10 at
+[`cf7a47e7b9430db4abebae68776f65f3e309624e`](https://github.com/joshyorko/rcc/tree/cf7a47e7b9430db4abebae68776f65f3e309624e).
 Its release assets publish Linux amd64 and Windows amd64; their independently verified
 SHA-256 digests are pinned in [`runtime/rcc.json`](../runtime/rcc.json).
 The stable release tag resolves to the source commit above.

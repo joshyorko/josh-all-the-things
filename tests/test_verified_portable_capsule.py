@@ -81,6 +81,24 @@ class PackageObservationTests(unittest.TestCase):
             self.assertIsNone(OBSERVATION.installed_sha256(prefix / 'missing', prefix))
 
 
+class SpecificationIdentityTests(unittest.TestCase):
+    def test_republish_changes_only_the_builder_version_in_the_specification_bytes(self):
+        spec = importlib.util.spec_from_file_location('verify_portable_capsule', SCRIPT)
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+        original = b'{"builder":{"rccVersion":"v18.19.9"},"normalizedBlueprint":"v18.19.9"}'
+        expected = b'{"builder":{"rccVersion":"v18.19.10"},"normalizedBlueprint":"v18.19.9"}'
+        self.assertEqual(driver.republished_specification_digest(original, 'v18.19.10'),
+                         'sha256:' + hashlib.sha256(expected).hexdigest())
+        self.assertEqual(driver.republished_specification_digest(original, 'v18.19.9'),
+                         'sha256:' + hashlib.sha256(original).hexdigest())
+        changed_environment = expected.replace(b'normalizedBlueprint', b'changedBlueprint')
+        self.assertNotEqual(driver.republished_specification_digest(original, 'v18.19.10'),
+                            'sha256:' + hashlib.sha256(changed_environment).hexdigest())
+        with self.assertRaises(ValueError):
+            driver.republished_specification_digest(original.replace(b'"normalizedBlueprint"', b'"rccVersion"'), 'v18.19.10')
+
+
 class CandidateBoundaryTests(unittest.TestCase):
     def test_hash_mismatch_denies_before_creating_consumer_state(self):
         # A candidate substitution must fail before any environment command.
