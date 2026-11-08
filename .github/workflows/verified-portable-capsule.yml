@@ -20,12 +20,14 @@ jobs:
           - os: ubuntu-24.04
             platform: linux-amd64
             legacy_asset: rcc-linux64
+            n_minus_one_sha256: f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48
             executable: rcc
             freeze: environment_linux_amd64_freeze.yaml
             network: isolated
           - os: windows-latest
             platform: windows-amd64
             legacy_asset: rcc-windows64.exe
+            n_minus_one_sha256: d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be
             executable: rcc.exe
             freeze: environment_windows_amd64_freeze.yaml
             network: providerless
@@ -85,6 +87,19 @@ jobs:
           if [[ "$RUNNER_OS" == Linux ]]; then
             chmod +x "$RUNNER_TEMP/legacy-rcc/${{ matrix.legacy_asset }}"
           fi
+          mkdir -p "$RUNNER_TEMP/n-minus-one-rcc"
+          gh release download v18.19.7 --repo joshyorko/rcc --pattern '${{ matrix.legacy_asset }}' \
+            --dir "$RUNNER_TEMP/n-minus-one-rcc"
+          n_minus_one="$RUNNER_TEMP/n-minus-one-rcc/${{ matrix.legacy_asset }}"
+          actual_sha256="$(python -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$n_minus_one")"
+          test "$actual_sha256" = '${{ matrix.n_minus_one_sha256 }}'
+          printf '%s  %s\n' "$actual_sha256" "$n_minus_one" > "$RUNNER_TEMP/capsule-evidence/rcc-v18.19.7-sha256.txt"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            chmod +x "$n_minus_one"
+          fi
+          n_minus_one_version="$("$n_minus_one" version | tr -d '\r')"
+          printf '%s\n' "$n_minus_one_version" > "$RUNNER_TEMP/capsule-evidence/rcc-v18.19.7-version.txt"
+          test "$n_minus_one_version" = 'v18.19.7'
       - name: Prepare Linux offline namespace
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
@@ -123,6 +138,7 @@ jobs:
           RCC_ACCEPTANCE_BINARY: ${{ runner.temp }}/${{ matrix.executable }}
           RCC_BUNDLE_TEST_ARCHIVE: ${{ runner.temp }}/shipped-runtime/jat-runtime-${{ matrix.platform }}.rcca
           RCC_INVENTORY_LEGACY_BINARY: ${{ runner.temp }}/legacy-rcc/${{ matrix.legacy_asset }}
+          RCC_N_MINUS_ONE_BINARY: ${{ runner.temp }}/n-minus-one-rcc/${{ matrix.legacy_asset }}
           RCC_INVENTORY_EVIDENCE: ${{ runner.temp }}/capsule-evidence/inventory-migration
           RCC_METADATA_EVIDENCE: ${{ runner.temp }}/capsule-evidence/metadata-security
           RCC_REVOCATION_EVIDENCE: ${{ runner.temp }}/capsule-evidence/operator-security
@@ -135,7 +151,14 @@ jobs:
           export TMPDIR="$native_tmp" TEMP="$native_tmp" TMP="$native_tmp"
           go test ./artifacttrust -run '^Test(Metadata|GeneratedInventoryDoesNotClaimSPDX)' -count=1
           go test ./environmentlifecycle -run '^Test(Metadata|GeneratedJATClassInventoryFitsAuthenticatedV2)' -count=1
-          go test ./cmd -run '^Test(MetadataSecurityRealCLI|ObjectInventoryMigrationRealCLI|RevocationOperatorRealCLI)$' -count=1 -v
+          go test ./cmd -run '^Test(MetadataSecurityRealCLI|ObjectInventoryMigrationRealCLI|RevocationOperatorRealCLI)$' -count=1 -v \
+            | tee "$RUNNER_TEMP/capsule-evidence/rcc-native-test-output.txt"
+          grep -F -- '--- PASS: TestMetadataSecurityRealCLI/N-minus-one-migration' \
+            "$RUNNER_TEMP/capsule-evidence/rcc-native-test-output.txt"
+          if grep -F -- '--- SKIP: TestMetadataSecurityRealCLI/N-minus-one-migration' \
+            "$RUNNER_TEMP/capsule-evidence/rcc-native-test-output.txt"; then
+            exit 1
+          fi
       - name: Preserve receipts without test private keys
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
