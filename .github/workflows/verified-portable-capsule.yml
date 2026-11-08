@@ -84,8 +84,8 @@ jobs:
           set -euo pipefail
           candidate="$RUNNER_TEMP/${{ matrix.executable }}"
           archive="$RUNNER_TEMP/shipped-runtime/jat-runtime-${{ matrix.platform }}.rcca"
-          candidate_hash="$(sha256sum "$candidate" | cut -d ' ' -f1)"
-          archive_hash="$(sha256sum "$archive" | cut -d ' ' -f1)"
+          candidate_hash="$(python -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$candidate")"
+          archive_hash="$(python -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$archive")"
           test_python="$(python -c 'import sys; print(sys.executable)')"
           prefix=()
           if [[ "$RUNNER_OS" == Linux ]]; then
