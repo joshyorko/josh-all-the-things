@@ -228,26 +228,23 @@ def main(argv=None):
     _, observed = task('offline-inspect-content', ['python', '-m', 'jat.cli', 'inspect', '--haul', str(unpacked / 'workspace-haul.tar.zst'), '--json'], source=source)
     content_inventory = json.loads(observed)['inventory']
     assert content_inventory, 'Hauler content inventory must not be empty'
-    probe = """import hashlib,importlib.metadata as m,json,os,pathlib,shutil,subprocess,sys
-prefix=pathlib.Path(os.environ['CONDA_PREFIX']).resolve()
-hauler=pathlib.Path(shutil.which('hauler')).resolve()
-assert prefix in hauler.parents and prefix in pathlib.Path(sys.executable).resolve().parents
-version=subprocess.check_output([str(hauler),'version'],text=True)
-assert '2.1.1' in version
-packages=sorted((d.metadata['Name'],d.version) for d in m.distributions())
-pip=json.loads(subprocess.check_output([sys.executable,'-m','pip','list','--format=json','--disable-pip-version-check'],text=True))
-normalize=lambda n:n.lower().replace('_','-').replace('.','-')
-assert {(normalize(n),v) for n,v in packages}=={(normalize(d['name']),d['version']) for d in pip}
-conda=[json.loads(p.read_text()) for p in (prefix/'conda-meta').glob('*.json')]
-result={'kind':'observed-package-list-not-SBOM','python':sys.version,'pythonPath':sys.executable,'haulerPath':str(hauler),'haulerSHA256':hashlib.sha256(hauler.read_bytes()).hexdigest(),'haulerVersion':version,'pythonDistributions':packages,'condaPackages':sorted((p['name'],p['version']) for p in conda)}
-pathlib.Path(sys.argv[1]).write_text(json.dumps(result,sort_keys=True))
-print('JAT_ENVIRONMENT_HAULER_AND_PACKAGE_PROOF')
-"""
+    observation_driver = ROOT / 'scripts' / 'observe_capsule_packages.py'
+    probe = observation_driver.read_text(encoding='utf-8')
     task('offline-hauler-package-observation', ['python', '-c', probe, str(work / 'package-observation.json')], source=source)
     destination = work / 'restored-workspace'
     task('offline-restore', ['python', '-m', 'jat.cli', 'restore', '--haul', str(unpacked / 'workspace-haul.tar.zst'), '--destination', str(destination), '--json'], source=source)
     restored = list(destination.rglob('proof.txt'))
     assert len(restored) == 1 and restored[0].read_text() == 'verified-portable-jat-capsule\n'
+    rebuilt_haul = work / 'consumer-built-workspace.tar.zst'
+    build_receipt, _ = task('offline-build', ['python', '-m', 'jat.cli', 'build', '--folder', str(destination),
+                            '--output', str(rebuilt_haul), '--rcc-environment', 'off', '--json'], source=source)
+    assert build_receipt['materializationId'] == acquired['materializationId']
+    assert build_receipt['verification']['metadataSequence'] == 1
+    rebuilt_destination = work / 'consumer-built-restored-workspace'
+    task('offline-restore-consumer-build', ['python', '-m', 'jat.cli', 'restore', '--haul', str(rebuilt_haul),
+         '--destination', str(rebuilt_destination), '--json'], source=source)
+    rebuilt_files = list(rebuilt_destination.rglob('proof.txt'))
+    assert len(rebuilt_files) == 1 and rebuilt_files[0].read_bytes() == restored[0].read_bytes()
     renewed = authority / 'snapshot-2.json'
     value('renew-2', ['env', 'trust', 'revocations', 'renew', *issuer, '--metadata', first, '--sequence', '2', '--output', renewed, '--json'])
     consumer_carrier = Path(acquired['trustCarrierPath'])
@@ -332,6 +329,7 @@ print('JAT_ENVIRONMENT_HAULER_AND_PACKAGE_PROOF')
 
     receipt = {'formatVersion': 1, 'operation': 'verified-portable-jat-capsule-acceptance', 'success': True,
                'acceptanceDriverSHA256': sha256(Path(__file__)), 'rccSource': args.rcc_source, 'rccBinarySHA256': args.rcc_sha256, 'inputArchiveSHA256': args.archive_sha256,
+               'packageObservationDriverSHA256': sha256(observation_driver), 'consumerBuildSHA256': sha256(rebuilt_haul),
                'inputArtifactDigest': original['artifactDigest'], 'specificationDigest': published['specificationDigest'],
                'artifactDigest': artifact, 'signedArchiveSHA256': sha256(signed), 'capsuleSHA256': sha256(capsule),
                'jatSource': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),

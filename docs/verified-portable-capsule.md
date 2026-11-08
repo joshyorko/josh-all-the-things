@@ -25,6 +25,8 @@ the RCC receipt, then checks the transported source/content hashes before task
 execution. A digest without that v2 decision never authorizes source execution.
 RCC evaluates all signatures, authority, freshness, revocation and rollback.
 JAT supplies its existing Doctor, Build, Inspect and Restore service behavior.
+The strict consumer restores the transported workspace, builds a new haul from
+that restored tree, and restores the new haul to verify the proof file again.
 
 Run on Linux with an exact source-built RCC candidate and the published archive:
 
@@ -42,8 +44,13 @@ it does not implement RCC signing or verification. Use the declared RCC test
 runtime or an isolated CI test driver. Runtime execution always uses the acquired
 JAT environment's Python and Hauler. The package observation compares Python's
 installed distribution metadata with an independently invoked pip listing and
-also reads installed Conda names/versions. Unknown licenses and package hashes
-are not guessed. It verifies the Hauler release and records its actual binary hash.
+also retains Python RECORD hashes, Conda package archive hashes and available
+Conda file hashes. Installed file SHA-256 values and comparisons with recorded
+hashes are separate observations; transformed or missing files can differ or be
+unavailable. Unknown hashes and licenses are not guessed, and this is not a
+complete file inventory. It requires Hauler's exact GitVersion and records its
+actual binary hash. The acceptance receipt also hashes the package observation
+driver and the haul built by the strict consumer.
 
 Linux defaults to a Bubblewrap network namespace and fails if it cannot create
 one. No provider or evidence endpoint is supplied to the consumer. Windows must

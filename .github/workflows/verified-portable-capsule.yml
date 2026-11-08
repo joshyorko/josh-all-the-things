@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - scripts/verify_portable_capsule.py
+      - scripts/observe_capsule_packages.py
       - tests/test_verified_portable_capsule.py
       - .github/workflows/verified-portable-capsule.yml
   workflow_dispatch:

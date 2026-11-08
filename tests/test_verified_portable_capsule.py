@@ -1,13 +1,84 @@
 """Opt-in acceptance uses real RCC/JAT processes; no fake executable."""
+import base64
 import hashlib
+import importlib.metadata
+import importlib.util
+import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts' / 'verify_portable_capsule.py'
+SPEC = importlib.util.spec_from_file_location('observe_capsule_packages', ROOT / 'scripts' / 'observe_capsule_packages.py')
+OBSERVATION = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(OBSERVATION)
+
+
+class PackageObservationTests(unittest.TestCase):
+    def test_hauler_gitversion_must_match_the_exact_pin(self):
+        for version in ('v2.1.1', '2.1.1'):
+            self.assertEqual(OBSERVATION.pinned_hauler_version(f'GitVersion: {version}\nGitCommit: abc'), '2.1.1')
+        for output in ('GitVersion: v2.1.10', 'GitVersion: v12.1.1', 'GitVersion: v2.1.1-dev',
+                       'unrelated output 2.1.1', 'GitVersion: v2.1.1\nGitVersion: v2.1.1'):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                OBSERVATION.pinned_hauler_version(output)
+
+    def test_python_record_hashes_are_retained_and_compared_with_installed_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory)
+            payload = prefix / 'payload.py'
+            payload.write_bytes(b'original package bytes')
+            recorded = base64.urlsafe_b64encode(hashlib.sha256(payload.read_bytes()).digest()).decode().rstrip('=')
+            dist_info = prefix / 'fixture-1.0.dist-info'
+            dist_info.mkdir()
+            (dist_info / 'METADATA').write_text('Name: fixture\nVersion: 1.0\n')
+            (dist_info / 'RECORD').write_text(f'payload.py,sha256={recorded},22\n')
+            distribution = importlib.metadata.Distribution.at(dist_info)
+            observed = OBSERVATION.python_packages(prefix, [distribution])[0]
+            self.assertEqual((observed['name'], observed['version']), ('fixture', '1.0'))
+            self.assertEqual(observed['fileHashes'][0]['recordedHash']['value'], recorded)
+            self.assertTrue(observed['fileHashes'][0]['matchesRecordedHash'])
+            payload.write_bytes(b'changed installed bytes')
+            changed = OBSERVATION.python_packages(prefix, [distribution])[0]['fileHashes'][0]
+            self.assertEqual(changed['recordedHash']['value'], recorded)
+            self.assertEqual(changed['observedSHA256'], hashlib.sha256(payload.read_bytes()).hexdigest())
+            self.assertFalse(changed['matchesRecordedHash'])
+
+    def test_conda_archive_and_installed_hashes_keep_their_distinct_meanings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory)
+            payload = prefix / 'payload'
+            payload.write_bytes(b'installed bytes')
+            installed = hashlib.sha256(payload.read_bytes()).hexdigest()
+            conda_meta = prefix / 'conda-meta'
+            conda_meta.mkdir()
+            package = {'name': 'fixture', 'version': '1.0', 'build': '0', 'sha256': 'a' * 64, 'md5': 'b' * 32,
+                       'url': 'https://user:private@example.invalid/package',
+                       'paths_data': {'paths': [{'_path': 'payload', 'sha256': 'c' * 64, 'sha256_in_prefix': installed}]}}
+            (conda_meta / 'fixture.json').write_text(json.dumps(package))
+            observed = OBSERVATION.conda_packages(prefix)[0]
+            self.assertEqual(observed['archiveHashes'], {'sha256': 'a' * 64, 'md5': 'b' * 32})
+            self.assertEqual(observed['fileHashes'][0]['recordedHashes'], {'sha256': 'c' * 64, 'sha256_in_prefix': installed})
+            self.assertEqual(observed['fileHashes'][0]['observedSHA256'], installed)
+            self.assertTrue(observed['fileHashes'][0]['matchesRecordedHash'])
+            self.assertNotIn('private', json.dumps(observed))
+            (conda_meta / 'unknown.json').write_text(json.dumps({'name': 'unknown', 'version': '1.0'}))
+            unknown = OBSERVATION.conda_packages(prefix)[1]
+            self.assertEqual(unknown['archiveHashes'], {})
+            self.assertEqual(unknown['fileHashes'], [])
+
+    def test_missing_or_outside_environment_files_have_no_observed_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / 'environment'
+            prefix.mkdir()
+            outside = Path(directory) / 'outside'
+            outside.write_bytes(b'not environment owned')
+            self.assertIsNone(OBSERVATION.installed_sha256(outside, prefix))
+            self.assertIsNone(OBSERVATION.installed_sha256(prefix / 'missing', prefix))
 
 
 class CandidateBoundaryTests(unittest.TestCase):
