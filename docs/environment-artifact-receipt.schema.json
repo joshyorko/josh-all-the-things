@@ -8,15 +8,15 @@
     "success": {"const": true},
     "jat_git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "rcc_executable": {"type": "string", "minLength": 1},
-    "rcc_version": {"const": "v18.19.10"},
+    "rcc_version": {"const": "v18.19.11"},
     "hauler_version": {"const": "v2.1.1"},
     "rcc_source": {
       "type": "object",
       "required": ["repository", "tag", "commit", "asset", "sha256"],
       "properties": {
         "repository": {"const": "https://github.com/joshyorko/rcc"},
-        "tag": {"const": "v18.19.10"},
-        "commit": {"const": "cf7a47e7b9430db4abebae68776f65f3e309624e"},
+        "tag": {"const": "v18.19.11"},
+        "commit": {"const": "953eda18d3d1f4a286c17709f282315a2ed16a16"},
         "asset": {"enum": ["rcc-linux64", "rcc-windows64.exe"]},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       },

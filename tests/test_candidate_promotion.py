@@ -88,7 +88,7 @@ def test_v3_receipt_requires_actual_gate_success_and_never_rebuilds(
         assert not kwargs['env'].get('PYTHONPATH')
         assert 'publish' not in argv and 'export' not in argv
         if argv[1:] == ['version']:
-            text = 'v18.19.10\n'
+            text = 'v18.19.11\n'
         elif argv[1:3] == ['env', 'acquire']:
             text = json.dumps({'artifactDigest': receipt['artifact_digest'],
                                'verification': {'valid': failed_gate != 'acquire'}})
@@ -172,7 +172,7 @@ def test_promotion_source_gate_rejects_wrong_embedded_sha(
     monkeypatch.setattr(promotion, 'committed_source_hashes', lambda root: {})
     def run(argv, **kwargs):
         if argv[1:] == ['version']:
-            text = 'v18.19.10'
+            text = 'v18.19.11'
         elif 'acquire' in argv:
             text = json.dumps({'artifactDigest': receipt['artifact_digest'], 'verification': {'valid': True}})
         elif 'vars' in argv:
