@@ -12,7 +12,7 @@ permissions:
   contents: read
 # Test-only immutable source. This is deliberately not runtime/rcc.json.
 env:
-  RCC_CAPSULE_CANDIDATE_SHA: cf7a47e7b9430db4abebae68776f65f3e309624e
+  RCC_CAPSULE_CANDIDATE_SHA: 953eda18d3d1f4a286c17709f282315a2ed16a16
 jobs:
   qualify:
     strategy:
