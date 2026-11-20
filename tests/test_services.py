@@ -1035,69 +1035,24 @@ def test_restore_rejects_transitive_symlink_escape_without_external_write(tmp_pa
     assert adapter.victim_after == "keep"
 
 
-def test_serve_uses_explicit_runtime_stage_directory_instead_of_cwd(tmp_path, monkeypatch):
+def test_serve_service_uses_owned_runtime_stage(tmp_path, monkeypatch):
     haul = tmp_path / "haul.tar.zst"
     haul.write_bytes(b"haul")
     runtime = tmp_path / "runtime"
-    runtime.mkdir()
+    monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
     observed = {}
 
-    class ServingHauler(FakeHauler):
-        def serve_files(self, store, temp, directory, port):
-            self.calls.append("serve_files")
-            observed["stage_parent"] = Path(store).parent.parent
+    def serve_children(hauler, store, temp, registry, files, config, mode, request, registry_config, publish, announce):
+        from jat.models import ServeEndpoints
+        observed.update(stage_parent=store.parent.parent, mode=mode, request=request)
+        return ServeEndpoints(mode=mode, fileserver_url="http://127.0.0.1:8081", fileserver_bind="loopback")
 
-    monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
-    result = service(tmp_path, hauler=ServingHauler()).serve(ServeRequest(haul=haul))
-
-    assert result.success is True, result.diagnostics
+    monkeypatch.setattr("jat.services.serve_children", serve_children)
+    result = service(tmp_path).serve(ServeRequest(haul=haul, mode="files", fileserver_port=8081))
+    assert result.success, result.diagnostics
     assert observed["stage_parent"] == runtime
-
-
-def test_serve_uses_fileserver_for_files_only_inventory(tmp_path, monkeypatch):
-    haul = tmp_path / "haul.tar.zst"
-    haul.write_bytes(b"haul")
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    observed = {}
-
-    class ServingHauler(FakeHauler):
-        def serve(self, *args):
-            raise AssertionError("Files-only Serve must not invoke the OCI registry")
-
-        def serve_files(self, store, temp, directory, port):
-            observed.update(store=store, temp=temp, directory=directory, port=port)
-
-    monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
-    result = service(tmp_path, hauler=ServingHauler()).serve(ServeRequest(haul=haul))
-
-    assert result.success is True, result.diagnostics
-    assert observed["port"] == 8080
-    assert Path(observed["store"]).parent.parent == runtime
-
-
-def test_serve_uses_registry_for_image_inventory(tmp_path, monkeypatch):
-    haul = tmp_path / "haul.tar.zst"
-    haul.write_bytes(b"haul")
-    observed = []
-
-    class ImageHauler(FakeHauler):
-        def inventory(self, store, temp):
-            return [
-                {"Reference": "hauler/app:latest", "Type": "image"},
-                {"Reference": "hauler/workspace.tar.zst:latest", "Type": "file"},
-            ]
-
-        def serve(self, *args):
-            observed.append("registry")
-
-        def serve_files(self, *args):
-            observed.append("fileserver")
-
-    result = service(tmp_path, hauler=ImageHauler()).serve(ServeRequest(haul=haul))
-
-    assert result.success is True, result.diagnostics
-    assert observed == ["registry"]
+    assert observed["mode"] == "files"
+    assert observed["request"].fileserver_port == 8081
 
 
 def test_serve_rejects_runtime_stage_directory_inside_conda_prefix(tmp_path, monkeypatch):
@@ -1302,63 +1257,42 @@ def test_copy_rejects_unsupported_targets_and_reports_transfer_policy(tmp_path, 
     assert moved.transfer.requested_retries == 5
 
 
-def test_serve_modes_select_endpoints_explicitly(tmp_path, monkeypatch):
-    haul = tmp_path / "haul.tar.zst"
-    haul.write_bytes(b"haul")
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-
-    monkeypatch.setenv("JAT_RUN_DIR", str(runtime))
-    hauler = CapsuleHauler(MIXED_INVENTORY)
-    files_result = capsule_service(tmp_path, hauler).serve(ServeRequest(haul=haul, mode="files"))
-    assert files_result.success, files_result.diagnostics
-    assert ("serve_files", 8080) in hauler.calls
-    assert files_result.serve.fileserver_bind == "all-interfaces"
-
-    hauler = CapsuleHauler(MIXED_INVENTORY)
-    registry_result = capsule_service(tmp_path, hauler).serve(ServeRequest(haul=haul, mode="registry", registry_port=5001))
-    assert ("serve_registry",) in hauler.calls
-    assert registry_result.serve.registry_url == "http://127.0.0.1:5001"
-
-    files_only = capsule_service(tmp_path, CapsuleHauler(WORKSPACE_ONLY_INVENTORY)).serve(
-        ServeRequest(haul=haul, mode="auto")
-    )
-    assert files_only.serve.mode == "files"
-    mixed_auto = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY)).serve(
-        ServeRequest(haul=haul, mode="auto")
-    )
-    assert mixed_auto.serve.mode == "registry"
-
-
-def test_serve_both_supervises_two_children_from_one_capsule(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode,inventory,selected", [
+    ("files", MIXED_INVENTORY, "files"),
+    ("registry", MIXED_INVENTORY, "registry"),
+    ("both", MIXED_INVENTORY, "both"),
+    ("auto", WORKSPACE_ONLY_INVENTORY, "files"),
+    ("auto", MIXED_INVENTORY, "registry"),
+])
+def test_serve_modes_delegate_to_same_supervisor(tmp_path, monkeypatch, mode, inventory, selected):
+    from jat.models import ServeEndpoints
     haul = tmp_path / "haul.tar.zst"
     haul.write_bytes(b"haul")
     monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setenv("HAULER_IGNORE_ERRORS", "true")
-    runner = CapsuleRunner()
-    hauler = CapsuleHauler(MIXED_INVENTORY)
-    result = capsule_service(tmp_path, hauler, runner=runner).serve(
-        ServeRequest(haul=haul, mode="both", fileserver_port=8081, registry_port=5001)
-    )
+    observed = []
+
+    def serve_children(hauler, store, temp, registry, files, config, selected_mode, request, registry_config, publish, announce):
+        observed.append(selected_mode)
+        return ServeEndpoints(mode=selected_mode)
+
+    monkeypatch.setattr("jat.services.serve_children", serve_children)
+    result = capsule_service(tmp_path, CapsuleHauler(inventory)).serve(ServeRequest(haul=haul, mode=mode))
     assert result.success, result.diagnostics
-    assert runner.supervised == [["hauler", "fileserver", "8081"], ["hauler", "registry"]]
-    assert runner.supervise_env is not None
-    assert "HAULER_IGNORE_ERRORS" not in runner.supervise_env
-    assert result.serve.mode == "both"
-    assert result.serve.fileserver_url == "http://127.0.0.1:8081"
-    assert result.serve.registry_url == "http://127.0.0.1:5001"
+    assert result.serve.mode == selected
+    assert observed == [selected]
 
 
-def test_serve_both_fails_when_a_sibling_exits_unexpectedly(tmp_path, monkeypatch):
+def test_serve_reports_supervisor_failure(tmp_path, monkeypatch):
     haul = tmp_path / "haul.tar.zst"
     haul.write_bytes(b"haul")
     monkeypatch.setenv("JAT_RUN_DIR", str(tmp_path / "runtime"))
-    runner = CapsuleRunner(supervise_result=ProcessResult(argv=["hauler"], exit_status=1, stderr="boom"))
-    result = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY), runner=runner).serve(
-        ServeRequest(haul=haul, mode="both")
-    )
-    assert result.success is False
-    assert not (tmp_path / "runtime" / ".jat-serve-tar.zst").exists()
+    def fail(*args):
+        raise RuntimeError("unsupported runtime")
+    monkeypatch.setattr("jat.services.serve_children", fail)
+    result = capsule_service(tmp_path, CapsuleHauler(MIXED_INVENTORY)).serve(ServeRequest(haul=haul))
+    assert not result.success
+    assert "unsupported runtime" in result.diagnostics
+    assert not list((tmp_path / "runtime").glob(".jat-*"))
 
 
 def test_build_merge_user_manifests_images_file_and_retry_policy(tmp_path):

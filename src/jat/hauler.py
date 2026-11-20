@@ -259,8 +259,22 @@ class HaulerAdapter:
             str(directory),
             "--port",
             str(port),
+            "--host",
+            "127.0.0.1",
         ]
         return self._command_arguments(arguments)
+
+    def require_loopback_fileserver(self) -> None:
+        completed = self.runner.run(
+            [self.executable, "store", "serve", "fileserver", "--help"],
+            timeout=10,
+            env=self._child_env(),
+        )
+        if not completed.success or not re.search(r"(?m)^\s+--host\s", completed.stdout):
+            raise RuntimeError(
+                "Hauler runtime does not support loopback files serving (--host); "
+                "pinned v2.1.1 is unsupported. A qualified Hauler bind-host update is required."
+            )
 
     def serve_registry_command(self, store: Path, temp: Path, directory: Path, config: Path) -> list[str]:
         # The registry config file owns the loopback bind address and port.

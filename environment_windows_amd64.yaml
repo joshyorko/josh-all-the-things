@@ -11,6 +11,7 @@ dependencies:
       - robocorp-log==3.1.3       # https://pypi.org/project/robocorp-log/3.1.3/
       - robocorp-truststore==0.9.1 # https://pypi.org/project/robocorp-truststore/0.9.1/
       - pydantic==2.12.5
+      - psutil==7.2.2
 
 rccPostInstall:
   - python scripts/install_hauler.py --expected-version v2.1.1

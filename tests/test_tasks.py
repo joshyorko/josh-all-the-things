@@ -29,6 +29,26 @@ def test_write_result_uses_output_result_json(tmp_path, monkeypatch):
     assert json.loads(destination.read_text())["operation"] == "doctor"
 
 
+def test_serve_task_forwards_auto_ports_and_startup_contract(tmp_path, monkeypatch):
+    import tasks
+
+    from test_python_cli import RecordingService
+
+    service = RecordingService()
+    monkeypatch.setattr(tasks, "_service", lambda: service)
+    monkeypatch.setattr("jat.io.get_output_dir", lambda: tmp_path)
+    request_path = tmp_path / "serve.json"
+    startup = tmp_path / "ready.json"
+    request_path.write_text(json.dumps({"haul": "synthetic.haul", "mode": "both",
+                                       "startup_file": str(startup), "startup_timeout": 5}))
+    tasks.Serve(str(request_path))
+    operation, request = service.calls[0]
+    assert operation == "serve"
+    assert request.fileserver_port == request.registry_port == 0
+    assert request.startup_file == startup
+    assert request.startup_timeout == 5
+
+
 @pytest.mark.parametrize("field", ["images_files", "hauler_manifests"])
 def test_load_request_never_retains_rejected_credentials(tmp_path, field):
     import traceback
