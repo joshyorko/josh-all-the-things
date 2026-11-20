@@ -516,15 +516,15 @@ rcc task script -r robot.yaml -- ./jat serve --haul ./everything-haul.tar.zst --
   processes are left behind.
 
 Ports: `--fileserver-port` and `--registry-port` accept `0` (automatic, default)
-or an explicit port (no fallback on conflict). Both endpoints bind `127.0.0.1`.
-JAT launches Hauler on candidate ports and verifies child-owned listeners;
-it does not probe a free port and assume it remains free.
+or an explicit port (no fallback on conflict). Both connection URLs use
+`127.0.0.1`, but the pinned Hauler fileserver listens on all interfaces; its
+receipt reports `all-interfaces`. The registry binds loopback and reports
+`loopback`. A localhost connection URL does not make the fileserver private.
+JAT verifies each actual listener belongs to its Hauler child before readiness.
 
-**Runtime gate:** pinned Hauler v2.1.1 cannot bind its fileserver to loopback.
-`files`, `both`, and files-only `auto` therefore fail clearly until a qualified
-Hauler release supports `--host`. Registry serving works with the current pin.
-The [local Hauler patch and promotion requirements](docs/serve-startup.md#hauler-runtime-gate)
-are prepared; the runtime pin has not changed.
+All modes work with unpatched Hauler v2.1.1. The proposed optional upstream
+`--host` feature is independent of dynamic ports and is not required.
+See the [binding contract](docs/serve-startup.md#hauler-binding-contract).
 
 Use `--startup-file /existing/directory/ready.json` for an atomic JSON receipt
 published while the foreground process is alive, after the actual endpoints

@@ -5,7 +5,6 @@ import sys
 import psutil
 import pytest
 
-from jat.hauler import HaulerAdapter
 from jat.models import ServeEndpoints, ServeRequest
 from jat.serving import serve_children, startup_receipt
 
@@ -15,11 +14,8 @@ class Ready(BaseException):
 
 
 class Server:
-    def require_loopback_fileserver(self):
-        pass
-
     def serve_fileserver_command(self, store, temp, directory, port):
-        return [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"]
+        return [sys.executable, "-m", "http.server", str(port), "--bind", "0.0.0.0"]
 
 
 def run(tmp_path, request, publish, hauler=None):
@@ -41,7 +37,9 @@ def run(tmp_path, request, publish, hauler=None):
 def test_receipt_is_atomic_owned_and_removed(tmp_path):
     path = tmp_path / "ready.json"
     endpoints = ServeEndpoints(
-        mode="files", fileserver_url="http://127.0.0.1:1234", fileserver_bind="loopback"
+        mode="files",
+        fileserver_url="http://127.0.0.1:1234",
+        fileserver_bind="all-interfaces",
     )
     with startup_receipt(path) as publish:
         assert not path.exists()
@@ -86,7 +84,7 @@ def test_automatic_conflict_retries_and_never_accepts_foreign_listener(
 
         def publish(endpoints):
             assert endpoints.fileserver_url != f"http://127.0.0.1:{conflict}"
-            assert endpoints.fileserver_bind == "loopback"
+            assert endpoints.fileserver_bind == "all-interfaces"
             raise Ready()
 
         with pytest.raises(Ready):
@@ -123,12 +121,34 @@ def test_startup_timeout_stops_child(tmp_path):
     assert {child.pid for child in psutil.Process().children()} == before
 
 
-def test_unsupported_hauler_fails_closed():
-    class Runner:
-        def run(self, *args, **kwargs):
-            from jat.process import ProcessResult
+@pytest.mark.parametrize(
+    "binding,address,accepted",
+    [
+        ("loopback", "127.0.0.1", True),
+        ("loopback", "0.0.0.0", False),
+        ("all-interfaces", "::", True),
+        ("all-interfaces", "0.0.0.0", True),
+        ("all-interfaces", "127.0.0.1", False),
+    ],
+)
+def test_listener_scope_must_match_receipt(
+    tmp_path, monkeypatch, binding, address, accepted
+):
+    from types import SimpleNamespace
 
-            return ProcessResult(argv=[], exit_status=0, stdout="--port int")
+    from jat.serving import _owned_listener
 
-    with pytest.raises(RuntimeError, match="pinned v2.1.1 is unsupported"):
-        HaulerAdapter(Runner()).require_loopback_fileserver()
+    connection = SimpleNamespace(
+        status=psutil.CONN_LISTEN, laddr=SimpleNamespace(ip=address, port=8080)
+    )
+    monkeypatch.setattr(
+        psutil,
+        "Process",
+        lambda _: SimpleNamespace(net_connections=lambda **_: [connection]),
+    )
+    child = SimpleNamespace(pid=123)
+    if accepted:
+        assert _owned_listener(child, 8080, binding)
+    else:
+        with pytest.raises(RuntimeError, match="does not match"):
+            _owned_listener(child, 8080, binding)

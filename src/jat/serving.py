@@ -85,7 +85,7 @@ def _port(requested: int, used: set[int]) -> int:
             return candidate
 
 
-def _owned_listener(process, port):
+def _owned_listener(process, port, binding):
     try:
         connections = psutil.Process(process.pid).net_connections(kind="tcp")
     except psutil.NoSuchProcess:
@@ -97,8 +97,11 @@ def _owned_listener(process, port):
         for connection in connections
         if connection.status == psutil.CONN_LISTEN and connection.laddr.port == port
     ]
-    if any(connection.laddr.ip != "127.0.0.1" for connection in listeners):
-        raise RuntimeError("Hauler opened a non-loopback listener; refusing readiness")
+    expected = {"127.0.0.1"} if binding == "loopback" else {"0.0.0.0", "::"}
+    if any(connection.laddr.ip not in expected for connection in listeners):
+        raise RuntimeError(
+            f"Hauler listener does not match {binding} binding; refusing readiness"
+        )
     return bool(listeners)
 
 
@@ -130,8 +133,6 @@ def serve_children(
     """
     files = mode in ("files", "both")
     images = mode in ("registry", "both")
-    if files:
-        hauler.require_loopback_fileserver()
     deadline = time.monotonic() + request.startup_timeout
     opener = build_opener(ProxyHandler({}))
     environment = hauler_subprocess_environment()
@@ -154,7 +155,7 @@ def serve_children(
             mode=mode,
             fileserver_url=f"http://127.0.0.1:{file_port}" if files else None,
             registry_url=f"http://127.0.0.1:{registry_port}" if images else None,
-            fileserver_bind="loopback" if files else None,
+            fileserver_bind="all-interfaces" if files else None,
             registry_bind="loopback" if images else None,
         )
         specs = []
@@ -167,6 +168,7 @@ def serve_children(
                     file_port,
                     endpoints.fileserver_url + "/",
                     request.fileserver_port == 0,
+                    endpoints.fileserver_bind,
                 )
             )
         if images:
@@ -176,6 +178,7 @@ def serve_children(
                     registry_port,
                     endpoints.registry_url + "/v2/",
                     request.registry_port == 0,
+                    endpoints.registry_bind,
                 )
             )
         processes, readers, tails = [], [], []
@@ -239,8 +242,8 @@ def serve_children(
                             "Hauler startup timed out before owned endpoints became ready"
                         )
                     available = True
-                    for child, (_, port, url, _) in zip(processes, specs):
-                        if not _owned_listener(child, port):
+                    for child, (_, port, url, _, binding) in zip(processes, specs):
+                        if not _owned_listener(child, port, binding):
                             available = False
                             break
                         try:

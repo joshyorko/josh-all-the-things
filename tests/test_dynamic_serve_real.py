@@ -112,6 +112,11 @@ def test_real_occupied_defaults_concurrent_sessions_and_shutdown(
                         assert two[key] is None
                         continue
                     assert one[key] != two[key]
+                    expected_bind = (
+                        "all-interfaces" if key == "fileserver_url" else "loopback"
+                    )
+                    assert one[key.replace("_url", "_bind")] == expected_bind
+                    assert two[key.replace("_url", "_bind")] == expected_bind
                     for endpoints in (one, two):
                         url = endpoints[key]
                         assert not url.endswith((":8080", ":5000"))
@@ -132,7 +137,12 @@ def test_real_occupied_defaults_concurrent_sessions_and_shutdown(
                 )
                 for child in children:
                     assert all(
-                        connection.laddr.ip == "127.0.0.1"
+                        connection.laddr.ip
+                        in (
+                            {"127.0.0.1"}
+                            if "registry" in child.cmdline()
+                            else {"0.0.0.0", "::"}
+                        )
                         for connection in child.net_connections()
                         if connection.status == psutil.CONN_LISTEN
                     )
@@ -163,34 +173,28 @@ def test_real_explicit_conflict_fails_promptly(tmp_path, capsule, mode, flag):
         )
 
 
-@pytest.mark.parametrize("mode", ["files", "both"])
+@pytest.mark.parametrize("mode", ["files", "registry", "both"])
 def test_real_explicit_port_and_child_exit(tmp_path, capsule, mode):
     # An explicitly chosen candidate may lose a bind race; JAT must fail, never change it.
     from jat.serving import _port
 
     port = _port(0, set())
     with serving(
-        tmp_path, capsule, "explicit", mode, "--fileserver-port", str(port)
+        tmp_path,
+        capsule,
+        "explicit",
+        mode,
+        "--registry-port" if mode == "registry" else "--fileserver-port",
+        str(port),
     ) as (process, path):
         endpoints = ready(process, path)
-        assert endpoints["fileserver_url"] == f"http://127.0.0.1:{port}"
+        assert (
+            endpoints["registry_url" if mode == "registry" else "fileserver_url"]
+            == f"http://127.0.0.1:{port}"
+        )
         children = psutil.Process(process.pid).children()
         assert len(children) == (2 if mode == "both" else 1)
         children[0].terminate()
         assert process.wait(timeout=5) != 0
         assert not path.exists()
         assert all(not child.is_running() for child in children)
-
-
-def test_real_unsupported_pin_fails_before_readiness(tmp_path, capsule, monkeypatch):
-    unsupported = os.environ.get("JAT_TEST_UNSUPPORTED_HAULER")
-    if not unsupported:
-        pytest.skip("explicit unsupported pinned binary required")
-    monkeypatch.setattr(sys.modules[__name__], "HAULER", unsupported)
-    with serving(tmp_path, capsule, "unsupported", "files") as (process, path):
-        assert process.wait(timeout=8) != 0
-        assert not path.exists()
-    assert (
-        "does not support loopback files serving"
-        in (tmp_path / "unsupported.log").read_text()
-    )

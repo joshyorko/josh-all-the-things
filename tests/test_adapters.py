@@ -490,8 +490,6 @@ def test_hauler_serve_files_uses_exact_fileserver_argv(tmp_path):
         str(tmp_path / "files"),
         "--port",
         "8080",
-        "--host",
-        "127.0.0.1",
     ]
     assert runner.calls[-1][2] is True
 
@@ -670,8 +668,6 @@ def test_hauler_serve_commands_include_executable_and_optional_log_level(tmp_pat
         str(tmp_path / "files"),
         "--port",
         "8080",
-        "--host",
-        "127.0.0.1",
     ]
     assert registry == [
         "/tools/hauler",
