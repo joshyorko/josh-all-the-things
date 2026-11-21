@@ -26,7 +26,7 @@ def verify_owned_hauler(expected_version: str) -> dict:
         raise ValueError('Hauler version command failed')
     fields = [line.partition(':')[2].strip() for line in (result.stdout + '\n' + result.stderr).splitlines() if line.lstrip().startswith('GitVersion:')]
     expected = expected_version.removeprefix('v')
-    if len(fields) != 1 or re.fullmatch(r'v?\d+\.\d+\.\d+', fields[0]) is None or fields[0].removeprefix('v') != expected:
+    if len(fields) != 1 or re.fullmatch(r'v?\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', fields[0]) is None or fields[0].removeprefix('v') != expected:
         raise ValueError('Hauler version does not match the pinned release')
     return {'version': fields[0].removeprefix('v'), 'hauler': str(hauler), 'python': str(python), 'conda_prefix': str(root)}
 
