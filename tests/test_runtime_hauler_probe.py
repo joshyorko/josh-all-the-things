@@ -17,10 +17,23 @@ def owned_probe(tmp_path, monkeypatch):
     return SimpleNamespace(probe=probe, prefix=prefix)
 
 
-@pytest.mark.parametrize('version', ['2.1.1', 'v2.1.1'])
+@pytest.mark.parametrize('version', ['2.1.1', 'v2.1.1', '2.2.0-dev.5', 'v2.2.0-dev.5'])
 def test_owned_exact_hauler_release_is_accepted(owned_probe, monkeypatch, version):
     monkeypatch.setattr(owned_probe.probe.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, 'GitVersion: '+version+'\n', ''))
-    assert owned_probe.probe.verify_owned_hauler('v2.1.1')['version'] == '2.1.1'
+    expected = version.removeprefix('v')
+    assert owned_probe.probe.verify_owned_hauler('v'+expected)['version'] == expected
+
+
+@pytest.mark.parametrize('output', [
+    'GitVersion: 2.2.0-dev.4\n',
+    'GitVersion: 2.2.0\n',
+    'GitVersion: 2.2.0-dev.50\n',
+    'GitVersion: 2.2.0-dev.5\nGitVersion: 2.2.0-dev.5\n',
+])
+def test_wrong_or_ambiguous_prerelease_is_rejected(owned_probe, monkeypatch, output):
+    monkeypatch.setattr(owned_probe.probe.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, output, ''))
+    with pytest.raises(ValueError, match='version'):
+        owned_probe.probe.verify_owned_hauler('v2.2.0-dev.5')
 
 
 @pytest.mark.parametrize('output', ['GitVersion: 2.1.10\n', 'GitVersion: 2.1.1\nGitVersion: 2.1.1\n', 'unrecognized output\n', 'GitVersion: 2.1.1\nGitVersion: unknown\n', 'GitVersion: 2.1.1\nGitVersion: 2.1.10-rc1\n'])
