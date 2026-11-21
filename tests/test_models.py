@@ -179,7 +179,7 @@ def test_serve_request_modes_and_ports_are_strict():
     with pytest.raises(ValidationError):
         ServeRequest(haul="h", mode="cluster")
     with pytest.raises(ValidationError):
-        ServeRequest(haul="h", registry_port=0)
+        ServeRequest(haul="h", registry_port=-1)
 
 
 def test_inspect_extract_export_copy_requests_are_strict():

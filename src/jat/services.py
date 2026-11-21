@@ -18,7 +18,7 @@ from robocorp import log
 
 from .archive import ArchiveAdapter
 from .capture import CAPTURE_WARNING, select_workspace
-from .hauler import HaulerAdapter, hauler_subprocess_environment
+from .hauler import HaulerAdapter
 from .models import (
     ANCHOR_KINDS,
     ArtifactOutput,
@@ -34,7 +34,6 @@ from .models import (
     ManifestRequest,
     OperationResult,
     RestoreRequest,
-    ServeEndpoints,
     ServeRequest,
     TransferReceipt,
     is_remote_source,
@@ -49,6 +48,7 @@ from .safety import (
     new_output_path,
     validate_archive_members,
 )
+from .serving import serve_children, startup_receipt
 from .staging import OwnedStage
 
 WORKSPACE_ARTIFACT = "joshs-all-the-things-workspace.tar.zst"
@@ -747,40 +747,11 @@ class JATService:
                 registry.mkdir()
                 files_directory.mkdir()
                 config = stage.path / "registry.yaml"
-                config.write_text(_registry_config(registry, request.registry_port))
-                endpoints = ServeEndpoints(
-                    mode=mode,
-                    fileserver_url=f"http://127.0.0.1:{request.fileserver_port}" if mode in ("files", "both") else None,
-                    registry_url=f"http://127.0.0.1:{request.registry_port}" if mode in ("registry", "both") else None,
-                    fileserver_bind="all-interfaces" if mode in ("files", "both") else None,
-                    registry_bind="loopback" if mode in ("registry", "both") else None,
-                )
-                live = []
-                if endpoints.fileserver_url:
-                    live.append(f"fileserver ({endpoints.fileserver_bind}) at {endpoints.fileserver_url}")
-                if endpoints.registry_url:
-                    live.append(f"registry ({endpoints.registry_bind}) at {endpoints.registry_url}")
-                self._announce(f"serving capsule [{haul.name}] mode [{mode}]: " + "; ".join(live))
-                if mode == "files":
-                    self.hauler.serve_files(store, temp, files_directory, port=request.fileserver_port)
-                elif mode == "registry":
-                    self.hauler.serve(store, temp, registry, config)
-                elif mode == "both":
-                    # One loaded capsule backs both read-only servers; the real
-                    # vertical test proves concurrent read access with the pinned Hauler contract.
-                    completed = self.runner.supervise(
-                        [
-                            self.hauler.serve_fileserver_command(
-                                store, temp, files_directory, request.fileserver_port
-                            ),
-                            self.hauler.serve_registry_command(store, temp, registry, config),
-                        ],
-                        env=hauler_subprocess_environment(),
+                with startup_receipt(request.startup_file) as publish:
+                    endpoints = serve_children(
+                        self.hauler, store, temp, registry, files_directory, config,
+                        mode, request, _registry_config, publish, self._announce,
                     )
-                    if not completed.success:
-                        raise RuntimeError(completed.diagnostics or "a served endpoint exited unexpectedly")
-                else:
-                    raise ValueError(f"unsupported serve mode: {mode}")
             return OperationResult(
                 format_version=2,
                 operation="serve",

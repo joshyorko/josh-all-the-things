@@ -110,8 +110,10 @@ def parser() -> argparse.ArgumentParser:
     serve = subcommands.add_parser("serve", help="Serve capsule content")
     serve.add_argument("--haul", required=True)
     serve.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
-    serve.add_argument("--fileserver-port", type=int, default=8080)
-    serve.add_argument("--registry-port", type=int, default=5000)
+    serve.add_argument("--fileserver-port", type=int, default=0, help="0 selects an automatic port")
+    serve.add_argument("--registry-port", type=int, default=0, help="0 selects an automatic port")
+    serve.add_argument("--startup-file", help="Publish an atomic readiness receipt while serving")
+    serve.add_argument("--startup-timeout", type=float, default=30)
     serve.add_argument("--json", action="store_true")
 
     export = subcommands.add_parser("export", help="Materialize capsule images for containerd")
@@ -228,6 +230,8 @@ def _invoke(service: JATService, parsed: argparse.Namespace) -> OperationResult:
                 mode=parsed.mode,
                 fileserver_port=parsed.fileserver_port,
                 registry_port=parsed.registry_port,
+                startup_file=parsed.startup_file,
+                startup_timeout=parsed.startup_timeout,
             )
         )
     if parsed.command == "export":

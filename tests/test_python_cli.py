@@ -305,22 +305,25 @@ def test_inspect_extract_export_copy_cli_contracts(capsys):
     assert copy_request.retries == 5 and copy_request.plain_http is True
 
 
-def test_serve_cli_defaults_to_auto_with_conventional_ports():
+def test_serve_cli_defaults_to_auto_ports():
     service = RecordingService()
     assert main(["serve", "--haul", "h.tar.zst"], service=service) == 0
     _, request = service.calls[0]
     assert request.mode == "auto"
-    assert request.fileserver_port == 8080
-    assert request.registry_port == 5000
+    assert request.fileserver_port == 0
+    assert request.registry_port == 0
     service = RecordingService()
     assert main(
-        ["serve", "--haul", "h.tar.zst", "--mode", "both", "--fileserver-port", "8081", "--registry-port", "5001"],
+        ["serve", "--haul", "h.tar.zst", "--mode", "both", "--fileserver-port", "8081", "--registry-port", "5001",
+         "--startup-file", "/tmp/synthetic-ready.json", "--startup-timeout", "5"],
         service=service,
     ) == 0
     _, request = service.calls[0]
     assert request.mode == "both"
     assert request.fileserver_port == 8081
     assert request.registry_port == 5001
+    assert request.startup_file == Path("/tmp/synthetic-ready.json")
+    assert request.startup_timeout == 5
 
 
 def test_inspect_human_output_lists_content_and_anchors(capsys):
@@ -347,7 +350,7 @@ def test_invalid_cli_options_produce_normal_machine_readable_failure(capsys):
     for arguments, operation in (
         (["build", "--folder", "/w", "--output", "/tmp/h.tar.zst", "--chunk-size", "1MiB", "--json"], "build"),
         (["copy", "--haul", "h.tar.zst", "--to", "registry://user:token@host", "--json"], "copy"),
-        (["serve", "--haul", "h.tar.zst", "--registry-port", "0", "--json"], "serve"),
+        (["serve", "--haul", "h.tar.zst", "--registry-port", "-1", "--json"], "serve"),
     ):
         service = RecordingService()
         assert main(arguments, service=service) == 1
