@@ -21,7 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 OFFICIAL_RELEASE_PREFIX = "https://github.com/hauler-dev/hauler/releases/download/"
-VERSION_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
+VERSION_PATTERN = re.compile(r"^v\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$")
 DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 

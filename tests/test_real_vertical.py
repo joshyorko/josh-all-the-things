@@ -310,6 +310,7 @@ def test_real_images_file_and_http_manifest_are_hauler_native(tmp_path, local_im
         image_reference = seed_local_image(registry_port, local_images[0])
         images_file = tmp_path / "images.txt"
         images_file.write_text(f"# synthetic list\n{image_reference}\n")
+        port = free_port()
         remote_manifest = write_manifest(
             tmp_path / "remote-payload.yaml",
             "\n".join(
@@ -320,14 +321,17 @@ def test_real_images_file_and_http_manifest_are_hauler_native(tmp_path, local_im
                     "  name: remote-extra",
                     "spec:",
                     "  files:",
-                    f"    - path: {json.dumps(str(tmp_path / 'http-note.txt'))}",
+                    f"    - path: http://127.0.0.1:{port}/http-note.txt",
                     "      name: http-note.txt",
                 ]
             )
             + "\n",
         )
         (tmp_path / "http-note.txt").write_text("served over http\n")
-        port = free_port()
+        unsafe_manifest = tmp_path / "remote-local-path.yaml"
+        unsafe_manifest.write_text(remote_manifest.read_text().replace(
+            f"http://127.0.0.1:{port}/http-note.txt", str(tmp_path / "http-note.txt"),
+        ))
         server = subprocess.Popen(
             [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
             cwd=str(tmp_path),
@@ -354,6 +358,13 @@ def test_real_images_file_and_http_manifest_are_hauler_native(tmp_path, local_im
                     hauler_manifests=[f"http://127.0.0.1:{port}/remote-payload.yaml"],
                 )
             )
+            rejected = service.build(BuildRequest(
+                folder=source,
+                output=tmp_path / "remote-local-path.tar.zst",
+                hauler_manifests=[f"http://127.0.0.1:{port}/{unsafe_manifest.name}"],
+            ))
+            assert not rejected.success
+            assert "must be a remote URL" in rejected.diagnostics
         finally:
             server.terminate()
             server.wait(timeout=10)

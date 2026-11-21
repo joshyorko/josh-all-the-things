@@ -19,8 +19,8 @@ proofs pass. Local construction uses the local provider and requires no
 registry credentials. The ORAS/GHCR publisher remains a separate distribution
 boundary: the immutable OCI manifest reference is not the RCC Artifact digest.
 The source candidate and artifact receipt also bind the current official Hauler
-v2.1.1 pin from `runtime/hauler.json`; the Linux and Windows checksums come
-from the release's `hauler_2.1.1_checksums.txt`. This is the engine pin only;
+v2.2.0-dev.5 pin from `runtime/hauler.json`; the Linux and Windows checksums come
+from the release's `hauler_2.2.0-dev.5_checksums.txt`. This is the engine pin only;
 JAT's Hauler engine/manifest implementation remains owned by issue #6.
 
 The receipt contract intentionally advances from format 2 to format 3 because

@@ -35,7 +35,7 @@ permissions:
 # Dispatch from main with the exact source SHA; candidate runs on pushes never publish.
 env:
   JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
-  JAT_RELEASE_TAG: v0.1.18-jat-runtime
+  JAT_RELEASE_TAG: v0.1.19-jat-runtime
 
 jobs:
   reject-non-main-release-dispatch:
@@ -375,7 +375,7 @@ jobs:
           manifest = json.loads(Path("runtime/rcc.json").read_text())
           assert receipt["rcc_version"] == manifest["version"]
           assert receipt["rcc_source"]["commit"] == manifest["source"]["commit"]
-          assert receipt["hauler_version"] == "v2.1.1"
+          assert receipt["hauler_version"] == "v2.2.0-dev.5"
           assert receipt["verified_acquire"] == {"fresh_home": True, "no_build": True}
           assert receipt["verified_no_build"] == {"fresh_home": True, "no_build": True}
           assert receipt["verified_warm_reuse"]["no_build"] is True
@@ -623,7 +623,7 @@ jobs:
               actual_sha = hashlib.sha256(archive.read_bytes()).hexdigest()
               if receipt["jat_git_sha"] != source_sha:
                   raise SystemExit(f"{name} receipt source SHA mismatch: {receipt['jat_git_sha']}")
-              if receipt["platform"] != platform or receipt["rcc_version"] != rcc_manifest["version"] or receipt["rcc_source"]["commit"] != rcc_manifest["source"]["commit"] or receipt["hauler_version"] != "v2.1.1":
+              if receipt["platform"] != platform or receipt["rcc_version"] != rcc_manifest["version"] or receipt["rcc_source"]["commit"] != rcc_manifest["source"]["commit"] or receipt["hauler_version"] != "v2.2.0-dev.5":
                   raise SystemExit(f"{name} receipt runtime identity mismatch")
               if receipt["archive"]["filename"] != archive_file:
                   raise SystemExit(f"{name} receipt archive filename mismatch")
@@ -728,7 +728,7 @@ jobs:
                   "url": f"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
               },
               "rcc_version": json.loads(Path("runtime/rcc.json").read_text(encoding="utf-8"))["version"],
-              "hauler_version": "v2.1.1",
+              "hauler_version": "v2.2.0-dev.5",
               "platforms": platforms,
           }
           (assets / "jat-runtime-provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
@@ -755,7 +755,7 @@ jobs:
           rcc_version = json.loads(pathlib.Path("runtime/rcc.json").read_text(encoding="utf-8"))["version"]
           body = (
               f"## JAT {jat_version} runtime artifacts\n\n"
-              f"Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source {tick}{source_sha}{tick} using Josh RCC {rcc_version} and Hauler v2.1.1.\n\n"
+              f"Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source {tick}{source_sha}{tick} using Josh RCC {rcc_version} and Hauler v2.2.0-dev.5.\n\n"
               f"Workflow proof: https://github.com/{repository}/actions/runs/{run_id}\n\n"
               "Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. "
               + tick + "SHA256SUMS" + tick + " covers every attached runtime asset other than itself.\n\n"
@@ -824,4 +824,4 @@ jobs:
     uses: ./.github/workflows/verify-published-runtime.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      release_tag: v0.1.18-jat-runtime
+      release_tag: v0.1.19-jat-runtime

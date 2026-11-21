@@ -110,12 +110,12 @@ def test_v3_receipt_requires_actual_gate_success_and_never_rebuilds(
         assert not output.exists()
         return
     result = promotion.qualify(root, archive, receipt_path, rcc, output)
-    expected_launcher = [*promotion.HAULER_VERSION_COMMAND, 'v2.1.1']
+    expected_launcher = [*promotion.HAULER_VERSION_COMMAND, 'v2.2.0-dev.5']
     hauler_call = next(argv for argv in calls if '--receipt-file' in argv
                        and Path(argv[argv.index('--receipt-file') + 1]).stem == 'hauler')
     assert hauler_call[hauler_call.index('--') + 1:] == expected_launcher
     assert result['verified_hauler']['launcher'] == expected_launcher
-    assert result['hauler_version'] == 'v2.1.1'
+    assert result['hauler_version'] == 'v2.2.0-dev.5'
     validate(result, json.loads((Path(__file__).parents[1] / 'docs/environment-artifact-receipt.schema.json').read_text()))
     assert archive.read_bytes() == original_archive
     assert any('http://127.0.0.1:1' in argv and '--no-build' in argv for argv in calls)
