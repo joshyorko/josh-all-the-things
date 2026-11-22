@@ -165,9 +165,13 @@ def test_windows_local_file_probe_uses_artifact_python_argv():
     assert "cwd=str(payload.parent)" in workflow
 
 
-def test_windows_serve_smoke_downloads_workspace_from_fileserver():
+def test_native_serve_smokes_download_workspace_from_startup_receipt():
     workflow = Path(".github/workflows/windows-runtime.yml").read_text()
-    assert "127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst" in workflow
+    assert "127.0.0.1:8080" not in workflow
+    assert "startup_file = $startup" in workflow
+    assert '"startup_file": sys.argv[3]' in workflow
+    assert "$($receipt.serve.fileserver_url)/joshs-all-the-things-workspace.tar.zst" in workflow
+    assert '"$endpoint/joshs-all-the-things-workspace.tar.zst"' in workflow
     assert "Invoke-WebRequest -Uri $workspaceUrl -OutFile $downloadedWorkspace -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null" in workflow
     assert "Get-Item -LiteralPath $downloadedWorkspace" in workflow
     assert "$response.StatusCode" not in workflow
@@ -237,7 +241,7 @@ def test_runtime_release_dispatch_binds_publication_to_exact_current_main_sha():
     assert "source_sha:" in workflow
     assert "Exact current main commit whose JAT runtimes should be qualified and published" in workflow
     assert "JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}" in workflow
-    assert "JAT_RELEASE_TAG: v0.1.19-jat-runtime" in workflow
+    assert "JAT_RELEASE_TAG: v0.1.20-jat-runtime" in workflow
     assert "reject-non-main-release-dispatch:" in workflow
     assert "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in workflow
     assert 'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' in workflow

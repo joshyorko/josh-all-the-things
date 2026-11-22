@@ -35,7 +35,7 @@ permissions:
 # Dispatch from main with the exact source SHA; candidate runs on pushes never publish.
 env:
   JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
-  JAT_RELEASE_TAG: v0.1.19-jat-runtime
+  JAT_RELEASE_TAG: v0.1.20-jat-runtime
 
 jobs:
   reject-non-main-release-dispatch:
@@ -227,7 +227,8 @@ jobs:
           & $env:RCC_PATH task run --robot (Join-Path $PWD "robot.yaml") --task Restore -- --json-input $restoreRequest
           if ($LASTEXITCODE -ne 0) { throw "JAT Restore failed on Windows" }
           $serveRequest = Join-Path $env:RUNNER_TEMP "windows-serve.json"
-          @{ haul = $haul } | ConvertTo-Json | Out-File $serveRequest -Encoding utf8
+          $startup = Join-Path $env:RUNNER_TEMP "windows-serve-startup.json"
+          @{ haul = $haul; mode = "files"; startup_file = $startup } | ConvertTo-Json | Out-File $serveRequest -Encoding utf8
           $serveRunDir = Join-Path $env:RUNNER_TEMP "jat-serve-runtime"
           New-Item -ItemType Directory -Force -Path $serveRunDir | Out-Null
           $env:JAT_RUN_DIR = $serveRunDir
@@ -237,10 +238,17 @@ jobs:
           $env:JAT_HAULER_LOG_LEVEL = "debug"
           $serve = Start-Process -FilePath $env:RCC_PATH -ArgumentList $serveArgs -WorkingDirectory $PWD -RedirectStandardOutput $serveOut -RedirectStandardError $serveErr -PassThru
           $ready = $false
-          $workspaceUrl = "http://127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst"
           $downloadedWorkspace = Join-Path $env:RUNNER_TEMP "windows-served-workspace.tar.zst"
           for ($attempt = 0; $attempt -lt 30; $attempt++) {
             if ($serve.HasExited) { Get-Content $serveOut, $serveErr; throw "JAT Serve exited before fileserver readiness" }
+            if (-not (Test-Path -LiteralPath $startup)) { Start-Sleep -Seconds 1; continue }
+            $receipt = Get-Content -Raw -LiteralPath $startup | ConvertFrom-Json
+            if ($receipt.state -ne "ready" -or $receipt.serve.mode -ne "files" -or
+                $receipt.serve.fileserver_bind -ne "all-interfaces" -or
+                $receipt.serve.fileserver_url -cnotmatch '^http://127\.0\.0\.1:[0-9]{1,5}$') {
+              throw "Invalid Serve startup receipt"
+            }
+            $workspaceUrl = "$($receipt.serve.fileserver_url)/joshs-all-the-things-workspace.tar.zst"
             try {
               Invoke-WebRequest -Uri $workspaceUrl -OutFile $downloadedWorkspace -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null
               if ((Test-Path -LiteralPath $downloadedWorkspace -PathType Leaf) -and (Get-Item -LiteralPath $downloadedWorkspace).Length -gt 0) {
@@ -439,12 +447,13 @@ jobs:
           PY
           "$RCC_PATH" --no-build task run --robot "$PWD/robot.yaml" --task Restore -- --json-input "$restore_request"
           serve_request="$RUNNER_TEMP/linux-serve.json"
-          python3 - "$serve_request" "$haul" <<'PY'
+          startup="$RUNNER_TEMP/linux-serve-startup.json"
+          python3 - "$serve_request" "$haul" "$startup" <<'PY'
           import json
           import sys
           from pathlib import Path
 
-          Path(sys.argv[1]).write_text(json.dumps({"haul": sys.argv[2]}))
+          Path(sys.argv[1]).write_text(json.dumps({"haul": sys.argv[2], "mode": "files", "startup_file": sys.argv[3]}))
           PY
           export JAT_RUN_DIR="$RUNNER_TEMP/jat-linux-serve-runtime"
           export JAT_HAULER_LOG_LEVEL=debug
@@ -467,8 +476,11 @@ jobs:
               echo "JAT Serve exited before fileserver readiness" >&2
               exit 1
             fi
+            if [[ ! -f "$startup" ]]; then sleep 1; continue; fi
+            endpoint=$(jq -er 'select(.state == "ready" and .serve.mode == "files" and .serve.fileserver_bind == "all-interfaces") | .serve.fileserver_url' "$startup")
+            [[ "$endpoint" =~ ^http://127\.0\.0\.1:[0-9]{1,5}$ ]]
             if curl --fail --silent --show-error --output "$served" --max-time 2 \
-              http://127.0.0.1:8080/joshs-all-the-things-workspace.tar.zst && [[ -s "$served" ]]; then
+              "$endpoint/joshs-all-the-things-workspace.tar.zst" && [[ -s "$served" ]]; then
               ready=true
               break
             fi
@@ -824,4 +836,4 @@ jobs:
     uses: ./.github/workflows/verify-published-runtime.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      release_tag: v0.1.19-jat-runtime
+      release_tag: v0.1.20-jat-runtime
