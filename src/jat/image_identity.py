@@ -4,6 +4,7 @@ import json
 import re
 import time
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from .models import ImageIdentity, ImageMapping
 
@@ -89,7 +90,9 @@ def record_capture_inputs(store, requested):
             annotations["dev.jat.requested-reference"] = next(iter(matches))
             changed = True
     if changed:
-        (Path(store) / "index.json").write_text(json.dumps(index), encoding="utf-8")
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=store, delete=False) as staged:
+            json.dump(index, staged)
+        Path(staged.name).replace(Path(store) / "index.json")
 
 
 def image_mapping(store, inventory):
