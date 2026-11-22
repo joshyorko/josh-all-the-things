@@ -185,8 +185,10 @@ class ManifestRequest(RequestModel):
 class ServeRequest(RequestModel):
     haul: Path
     mode: ServeMode = "auto"
-    fileserver_port: int = Field(default=8080, ge=1, le=65535)
-    registry_port: int = Field(default=5000, ge=1, le=65535)
+    fileserver_port: int = Field(default=0, ge=0, le=65535)
+    registry_port: int = Field(default=0, ge=0, le=65535)
+    startup_file: Path | None = None
+    startup_timeout: float = Field(default=30, gt=0, le=120)
 
 
 class InspectRequest(RequestModel):

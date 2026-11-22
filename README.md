@@ -79,8 +79,8 @@ The Actions workflow builds candidate runtimes on relevant pushes and pull
 requests without publishing them. Publication requires a manual dispatch from
 `main` with the exact current `source_sha`; the workflow checks that both the
 checkout and `origin/main` match that SHA before it publishes. The next runtime
-targets the new immutable `v0.1.19-jat-runtime` tag; the published `v0.1.17-jat-runtime`
-release remains unchanged.
+targets `v0.1.20-jat-runtime` with dynamic Serve ports and startup receipts.
+It retains the RCC and Hauler pins from published `v0.1.19-jat-runtime`.
 
 ```bash
 scripts/build_environment_artifact.sh \
@@ -322,7 +322,7 @@ Restore uses separate reserved directories: workspace contents go below
 
 ```bash
 rcc task script -r robot.yaml -- ./jat serve \
-  --haul ./everything-haul.tar.zst
+  --haul ./everything-haul.tar.zst --mode registry --registry-port 5000
 ```
 
 This foreground command serves a temporary, read-only OCI registry on port
@@ -507,9 +507,8 @@ rcc task script -r robot.yaml -- ./jat serve --haul ./everything-haul.tar.zst --
 rcc task script -r robot.yaml -- ./jat serve --haul ./everything-haul.tar.zst --mode both
 ```
 
-- `auto` (default) preserves the historical behavior: files-only capsules are
-  served by the fileserver on port `8080`; anything else by the read-only
-  registry on `127.0.0.1:5000`.
+- `auto` (default) selects the fileserver for files-only capsules and the
+  read-only registry otherwise. Ports default to automatic selection.
 - `files` explicitly exposes file artifacts even when the capsule is mixed with
   OCI images/charts.
 - `registry` explicitly exposes the OCI store.
@@ -518,10 +517,21 @@ rcc task script -r robot.yaml -- ./jat serve --haul ./everything-haul.tar.zst --
   failing child stops its sibling and fails the operation, and no Hauler
   processes are left behind.
 
-Port overrides: `--fileserver-port` and `--registry-port`. Exposure is
-conservative: the fileserver listens on all interfaces (as Hauler's fileserver
-always has — the receipt records `all-interfaces`), while the registry binds to
-`127.0.0.1` only (`loopback`).
+Ports: `--fileserver-port` and `--registry-port` accept `0` (automatic, default)
+or an explicit port (no fallback on conflict). Both connection URLs use
+`127.0.0.1`, but the pinned Hauler fileserver listens on all interfaces; its
+receipt reports `all-interfaces`. The registry binds loopback and reports
+`loopback`. A localhost connection URL does not make the fileserver private.
+JAT verifies each actual listener belongs to its Hauler child before readiness.
+
+All modes work with unpatched Hauler v2.1.1. The proposed optional upstream
+`--host` feature is independent of dynamic ports and is not required.
+See the [binding contract](docs/serve-startup.md#hauler-binding-contract).
+
+Use `--startup-file /existing/directory/ready.json` for an atomic JSON receipt
+published while the foreground process is alive, after the actual endpoints
+are ready. The path must not already exist. Consumers must watch both this
+file and process exit. See the [startup contract](docs/serve-startup.md).
 
 ### Export Images for containerd
 
