@@ -1,0 +1,11 @@
+# JAT v0.1.19 runtime release preparation
+
+This release targets immutable prerelease `v0.1.19-jat-runtime` from exact merged main. It retains checksum-pinned RCC v18.19.11 and upgrades Hauler from v2.1.1 to the explicitly selected upstream prerelease v2.2.0-dev.5. Linux and Windows archive SHA-256 pins come from the official release checksum asset.
+
+Hauler PR #928 fixes local image imports ignoring Docker's selected context. Upstream issue #927 is closed; JAT issue #24 remains the downstream qualification tracker. A Linux mount-namespace comparison hid the default Docker socket and exposed the same daemon only at a selected non-default endpoint: the Docker CLI and official v2.2.0-dev.5 imported the synthetic image, while official v2.1.1 failed. The prerelease also rejected an invalid selected context. This is Linux client isolation on one kernel/daemon, not native Windows, macOS, SSH-context or mutual-TLS proof.
+
+The installer now accepts exact prerelease identifiers while retaining official release URLs, SHA-256 checks, and exact reported-version verification. Descriptor pins, receipt schema, native qualification and publication checks agree on v2.2.0-dev.5. Remote manifests now reject local payload paths by default; the integration fixture uses a remote payload URL and verifies local-path rejection instead of enabling upstream's trust escape hatch.
+
+Publication requires successful native Linux/Windows runtime qualification and exact-main dispatch. Postpublication verification must pass for both platforms before Josh Room's existing RCC/controller/JAT maintenance workflow promotes the published runtime. Earlier immutable releases remain unchanged. Preparation and local tests alone do not establish hosted qualification, publication, or installed Room acceptance.
+
+The first postpublication run exposed a verifier-only defect: the environment-owned Hauler probe accepted stable version syntax but rejected the correctly reported `2.2.0-dev.5`. The repair accepts an exact prerelease identifier while retaining normalized version equality, duplicate-version rejection, and Python/executable ownership checks. The read-only verifier stages trusted current tooling separately from the original released source, so the immutable v0.1.19 runtime assets and source identity remain unchanged during requalification.

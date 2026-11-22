@@ -9,7 +9,7 @@ payload that gives RCC-aware consumers exact environment reconstruction — it i
 not the definition of a JAT.
 
 JAT runs as an RCC robot, from a self-contained RCC bundle, or through the
-standalone Python `jat` command. Hauler (pinned: v2.1.1) owns the OCI content,
+standalone Python `jat` command. Hauler (pinned prerelease: v2.2.0-dev.5) owns the OCI content,
 store, transfer, and serving mechanics; JAT gives the capsule a small, safe,
 human-friendly contract.
 
@@ -79,7 +79,7 @@ The Actions workflow builds candidate runtimes on relevant pushes and pull
 requests without publishing them. Publication requires a manual dispatch from
 `main` with the exact current `source_sha`; the workflow checks that both the
 checkout and `origin/main` match that SHA before it publishes. The next runtime
-targets the new immutable `v0.1.18-jat-runtime` tag; the published `v0.1.17-jat-runtime`
+targets the new immutable `v0.1.19-jat-runtime` tag; the published `v0.1.17-jat-runtime`
 release remains unchanged.
 
 ```bash
@@ -365,8 +365,10 @@ Hauler manifests are the **advanced declarative composition boundary**. Simple
 JAT flags cover common use; users and agents who need rich Hauler behavior
 express it in Hauler's own manifest model instead of a parallel JAT DSL.
 
-For the pinned v2.1.1, ordinary manifests support exactly three content kinds:
-`Files`, `Images`, and `Charts`. (Hauler also has a separate product/collection
+JAT commonly composes `Files`, `Images`, and `Charts` manifests. The pinned
+Hauler v2.2.0-dev.5 also supports additional native content kinds. Remote
+manifests must use remote payload URLs; JAT does not enable Hauler's
+`--trust-remote-manifests` escape hatch. (Hauler also has a separate product/collection
 acquisition path via `store sync --products`; that is a different mechanism and
 is not part of `--hauler-manifest`.)
 
@@ -414,14 +416,14 @@ credentials, then creates a **fresh store** and pulls the published remote ref
 before generating the final manifest. Without `--publish-local`, JAT never
 pushes local images. JAT does not accept credentials; configure Docker,
 Podman/`REGISTRY_AUTH_FILE`, credential helpers, or `hauler login` directly.
-Hauler v2.1.1 supports `--plain-http` for registry copy, and automatically
+The pinned Hauler supports `--plain-http` for registry copy, and automatically
 uses HTTP for loopback registry pulls. Manifest operations with
 `--plain-http` are therefore limited to loopback registry references; JAT
 rejects non-loopback references and `--images-file` combinations before any
 registry operation. The flag does not enable plain HTTP for arbitrary
 non-loopback sync targets.
 `--ca-file` supports remote acquisition only. JAT rejects it for local image
-publication because Hauler v2.1.1 cannot apply a custom CA file to registry copy.
+publication because the current JAT publication contract cannot apply a custom CA file to registry copy.
 `--ca-file` and the visually explicit `--insecure-skip-tls-verify` are mutually
 exclusive; `--check` requests Hauler's more expensive full store integrity
 check. Receipts never contain CA contents or credentials.
@@ -454,7 +456,7 @@ rcc task script -r robot.yaml -- ./jat build \
   --output ./chunked-haul.tar.zst
 ```
 
-Hauler v2.1.1 names new chunk files `<output>.001`, `<output>.002`, and so on
+The pinned Hauler names new chunk files `<output>.001`, `<output>.002`, and so on
 (`chunked-haul.tar.zst.001`, ...). JAT promotes all chunks atomically and reports
 each path, size, and SHA-256. Existing v2.0.3 underscore chunk entrypoints
 (`<base>_0<ext>`) remain discoverable for loading where Hauler supports them.

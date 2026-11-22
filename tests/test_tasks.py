@@ -215,19 +215,19 @@ def test_rcc_manifest_pins_current_linux_and_windows_assets_without_future_place
         assert re.fullmatch(r"[0-9a-f]{64}", pin["sha256"])
 
 
-def test_current_artifact_candidate_pins_official_hauler_v211_checksums():
+def test_current_artifact_candidate_pins_official_hauler_prerelease_checksums():
     manifest = json.loads(Path("runtime/hauler.json").read_text())["hauler"]
-    assert manifest["version"] == "v2.1.1"
+    assert manifest["version"] == "v2.2.0-dev.5"
     assert manifest["platforms"]["linux-amd64"] == {
-        "asset": "hauler_2.1.1_linux_amd64.tar.gz",
-        "url": "https://github.com/hauler-dev/hauler/releases/download/v2.1.1/hauler_2.1.1_linux_amd64.tar.gz",
-        "sha256": "faa4d9602fdf92c2cb96eaaa3ba0889a54d2c415ba8806cda394cde5f9355b18",
+        "asset": "hauler_2.2.0-dev.5_linux_amd64.tar.gz",
+        "url": "https://github.com/hauler-dev/hauler/releases/download/v2.2.0-dev.5/hauler_2.2.0-dev.5_linux_amd64.tar.gz",
+        "sha256": "cfdf0472144b9a3110e9f51cbd233cd2f9ff833436170a76d201311e31548211",
         "executable": "hauler",
     }
     assert manifest["platforms"]["windows-amd64"] == {
-        "asset": "hauler_2.1.1_windows_amd64.tar.gz",
-        "url": "https://github.com/hauler-dev/hauler/releases/download/v2.1.1/hauler_2.1.1_windows_amd64.tar.gz",
-        "sha256": "f6f4f524854f8efa9999a33924b93848eaacb12877181677442ebc0fe6d9d67a",
+        "asset": "hauler_2.2.0-dev.5_windows_amd64.tar.gz",
+        "url": "https://github.com/hauler-dev/hauler/releases/download/v2.2.0-dev.5/hauler_2.2.0-dev.5_windows_amd64.tar.gz",
+        "sha256": "bc531093feee25a22c054557df22b7a4ec9f54f69dd817b0fff97da3e0a3d828",
         "executable": "hauler.exe",
     }
 
@@ -237,7 +237,7 @@ def test_runtime_release_dispatch_binds_publication_to_exact_current_main_sha():
     assert "source_sha:" in workflow
     assert "Exact current main commit whose JAT runtimes should be qualified and published" in workflow
     assert "JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}" in workflow
-    assert "JAT_RELEASE_TAG: v0.1.18-jat-runtime" in workflow
+    assert "JAT_RELEASE_TAG: v0.1.19-jat-runtime" in workflow
     assert "reject-non-main-release-dispatch:" in workflow
     assert "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in workflow
     assert 'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' in workflow

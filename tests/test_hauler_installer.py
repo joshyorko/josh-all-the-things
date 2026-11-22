@@ -85,18 +85,18 @@ def test_canonical_manifest_contains_official_linux_and_windows_pins():
     assert manifest == {
         "schema_version": 1,
         "hauler": {
-            "version": "v2.1.1",
+            "version": "v2.2.0-dev.5",
             "platforms": {
                 "linux-amd64": {
-                    "asset": "hauler_2.1.1_linux_amd64.tar.gz",
-                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.1.1/hauler_2.1.1_linux_amd64.tar.gz",
-                    "sha256": "faa4d9602fdf92c2cb96eaaa3ba0889a54d2c415ba8806cda394cde5f9355b18",
+                    "asset": "hauler_2.2.0-dev.5_linux_amd64.tar.gz",
+                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.2.0-dev.5/hauler_2.2.0-dev.5_linux_amd64.tar.gz",
+                    "sha256": "cfdf0472144b9a3110e9f51cbd233cd2f9ff833436170a76d201311e31548211",
                     "executable": "hauler",
                 },
                 "windows-amd64": {
-                    "asset": "hauler_2.1.1_windows_amd64.tar.gz",
-                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.1.1/hauler_2.1.1_windows_amd64.tar.gz",
-                    "sha256": "f6f4f524854f8efa9999a33924b93848eaacb12877181677442ebc0fe6d9d67a",
+                    "asset": "hauler_2.2.0-dev.5_windows_amd64.tar.gz",
+                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.2.0-dev.5/hauler_2.2.0-dev.5_windows_amd64.tar.gz",
+                    "sha256": "bc531093feee25a22c054557df22b7a4ec9f54f69dd817b0fff97da3e0a3d828",
                     "executable": "hauler.exe",
                 },
             },
@@ -316,6 +316,18 @@ def test_stale_descriptor_pin_fails_before_prefix_mutation(tmp_path):
     with pytest.raises(ValueError, match="environment expects v2.0.3.*manifest pins v2.1.1"):
         install(manifest, conda, expected_version="v2.0.3", system="Linux", machine="x86_64")
     assert not conda.exists()
+
+
+def test_exact_prerelease_installs_and_rejects_a_different_build(tmp_path, simulated_hauler_process):
+    version = "v2.2.0-dev.5"
+    payload = _archive(tmp_path / "archive.tar.gz", version=version)
+    manifest = _manifest(tmp_path, platform="linux-amd64", asset="hauler.tar.gz", payload=payload, version=version)
+    conda = tmp_path / "conda"
+    conda.mkdir()
+    target = install(manifest, conda, expected_version=version, system="Linux", machine="x86_64", download=_download(payload))
+    assert target.read_bytes() == f"test-hauler\nGitVersion:    {version}\n".encode()
+    with pytest.raises(ValueError, match="environment expects v2.2.0-dev.4"):
+        install(manifest, conda, expected_version="v2.2.0-dev.4", system="Linux", machine="x86_64")
 
 
 def test_cli_rejects_stale_descriptor_pin(tmp_path):

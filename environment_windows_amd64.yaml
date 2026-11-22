@@ -14,4 +14,4 @@ dependencies:
       - psutil==7.2.2
 
 rccPostInstall:
-  - python scripts/install_hauler.py --expected-version v2.1.1
+  - python scripts/install_hauler.py --expected-version v2.2.0-dev.5

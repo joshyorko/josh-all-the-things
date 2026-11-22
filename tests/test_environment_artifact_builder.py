@@ -88,7 +88,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
     log = tmp_path / "rcc.log"
     write_fake_rcc(rcc, log)
     monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "0" * 64})
-    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.2.0-dev.5")
     monkeypatch.setattr("scripts.build_environment_artifact._git_sha", lambda root, env, timeout: "d" * 40)
     output = tmp_path / "dist" / "jat-runtime.rcca"
     receipt = tmp_path / "dist" / "jat-runtime.json"
@@ -119,7 +119,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "python",
         "-c",
         HAULER_VERSION_CHECK,
-        "v2.1.1",
+        "v2.2.0-dev.5",
     ]
     assert calls[7][:3] == ["--no-build", "env", "exec"]
 
@@ -138,7 +138,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "legacy_blueprint_key": "c" * 16,
         "platform": result["platform"],
         "rcc_version": "v18.19.11",
-        "hauler_version": "v2.1.1",
+        "hauler_version": "v2.2.0-dev.5",
         "rcc_source": {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "0" * 64},
         "specification_digest": "sha256:" + "b" * 64,
         "operation": "build",
@@ -149,7 +149,7 @@ def test_build_uses_official_publish_export_acquire_and_exec_flow(tmp_path, monk
         "verified_hauler": {
             "fresh_home": True,
             "command": ["hauler", "version"],
-            "launcher": ["python", "-c", HAULER_VERSION_CHECK, "v2.1.1"],
+            "launcher": ["python", "-c", HAULER_VERSION_CHECK, "v2.2.0-dev.5"],
             "resolved_under_conda_prefix": True,
             "exit_code": 0,
         },
@@ -195,23 +195,23 @@ def prefix_local_hauler(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("reported,expected_exit", [
-    ("2.1.1", 0), ("v2.1.1", 0), ("2.1.10", 1), ("2.1.0", 1), ("unknown", 1),
+    ("2.2.0-dev.5", 0), ("v2.2.0-dev.5", 0), ("2.1.10", 1), ("2.1.0", 1), ("unknown", 1),
 ])
 def test_prefix_local_hauler_proof_compares_exact_release(prefix_local_hauler, reported, expected_exit):
     python, hauler = prefix_local_hauler
     hauler.write_text(f"#!/bin/sh\nprintf 'GitVersion:    {reported}\\n'\n")
-    result = subprocess.run([str(python), *HAULER_VERSION_COMMAND[1:], "v2.1.1"], capture_output=True, text=True, check=False)
+    result = subprocess.run([str(python), *HAULER_VERSION_COMMAND[1:], "v2.2.0-dev.5"], capture_output=True, text=True, check=False)
     assert result.returncode == expected_exit
 
 
 @pytest.mark.parametrize("probe_index", [0, 1, 2])
-@pytest.mark.parametrize("reported,expected_exit", [("2.1.1", 0), ("2.1.10", 1)])
+@pytest.mark.parametrize("reported,expected_exit", [("2.2.0-dev.5", 0), ("2.1.10", 1)])
 def test_workflow_hauler_probes_compare_exact_release(prefix_local_hauler, probe_index, reported, expected_exit):
     python, hauler = prefix_local_hauler
     hauler.write_text(f"#!/bin/sh\nprintf 'GitVersion:    {reported}\\n'\n")
     workflow = (Path(__file__).parents[1] / ".github/workflows/windows-runtime.yml").read_text()
     probes = re.findall(r'(?:\$haulerVersionCode = |hauler_probe=)"([^"]+)"', workflow)
-    result = subprocess.run([str(python), "-c", probes[probe_index], "v2.1.1"], capture_output=True, text=True, check=False)
+    result = subprocess.run([str(python), "-c", probes[probe_index], "v2.2.0-dev.5"], capture_output=True, text=True, check=False)
     assert result.returncode == expected_exit
 
 
@@ -223,7 +223,7 @@ def test_builder_rejects_prefix_local_hauler_release_mismatch(tmp_path, monkeypa
     rcc = tmp_path / "rcc"
     write_fake_rcc(rcc, tmp_path / "rcc.log")
     monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: RCC_SOURCE)
-    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.2.0-dev.5")
     monkeypatch.setattr("scripts.build_environment_artifact._git_sha", lambda root, env, timeout: "d" * 40)
     monkeypatch.setenv("JAT_FAKE_RCC_RUN_HAULER_PROOF", "1")
     output = tmp_path / "runtime.rcca"
@@ -267,7 +267,7 @@ def test_receipt_staging_failure_removes_staged_archive(tmp_path, monkeypatch):
     rcc = tmp_path / "rcc"
     write_fake_rcc(rcc, tmp_path / "rcc.log")
     monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: RCC_SOURCE)
-    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.2.0-dev.5")
     monkeypatch.setattr("scripts.build_environment_artifact._git_sha", lambda root, env, timeout: "d" * 40)
     output = tmp_path / "dist" / "jat-runtime.rcca"
     blocked_parent = tmp_path / "blocked-parent"
@@ -323,7 +323,7 @@ def committed_builder_source(tmp_path, monkeypatch):
     log = tmp_path / "rcc.log"
     write_fake_rcc(rcc, log)
     monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: RCC_SOURCE)
-    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.2.0-dev.5")
     return root, robot, rcc, log
 
 
@@ -388,7 +388,7 @@ def test_builder_keeps_final_outputs_absent_when_fresh_verification_fails(tmp_pa
     log = tmp_path / "rcc.log"
     write_fake_rcc(rcc, log)
     monkeypatch.setattr("scripts.build_environment_artifact._rcc_identity", lambda root, executable: {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "0" * 64})
-    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.1.1")
+    monkeypatch.setattr("scripts.build_environment_artifact._hauler_version", lambda root: "v2.2.0-dev.5")
     monkeypatch.setattr("scripts.build_environment_artifact._git_sha", lambda root, env, timeout: "d" * 40)
     output = tmp_path / "dist" / "jat-runtime.rcca"
     receipt = tmp_path / "dist" / "jat-runtime.json"
@@ -440,7 +440,7 @@ def test_publish_wrapper_validates_selected_structured_receipt(tmp_path, receipt
                 "jat_git_sha": subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip(),
                 "rcc_executable": "/synthetic/rcc",
                 "rcc_version": "v18.19.11",
-                "hauler_version": "v2.1.1",
+                "hauler_version": "v2.2.0-dev.5",
                 "rcc_source": {**RCC_SOURCE, "asset": "rcc-linux64", "sha256": "4d68609044d3a39a1728d571d54c77a6174215adb40eb9acd69ce5ad34a6db1f"},
                 "platform": "linux_amd64",
                 "artifact_digest": "sha256:" + "a" * 64,
@@ -458,7 +458,7 @@ def test_publish_wrapper_validates_selected_structured_receipt(tmp_path, receipt
                 "verified_hauler": {
                     "fresh_home": True,
                     "command": ["hauler", "version"],
-                    "launcher": ["python", "-c", HAULER_VERSION_CHECK, "v2.1.1"],
+                    "launcher": ["python", "-c", HAULER_VERSION_CHECK, "v2.2.0-dev.5"],
                     "resolved_under_conda_prefix": True,
                     "exit_code": 0,
                 },
@@ -622,7 +622,7 @@ def test_publish_wrapper_accepts_windows_archive_and_keeps_platform_tag(tmp_path
         "rcc_executable": "C:/runner/rcc.exe",
         "rcc_version": "v18.19.11",
         "rcc_source": {**RCC_SOURCE, "asset": "rcc-windows64.exe", "sha256": "58f43a3b3c54032740f224cb4a8bbf68c47c865cf2652084fb139b8ecc01cfd0"},
-        "hauler_version": "v2.1.1",
+        "hauler_version": "v2.2.0-dev.5",
         "platform": "windows_amd64",
         "artifact_digest": "sha256:" + "e" * 64,
         "specification_digest": "sha256:" + "f" * 64,
@@ -635,7 +635,7 @@ def test_publish_wrapper_accepts_windows_archive_and_keeps_platform_tag(tmp_path
         "verified_hauler": {
             "fresh_home": True,
             "command": ["hauler", "version"],
-            "launcher": ["python", "-c", HAULER_VERSION_CHECK, "v2.1.1"],
+            "launcher": ["python", "-c", HAULER_VERSION_CHECK, "v2.2.0-dev.5"],
             "resolved_under_conda_prefix": True,
             "exit_code": 0,
         },
@@ -686,5 +686,5 @@ def test_legacy_files_are_removed_and_new_receipt_schema_is_version_three():
     schema = json.loads((root / "docs/environment-artifact-receipt.schema.json").read_text())
     assert schema["properties"]["format_version"]["const"] == 3
     assert schema["properties"]["rcc_version"]["const"] == "v18.19.11"
-    assert schema["properties"]["hauler_version"]["const"] == "v2.1.1"
+    assert schema["properties"]["hauler_version"]["const"] == "v2.2.0-dev.5"
     assert "artifact_digest" in schema["required"]
