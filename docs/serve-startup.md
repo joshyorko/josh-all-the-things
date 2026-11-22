@@ -175,3 +175,31 @@ The actual pinned binary SHA256 remains
 [JAT #38](https://github.com/joshyorko/josh-all-the-things/issues/38) now tracks
 optional localhost binding independently. PR #963 remains valid optional work;
 it is not a blocker for these existing artifact-serving capabilities.
+
+### OCI image identities (mapping version 1)
+
+`jat inspect --json` and `jat export --format containerd --json` include
+an `image_mapping` object. A live Serve startup receipt may include the
+same object at `serve.image_mapping`. Its fields are `schema_version: 1`
+and `images`, one record per Hauler image inventory row. Files and workspace
+anchors remain in the inventory. Older receipts may omit the mapping.
+
+| Field | Meaning |
+| --- | --- |
+| `requested_reference` | Original spelling supplied to local JAT capture when one input unambiguously matched the acquired descriptor. Older hauls, ambiguous inputs and delegated Hauler manifest inputs can omit it. |
+| `source_reference` | Hauler's recorded `hauler.dev/original-ref` annotation matched by stored name and digest. Hauler may normalize its spelling. |
+| `stored_reference`, `digest`, `platform` | Hauler inventory identity. Digest is the manifest or index digest. Missing or unsupported digests and missing platform are unknown. |
+| `display_label` | Last component of the stored name. Different images may share a label. |
+| `pull_reference` | Immutable registry reference. Supplied only for an owned, active loopback registry where an HTTP manifest HEAD confirmed the inventory digest. |
+
+Missing optional fields and JSON null have the same meaning. Only copy
+`docker pull <pull_reference>` as an argument for the current Serve session.
+A local endpoint expires when that process exits. On a missing registry,
+digest mismatch, unsuccessful probe, or time budget expiry, show inventory
+identity and disable Copy Pull. Use the exported payload path and archive
+SHA-256 for downloads. The registry repository retains its namespace.
+Deduplicating label text must never remove namespace components from pull refs.
+
+JAT records unambiguous explicit local capture names on the new store's OCI
+index descriptors. Manifest and layer digests retain their original values.
+Reading an existing haul requires no migration.

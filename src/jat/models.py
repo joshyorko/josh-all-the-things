@@ -335,10 +335,26 @@ class ManifestReceipt(BaseModel):
     integrity_passed: bool | None = None
 
 
+class ImageIdentity(BaseModel):
+    stored_reference: str
+    display_label: str
+    source_reference: str | None = None
+    requested_reference: str | None = None
+    digest: str | None = None
+    platform: str | None = None
+    pull_reference: str | None = None
+
+
+class ImageMapping(BaseModel):
+    schema_version: Literal[1] = 1
+    images: list[ImageIdentity]
+
+
 class ServeEndpoints(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: ServeMode
+    image_mapping: ImageMapping | None = None
     fileserver_url: str | None = None
     registry_url: str | None = None
     fileserver_bind: Literal["all-interfaces", "loopback"] | None = None
@@ -371,6 +387,7 @@ class OperationResult(BaseModel):
     diagnostics: str = ""
     environment_artifact: EnvironmentArtifactMetadata | None = None
     payloads: list[ArtifactOutput] | None = None
+    image_mapping: ImageMapping | None = None
     inventory: list[ContentEntry] | None = None
     anchors: dict[Literal["workspace", "brew", "rcc_environment", "rcc_metadata"], bool] | None = None
     serve: ServeEndpoints | None = None
