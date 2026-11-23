@@ -79,8 +79,8 @@ The Actions workflow builds candidate runtimes on relevant pushes and pull
 requests without publishing them. Publication requires a manual dispatch from
 `main` with the exact current `source_sha`; the workflow checks that both the
 checkout and `origin/main` match that SHA before it publishes. The next runtime
-targets `v0.1.20-jat-runtime` with dynamic Serve ports and startup receipts.
-It retains the RCC and Hauler pins from published `v0.1.19-jat-runtime`.
+targets `v0.1.21-jat-runtime` with OCI image identity mappings. It retains
+the RCC and Hauler pins from published `v0.1.20-jat-runtime`.
 
 ```bash
 scripts/build_environment_artifact.sh \

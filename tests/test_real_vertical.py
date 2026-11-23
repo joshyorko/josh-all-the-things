@@ -728,3 +728,72 @@ def test_real_manifest_injection_of_omitted_optional_anchor_fails_closed(tmp_pat
         "collides with the reserved JAT anchor" in built.diagnostics
     ), built.diagnostics
     assert not haul.exists(), "injected content must never be published"
+
+
+@requires_docker
+def test_real_image_identity_pull_export_and_manifest_inputs(tmp_path, local_images):
+    service = make_service()
+    source = make_workspace(tmp_path)
+    reference = local_images[0]
+    with local_registry() as port:
+        prefix = f"127.0.0.1:{port}/nested"
+        manifest = tmp_path / "published.yaml"
+        published = service.manifest(ManifestRequest(
+            images=[reference], registry_prefix=prefix, publish_local=True,
+            plain_http=True, output=manifest,
+        ))
+        assert published.success, published.diagnostics
+        alias, = published.manifest.mappings
+        assert alias.source_local == reference and alias.published_remote == prefix + "/" + reference
+        remote = alias.published_remote.rsplit(":", 1)[0]
+        images_file = tmp_path / "images.txt"
+        images_file.write_text(f"{remote}@{alias.digest}\n")
+        haul = tmp_path / "images.tar.zst"
+        built = service.build(BuildRequest(folder=source, output=haul, images=[reference],
+                                           images_files=[str(images_file)], hauler_manifests=[str(manifest)]))
+        assert built.success, built.diagnostics
+
+    inspected = service.inspect(InspectRequest(haul=haul))
+    assert inspected.success, inspected.diagnostics
+    images = inspected.image_mapping.images
+    captured = next(image for image in images if image.requested_reference == reference)
+    assert captured.digest == alias.digest
+    assert any(image.stored_reference.startswith(remote) for image in images)
+    assert all(image.pull_reference is None for image in images)
+    startup = tmp_path / "ready.json"
+    log_path = tmp_path / "serve.log"
+    with log_path.open("wb") as log:
+        child = subprocess.Popen(
+            [sys.executable, "-m", "jat.cli", "serve", "--mode", "registry", "--haul", str(haul),
+             "--startup-file", str(startup), "--json"], stdout=log, stderr=log,
+        )
+        try:
+            deadline = time.monotonic() + 35
+            while not startup.exists():
+                assert child.poll() is None and time.monotonic() < deadline, log_path.read_text()
+                time.sleep(0.1)
+            mapping = json.loads(startup.read_text())["serve"]["image_mapping"]
+            for entry in mapping["images"]:
+                pull = entry["pull_reference"]
+                assert pull and pull.endswith("@" + entry["digest"])
+                try:
+                    subprocess.run([DOCKER, "pull", pull], check=True, capture_output=True, timeout=45)
+                    digests = subprocess.check_output(
+                        [DOCKER, "image", "inspect", "--format", "{{json .RepoDigests}}", pull], text=True,
+                    )
+                    assert pull in json.loads(digests)
+                finally:
+                    subprocess.run([DOCKER, "image", "rm", pull], capture_output=True, timeout=30)
+        finally:
+            child.send_signal(signal.SIGINT)
+            child.wait(timeout=15)
+    assert not startup.exists()
+    archive = tmp_path / "owner-selected-name.tar.zst"
+    exported = service.export(ExportRequest(haul=haul, output=archive))
+    assert exported.success, exported.diagnostics
+    assert exported.image_mapping == inspected.image_mapping
+    try:
+        loaded = subprocess.run([DOCKER, "load", "-i", str(archive)], check=True, capture_output=True, text=True)
+        assert reference in loaded.stdout
+    finally:
+        subprocess.run([DOCKER, "image", "rm", alias.published_remote], capture_output=True, timeout=30)

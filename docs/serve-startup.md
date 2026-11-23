@@ -175,3 +175,62 @@ The actual pinned binary SHA256 remains
 [JAT #38](https://github.com/joshyorko/josh-all-the-things/issues/38) now tracks
 optional localhost binding independently. PR #963 remains valid optional work;
 it is not a blocker for these existing artifact-serving capabilities.
+
+### OCI image identities (mapping version 1)
+
+`jat inspect --json` and `jat export --format containerd --json` include
+an `image_mapping` object. A live Serve startup receipt may include the
+same object at `serve.image_mapping`. Its fields are `schema_version: 1`
+and `images`, one record per Hauler image inventory row. Files and workspace
+anchors remain in the inventory. Older receipts may omit the mapping.
+
+| Field | Meaning |
+| --- | --- |
+| `requested_reference` | Original spelling supplied to local JAT capture when one input unambiguously matched the acquired descriptor. Older hauls, ambiguous inputs and delegated Hauler manifest inputs can omit it. |
+| `source_reference` | Hauler's recorded `hauler.dev/original-ref` annotation matched by stored name and digest. Hauler may normalize its spelling. |
+| `stored_reference`, `digest`, `platform` | Hauler inventory identity. Digest is the manifest or index digest. Missing or unsupported digests and missing platform are unknown. |
+| `display_label` | Last component of the stored name. Different images may share a label. |
+| `pull_reference` | Immutable registry reference. Supplied only for an owned, active loopback registry where an HTTP manifest HEAD confirmed the inventory digest. |
+
+Missing optional fields and JSON null have the same meaning. Only copy
+`docker pull <pull_reference>` as an argument for the current Serve session.
+A local endpoint expires when that process exits. On a missing registry,
+digest mismatch, unsuccessful probe, or time budget expiry, show inventory
+identity and disable Copy Pull. Use the exported payload path and archive
+SHA-256 for downloads. The registry repository retains its namespace.
+Deduplicating label text must never remove namespace components from pull refs.
+
+JAT records unambiguous explicit local capture names on the new store's OCI
+index descriptors. Manifest and layer digests retain their original values.
+Reading an existing haul requires no migration.
+
+#### Pinned Linux specimen
+
+On Hauler v2.2.0-dev.5 and Docker 29.10.0, one synthetic amd64 image
+was tagged five ways and captured with five explicit `--image` inputs.
+All five labels survived capture, inspect and containerd export/import.
+Docker pulled all five digest references from the owned dynamic registry.
+Below, `T` is the synthetic tag, `R` the reported registry host and port,
+and `D` the verified manifest digest.
+
+| Requested | Stored | Pulled |
+| --- | --- | --- |
+| `jat40-fixture-api:T` | `docker.io/library/jat40-fixture-api:T` | `R/library/jat40-fixture-api@D` |
+| `backend/jat40-fixture-api:T` | `docker.io/backend/jat40-fixture-api:T` | `R/backend/jat40-fixture-api@D` |
+| `docker.io/library/nginx:T` | `docker.io/library/nginx:T` | `R/library/nginx@D` |
+| `ghcr.io/acme/jat40-fixture-api:T` | `ghcr.io/acme/jat40-fixture-api:T` | `R/acme/jat40-fixture-api@D` |
+| `localhost:49123/team/jat40-fixture-api:T` | `localhost:49123/team/jat40-fixture-api:T` | `R/team/jat40-fixture-api@D` |
+
+The registry replaced the host once and preserved the repository path.
+For `manifest --publish-local`, a namespace supplied in `--registry-prefix`
+is part of the published repository. Its local and published names are
+recorded in `manifest.mappings`. A registry prefix that repeats an input
+namespace legitimately produces a nested repository. Consumers should show
+both names only when that helps disambiguate a label.
+
+The export used the caller's `verified-v2.tar.zst` filename and loaded all
+five image names. In a separate loopback-only network namespace, a GET for
+`joshs-all-the-things-workspace.tar.zst` returned the 147-byte archive and
+the exact synthetic workspace file. There was no Content-Disposition header.
+The archive is a file artifact, independent of OCI tags. The two endpoints
+reported all-interface file serving and loopback registry serving.

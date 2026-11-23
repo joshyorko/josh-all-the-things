@@ -48,6 +48,7 @@ from .safety import (
     new_output_path,
     validate_archive_members,
 )
+from .image_identity import image_mapping, record_capture_inputs, verify_pull_references
 from .serving import serve_children, startup_receipt
 from .staging import OwnedStage
 
@@ -433,6 +434,7 @@ class JATService:
                 if anchor_snapshot is not None:
                     _verify_anchors_unchanged(self.hauler.inventory(build_store, temp), anchor_snapshot)
                 staged = stage.path / output.name
+                record_capture_inputs(build_store, images)
                 _require_chunkable_output_name(output.name, request.chunk_size)
                 self.hauler.save(build_store, temp, staged, chunk_size=request.chunk_size)
                 if request.chunk_size:
@@ -448,11 +450,13 @@ class JATService:
                 _validate_inventory(inventory, brew_archive is not None, rcc_archive is not None)
                 if saved_hauler_identities is not None:
                     _verify_saved_hauler_content(inventory, saved_hauler_identities)
+                mapping = image_mapping(validation_store, inventory)
                 outputs = _promote_all_or_nothing(chunks, output.parent)
             if request.chunk_size:
                 return OperationResult(
                     format_version=2,
                     operation="build",
+                    image_mapping=mapping,
                     success=True,
                     exit_status=0,
                     producer_version=self.producer_version,
@@ -465,6 +469,7 @@ class JATService:
             return OperationResult(
                 format_version=2 if filtered else 1,
                 operation="build",
+                image_mapping=mapping,
                 success=True,
                 exit_status=0,
                 payload_path=single.path,
@@ -748,9 +753,17 @@ class JATService:
                 files_directory.mkdir()
                 config = stage.path / "registry.yaml"
                 with startup_receipt(request.startup_file) as publish:
+                    mapping = image_mapping(store, inventory)
+
+                    def publish_ready(endpoints):
+                        if mapping.images:
+                            verify_pull_references(mapping, endpoints.registry_url)
+                            endpoints = endpoints.model_copy(update={"image_mapping": mapping})
+                        publish(endpoints)
+
                     endpoints = serve_children(
                         self.hauler, store, temp, registry, files_directory, config,
-                        mode, request, _registry_config, publish, self._announce,
+                        mode, request, _registry_config, publish_ready, self._announce,
                     )
             return OperationResult(
                 format_version=2,
@@ -768,6 +781,7 @@ class JATService:
         try:
             haul = existing_file(request.haul)
             with self._loaded_capsule(haul, _operation_runtime_directory(), "inspect") as (stage, store, temp, inventory):
+                mapping = image_mapping(store, inventory)
                 entries = [_normalize_inventory_entry(item) for item in inventory]
                 anchors = _identify_anchors(inventory)
             return OperationResult(
@@ -777,6 +791,7 @@ class JATService:
                 exit_status=0,
                 producer_version=self.producer_version,
                 inventory=entries,
+                image_mapping=mapping,
                 anchors=anchors,
                 complete=True,
             )
@@ -836,6 +851,7 @@ class JATService:
             output = new_output_path(request.output)
             with self._loaded_capsule(haul, output.parent, "export") as (stage, store, temp, inventory):
                 staged = stage.path / output.name
+                mapping = image_mapping(store, inventory)
                 # The adapter rejects any chunk-size/--containerd combination.
                 self.hauler.save(store, temp, staged, containerd=True)
                 os.link(staged, output)
@@ -843,6 +859,7 @@ class JATService:
             return OperationResult(
                 format_version=2,
                 operation="export",
+                image_mapping=mapping,
                 success=True,
                 exit_status=0,
                 payload_path=evidence.path,

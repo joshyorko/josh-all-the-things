@@ -69,7 +69,7 @@ def startup_receipt(path: Path | None):
                     identity.st_ino,
                 ):
                     with path.open("rb") as receipt:
-                        matches = receipt.read(4096) == payload
+                        matches = receipt.read(len(payload) + 1) == payload
                     if matches:
                         path.unlink()
             except FileNotFoundError:
