@@ -47,7 +47,7 @@ jobs:
           cp official/hauler.exe official.exe
           (
             cd distribution
-            git apply --include='*/filesystem/driver.go' --include='*/filesystem/sync.go' --include='*/filesystem/sync_windows.go' ../upstream.diff
+            git -c core.autocrlf=false apply --include='*/filesystem/driver.go' --include='*/filesystem/sync.go' --include='*/filesystem/sync_windows.go' ../upstream.diff
             sha256sum -c - <<'SUMS'
           e8da47558118143d2d5ce5c6d5447b9be385220b8046c047395e752ddb94b2a4  registry/storage/driver/filesystem/driver.go
           79254f734a65dddae6e5c6ff81196952d86ff7f20f34e0a18cc790dbd80ef820  registry/storage/driver/filesystem/sync.go
