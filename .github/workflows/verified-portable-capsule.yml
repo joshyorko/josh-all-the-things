@@ -82,8 +82,8 @@ jobs:
             --dir "$RUNNER_TEMP/shipped-runtime"
           cd "$RUNNER_TEMP/shipped-runtime"
           sha256sum --ignore-missing --check SHA256SUMS
-          # The shipped Windows archive uses its released generated freeze, not the unfrozen source contract.
-          python -c "import os,pathlib,shutil; src=pathlib.Path('${{ matrix.freeze }}'); dst=pathlib.Path(os.environ['GITHUB_WORKSPACE'],'jat',src.name); assert not dst.exists() or dst.read_bytes()==src.read_bytes(); shutil.copyfile(src,dst) if not dst.exists() else None"
+          # Match the acquired archive's environment descriptor in this disposable checkout.
+          cp -- '${{ matrix.freeze }}' "$GITHUB_WORKSPACE/jat/"
           mkdir -p "$RUNNER_TEMP/legacy-rcc"
           gh release download v18.19.9 --repo joshyorko/rcc --pattern '${{ matrix.legacy_asset }}' --dir "$RUNNER_TEMP/legacy-rcc"
           cd "$GITHUB_WORKSPACE/jat"
