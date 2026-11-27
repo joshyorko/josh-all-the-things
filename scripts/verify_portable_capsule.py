@@ -34,13 +34,23 @@ def write_json(path, value):
 
 
 
-def republished_specification_digest(specification, builder_version):
-    """RCC includes its version in semantic identity; all other bytes must match."""
+def republished_specification_digest(specification, builder_version, windows_version=None):
+    """Apply the independently observed RCC and Windows producer versions."""
     previous = json.loads(specification)['builder']['rccVersion']
     token = b'"rccVersion":' + json.dumps(previous).encode('ascii')
     if specification.count(token) != 1:
         raise ValueError('expected exactly one canonical RCC builder version')
     updated = specification.replace(token, b'"rccVersion":' + json.dumps(builder_version).encode('ascii'), 1)
+    if windows_version is not None:
+        os_requirements = json.loads(specification)['compatibility']['os']
+        if os_requirements['family'] != 'windows':
+            raise ValueError('Windows producer version requires a Windows specification')
+        for field in ('minimumVersion', 'kernelMinimum'):
+            name = json.dumps(field).encode('ascii') + b':'
+            token = name + json.dumps(os_requirements[field]).encode('ascii')
+            if updated.count(token) != 1:
+                raise ValueError(f'expected exactly one canonical Windows {field}')
+            updated = updated.replace(token, name + json.dumps(windows_version).encode('ascii'), 1)
     return 'sha256:' + hashlib.sha256(updated).hexdigest()
 
 
@@ -149,7 +159,12 @@ def main(argv=None):
         specification = original_archive.read('rcc-environment/specifications/' + input_specification_digest.removeprefix('sha256:'))
     assert 'sha256:' + hashlib.sha256(specification).hexdigest() == input_specification_digest
     builder_version = run('candidate-version', ['version']).stdout.strip()
-    assert published['specificationDigest'] == republished_specification_digest(specification, builder_version)
+    windows_version = None
+    if os.name == 'nt':
+        version_output = subprocess.check_output(['cmd.exe', '/c', 'ver'], text=True)
+        windows_version = re.search(r'[0-9]+(?:\.[0-9]+)+', version_output).group()
+        (logs / 'publisher-windows-version.txt').write_text(version_output, encoding='utf-8')
+    assert published['specificationDigest'] == republished_specification_digest(specification, builder_version, windows_version)
     assert published['legacyBlueprintKey'] == input_manifest['legacyBlueprint']['legacyBlueprintKey']
     attachment_dir = carrier / 'sha256' / artifact.removeprefix('sha256:')
     issuer = ['--artifact', artifact, '--metadata-trust-roots', deployment / 'metadata-roots.json', '--metadata-state', authority / 'issuer-state',
