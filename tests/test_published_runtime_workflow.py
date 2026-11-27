@@ -21,14 +21,17 @@ def test_published_verifier_has_no_publication_dependency_or_write_permissions()
         assert forbidden not in workflow
     assert 'needs: validate-release' in workflow
     assert 'JAT_RELEASE_TAG: ${{ inputs.release_tag }}' in workflow
-    assert 'default: v0.1.21-jat-runtime' in workflow
+    assert 'default: v0.1.22-jat-runtime' in workflow
     assert 'JAT_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}' in workflow
     assert 'JAT_VERIFIER_CODE_SHA: ${{ github.workflow_sha }}' in workflow
     assert 'release["immutable"] is True' in workflow
     assert 'release["draft"] is False' in workflow
     assert 'refs/tags/${JAT_RELEASE_TAG}^{}' in workflow
     assert 'test "$tag_sha" = "$JAT_RELEASE_SOURCE_SHA"' in workflow
-    assert workflow.count('ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}') == 2
+    assert workflow.count('ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}') == 3
+    assert workflow.index('test "$tag_sha" = "$JAT_RELEASE_SOURCE_SHA"') < workflow.index(
+        'ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}'
+    )
 
 
 def test_publisher_calls_the_same_verifier_instead_of_copying_it():

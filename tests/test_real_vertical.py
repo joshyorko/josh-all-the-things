@@ -294,7 +294,12 @@ def test_real_mixed_capsule_keeps_extras_visible_and_restore_selective(tmp_path,
     assert any(local_images[0] in reference for reference in entries), sorted(entries)
     assert "hauler/extra-note.txt:latest" in entries
     image_entries = [entry for entry in entries.values() if entry.type == "image"]
-    assert image_entries and image_entries[0].platform == "linux/amd64"
+    fixture_platform = subprocess.check_output(
+        [DOCKER, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", local_images[0]],
+        text=True,
+        timeout=30,
+    ).strip()
+    assert image_entries and image_entries[0].platform == fixture_platform
 
     restored = tmp_path / "restored"
     hydrated = service.restore(RestoreRequest(haul=haul, destination=restored))

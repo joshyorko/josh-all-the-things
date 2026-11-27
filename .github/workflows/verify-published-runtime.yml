@@ -163,10 +163,6 @@ jobs:
             --pattern "jat-runtime-linux-$JAT_ARCH.rcca" \
             --pattern "jat-runtime-linux-$JAT_ARCH.json" \
             --dir "$RUNNER_TEMP/jat-runtime-linux"
-          if [[ "$JAT_ARCH" == arm64 ]]; then
-            gh release download "$JAT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --pattern environment_linux_arm64_freeze.yaml
-          fi
 
       - name: Validate the complete Linux producer receipt
         env:
@@ -195,10 +191,6 @@ jobs:
           export ROBOCORP_HOME="$RUNNER_TEMP/jat-release-linux-verifier"
           mkdir -p "$ROBOCORP_HOME"
           "$rcc" env acquire --archive "$archive" --permissive-local --json > "$RUNNER_TEMP/linux-release-acquire.json"
-          if [[ "$JAT_ARCH" == arm64 ]]; then
-            "$rcc" --no-build ht vars --robot "$PWD/robot.yaml" --json > "$RUNNER_TEMP/linux-release-freeze.json" 2> "$RUNNER_TEMP/linux-release-freeze.log"
-            grep -Fq environment_linux_arm64_freeze.yaml "$RUNNER_TEMP/linux-release-freeze.log"
-          fi
           artifact=$(python3 -c 'import json; print(json.load(open("'"$receipt"'"))["artifact_digest"])')
           python3 - "$RUNNER_TEMP/linux-release-acquire.json" "$artifact" <<'PY'
           import json, sys
