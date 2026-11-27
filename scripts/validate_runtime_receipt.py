@@ -9,15 +9,22 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
+V0122_SOURCE_SHA = '1d757a5ab75e82c4132e6356e382290c31af7ebd'
+
 
 def validate_receipt(source_root: Path, archive: Path, receipt_path: Path, source_sha: str, platform: str) -> dict:
     schema = json.loads((source_root / 'docs/environment-artifact-receipt.schema.json').read_text(encoding='utf-8-sig'))
     receipt = json.loads(receipt_path.read_text(encoding='utf-8-sig'))
-    Draft202012Validator.check_schema(schema)
-    Draft202012Validator(schema).validate(receipt)
     rcc = json.loads((source_root / 'runtime/rcc.json').read_text(encoding='utf-8-sig'))
     hauler = json.loads((source_root / 'runtime/hauler.json').read_text(encoding='utf-8-sig'))
     pin = rcc['platforms'][platform]
+    if source_sha == V0122_SOURCE_SHA and platform == 'linux_arm64' and pin['asset'] == 'rcc-linuxarm64':
+        # The immutable v0.1.22 schema omitted the ARM64 asset in its release pin.
+        assets = schema['properties']['rcc_source']['properties']['asset']['enum']
+        if assets == ['rcc-linux64', 'rcc-windows64.exe']:
+            assets.append('rcc-linuxarm64')
+    Draft202012Validator.check_schema(schema)
+    Draft202012Validator(schema).validate(receipt)
     expected = {
         'jat_git_sha': source_sha, 'platform': platform,
         'rcc_version': rcc['version'], 'hauler_version': hauler['hauler']['version'],

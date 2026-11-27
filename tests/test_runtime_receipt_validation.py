@@ -90,6 +90,34 @@ def test_archive_corruption_is_rejected(release_pair):
         validate(release_pair)
 
 
+@pytest.mark.parametrize('mutation', [None, 'source', 'asset', 'digest', 'provenance'])
+def test_immutable_arm64_schema_compatibility(release_pair, mutation):
+    from scripts.validate_runtime_receipt import V0122_SOURCE_SHA, validate_receipt
+
+    source, archive, receipt, record = release_pair
+    schema_path = source / 'docs/environment-artifact-receipt.schema.json'
+    schema = json.loads(schema_path.read_text())
+    schema['properties']['rcc_source']['properties']['asset']['enum'].remove('rcc-linuxarm64')
+    schema_path.write_text(json.dumps(schema))
+    rcc = json.loads((source / 'runtime/rcc.json').read_text())
+    pin = rcc['platforms']['linux_arm64']
+    sha = 'a' * 40 if mutation == 'source' else V0122_SOURCE_SHA
+    record.update(jat_git_sha=sha, platform='linux_arm64')
+    record['rcc_source'].update(asset=pin['asset'], sha256=pin['sha256'])
+    if mutation == 'asset':
+        record['rcc_source']['asset'] = 'rcc-linux64'
+    if mutation == 'digest':
+        record['rcc_source']['sha256'] = 'a' * 64
+    if mutation == 'provenance':
+        record['rcc_source']['commit'] = 'a' * 40
+    receipt.write_text(json.dumps(record))
+    if mutation is None:
+        assert validate_receipt(source, archive, receipt, sha, 'linux_arm64') == record
+    else:
+        with pytest.raises((ValueError, ValidationError)):
+            validate_receipt(source, archive, receipt, sha, 'linux_arm64')
+
+
 def test_utf8_bom_windows_receipt_is_accepted(release_pair):
     _, _, receipt, record = release_pair
     receipt.write_text(json.dumps(record), encoding='utf-8-sig')

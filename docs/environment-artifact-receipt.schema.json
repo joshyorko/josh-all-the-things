@@ -17,7 +17,7 @@
         "repository": {"const": "https://github.com/joshyorko/rcc"},
         "tag": {"const": "v18.19.12"},
         "commit": {"const": "22f64b93130ed54c2280f790d6ee5e178c0533f2"},
-        "asset": {"enum": ["rcc-linux64", "rcc-windows64.exe"]},
+        "asset": {"enum": ["rcc-linux64", "rcc-linuxarm64", "rcc-windows64.exe"]},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       },
       "additionalProperties": false
