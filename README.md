@@ -68,14 +68,15 @@ environment on Linux x86-64, Linux ARM64 (`aarch64`), and Windows x64.
 Linux ARM64 resolves the native dependencies in `conda.yaml` and selects the
 [upstream Linux ARM64 Hauler archive](https://github.com/hauler-dev/hauler/releases/tag/v2.2.0-dev.5).
 
-The checksum-pinned RCC runtime builder, filtered candidate CI, and published
-JAT Environment Artifacts currently cover Linux x86-64 and Windows x64.
-Native Linux ARM64 RCC qualification requires an official ARM64 RCC release.
+The checksum-pinned RCC runtime and filtered candidate builders select native
+RCC binaries for all three platforms. Linux ARM64 uses the `conda.yaml`
+descriptor. The hosted release and post-publication verification workflows
+currently cover Linux x86-64 and Windows x64.
 
 ## Build a verified RCC Environment Artifact
 
 Build the canonical JAT runtime artifact with the checksum-pinned Josh RCC
-v18.19.11 release. The builder uses separate producer and fresh-verifier homes,
+v18.19.12 release. The builder uses separate producer and fresh-verifier homes,
 publishes and exports with RCC's Environment Artifact commands, makes the
 producer unavailable, and proves fresh acquire, no-build resolution, env exec,
 and a second warm execution. Its receipt binds the exact JAT commit and RCC
@@ -90,8 +91,7 @@ The Actions workflow builds candidate runtimes on relevant pushes and pull
 requests without publishing them. Publication requires a manual dispatch from
 `main` with the exact current `source_sha`; the workflow checks that both the
 checkout and `origin/main` match that SHA before it publishes. The next runtime
-targets `v0.1.21-jat-runtime` with OCI image identity mappings. It retains
-the RCC and Hauler pins from published `v0.1.20-jat-runtime`.
+targets `v0.1.21-jat-runtime` with OCI image identity mappings.
 
 ```bash
 scripts/build_environment_artifact.sh \
