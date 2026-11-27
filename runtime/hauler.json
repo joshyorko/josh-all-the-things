@@ -9,6 +9,12 @@
         "sha256": "cfdf0472144b9a3110e9f51cbd233cd2f9ff833436170a76d201311e31548211",
         "executable": "hauler"
       },
+      "linux-arm64": {
+        "asset": "hauler_2.2.0-dev.5_linux_arm64.tar.gz",
+        "url": "https://github.com/hauler-dev/hauler/releases/download/v2.2.0-dev.5/hauler_2.2.0-dev.5_linux_arm64.tar.gz",
+        "sha256": "a0efc0d623877076301ea8237cfcdb3099f128cc57a4ad51f0f572d182753b73",
+        "executable": "hauler"
+      },
       "windows-amd64": {
         "asset": "hauler_2.2.0-dev.5_windows_amd64.tar.gz",
         "url": "https://github.com/hauler-dev/hauler/releases/download/v2.2.0-dev.5/hauler_2.2.0-dev.5_windows_amd64.tar.gz",

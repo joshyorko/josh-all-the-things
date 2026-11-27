@@ -61,6 +61,17 @@ transfer policy are present). Receipts never contain credentials.
 The generated haul is the portable payload. The RCC bundle contains the tool and
 its RCC-managed runtime; it is not the haul itself.
 
+## Runtime platforms
+
+The RCC post-install hook installs checksum-pinned Hauler into the active
+environment on Linux x86-64, Linux ARM64 (`aarch64`), and Windows x64.
+Linux ARM64 resolves the native dependencies in `conda.yaml` and selects the
+[upstream Linux ARM64 Hauler archive](https://github.com/hauler-dev/hauler/releases/tag/v2.2.0-dev.5).
+
+The checksum-pinned RCC runtime builder, filtered candidate CI, and published
+JAT Environment Artifacts currently cover Linux x86-64 and Windows x64.
+Native Linux ARM64 RCC qualification requires an official ARM64 RCC release.
+
 ## Build a verified RCC Environment Artifact
 
 Build the canonical JAT runtime artifact with the checksum-pinned Josh RCC

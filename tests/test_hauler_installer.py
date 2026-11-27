@@ -73,9 +73,13 @@ def simulated_hauler_process(monkeypatch):
     monkeypatch.setattr("scripts.install_hauler.subprocess.run", run)
 
 
-def test_resolve_platform_maps_supported_linux_and_windows_x64():
+def test_resolve_platform_maps_supported_linux_and_windows_architectures():
     assert resolve_platform("Linux", "x86_64") == "linux-amd64"
+    assert resolve_platform("Linux", "aarch64") == "linux-arm64"
+    assert resolve_platform("Linux", "arm64") == "linux-arm64"
     assert resolve_platform("Windows", "AMD64") == "windows-amd64"
+    with pytest.raises(ValueError, match="unsupported"):
+        resolve_platform("Windows", "ARM64")
     with pytest.raises(ValueError, match="unsupported"):
         resolve_platform("Darwin", "x86_64")
 
@@ -91,6 +95,12 @@ def test_canonical_manifest_contains_official_linux_and_windows_pins():
                     "asset": "hauler_2.2.0-dev.5_linux_amd64.tar.gz",
                     "url": "https://github.com/hauler-dev/hauler/releases/download/v2.2.0-dev.5/hauler_2.2.0-dev.5_linux_amd64.tar.gz",
                     "sha256": "cfdf0472144b9a3110e9f51cbd233cd2f9ff833436170a76d201311e31548211",
+                    "executable": "hauler",
+                },
+                "linux-arm64": {
+                    "asset": "hauler_2.2.0-dev.5_linux_arm64.tar.gz",
+                    "url": "https://github.com/hauler-dev/hauler/releases/download/v2.2.0-dev.5/hauler_2.2.0-dev.5_linux_arm64.tar.gz",
+                    "sha256": "a0efc0d623877076301ea8237cfcdb3099f128cc57a4ad51f0f572d182753b73",
                     "executable": "hauler",
                 },
                 "windows-amd64": {
@@ -128,15 +138,19 @@ def test_simulated_windows_installs_exe_into_conda_scripts_without_admin(tmp_pat
     assert target.read_bytes() == b"test-hauler\nGitVersion:    v2.1.1\n"
 
 
-def test_simulated_linux_installs_into_conda_bin_and_reuses_matching_target(tmp_path, simulated_hauler_process):
+@pytest.mark.parametrize(("machine", "architecture"), [("x86_64", "amd64"), ("aarch64", "arm64")])
+def test_simulated_linux_installs_into_conda_bin_and_reuses_matching_target(
+    tmp_path, simulated_hauler_process, machine, architecture
+):
     archive = tmp_path / "archive.tar.gz"
     payload = _archive(archive)
     conda = tmp_path / "conda"
     conda.mkdir()
+    asset = f"hauler_2.1.1_linux_{architecture}.tar.gz"
     manifest = _manifest(
         tmp_path,
-        platform="linux-amd64",
-        asset="hauler_2.1.1_linux_amd64.tar.gz",
+        platform=f"linux-{architecture}",
+        asset=asset,
         payload=payload,
     )
     calls = []
@@ -145,10 +159,10 @@ def test_simulated_linux_installs_into_conda_bin_and_reuses_matching_target(tmp_
         calls.append(url)
         destination.write_bytes(payload)
 
-    target = install(manifest, conda, system="Linux", machine="x86_64", download=download)
+    target = install(manifest, conda, system="Linux", machine=machine, download=download)
     assert target == conda / "bin" / "hauler"
-    assert len(calls) == 1
-    assert install(manifest, conda, system="Linux", machine="x86_64", download=download) == target
+    assert calls == [f"https://github.com/hauler-dev/hauler/releases/download/v2.1.1/{asset}"]
+    assert install(manifest, conda, system="Linux", machine=machine, download=download) == target
     assert len(calls) == 1
 
 

@@ -28,9 +28,9 @@ DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 def resolve_platform(system: str | None = None, machine: str | None = None) -> str:
     system = system or platform_module.system()
     machine = (machine or platform_module.machine()).lower()
-    architecture = {"x86_64": "amd64", "amd64": "amd64"}.get(machine, machine)
+    architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(machine, machine)
     platform_name = f"{system.lower()}-{architecture}"
-    if platform_name not in {"linux-amd64", "windows-amd64"}:
+    if platform_name not in {"linux-amd64", "linux-arm64", "windows-amd64"}:
         raise ValueError(f"unsupported JAT Hauler platform: {system}/{machine}")
     return platform_name
 
