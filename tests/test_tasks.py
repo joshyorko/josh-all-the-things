@@ -197,22 +197,27 @@ def test_rcc_manifest_pins_current_linux_and_windows_assets_without_future_place
     manifest_text = manifest_path.read_text()
     manifest = json.loads(manifest_text)
     assert manifest["schema_version"] == 1
-    assert manifest["version"] == "v18.19.11"
+    assert manifest["version"] == "v18.19.12"
     assert manifest["source"] == {
         "repository": "https://github.com/joshyorko/rcc",
-        "tag": "v18.19.11",
-        "commit": "953eda18d3d1f4a286c17709f282315a2ed16a16",
+        "tag": "v18.19.12",
+        "commit": "22f64b93130ed54c2280f790d6ee5e178c0533f2",
     }
     assert manifest["platforms"] == {
         "linux_amd64": {
             "asset": "rcc-linux64",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.11/rcc-linux64",
-            "sha256": "4d68609044d3a39a1728d571d54c77a6174215adb40eb9acd69ce5ad34a6db1f",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.12/rcc-linux64",
+            "sha256": "0a13e78201a71c1bbc19a2ee8ccc86dd60a67ec4ffa8cd3a9a8f254d148849ee",
+        },
+        "linux_arm64": {
+            "asset": "rcc-linuxarm64",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.12/rcc-linuxarm64",
+            "sha256": "e161f9d750776c376ef19ba15676b166447bc12096d208de2ecbbe51899cb1d2",
         },
         "windows_amd64": {
             "asset": "rcc-windows64.exe",
-            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.11/rcc-windows64.exe",
-            "sha256": "58f43a3b3c54032740f224cb4a8bbf68c47c865cf2652084fb139b8ecc01cfd0",
+            "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.12/rcc-windows64.exe",
+            "sha256": "8502b903fe5d462f1ba3ae9fc85a2774424c8b4137c5cb442a9ffb3b71440bfc",
         },
     }
     for pin in manifest["platforms"].values():
@@ -241,7 +246,7 @@ def test_runtime_release_dispatch_binds_publication_to_exact_current_main_sha():
     assert "source_sha:" in workflow
     assert "Exact current main commit whose JAT runtimes should be qualified and published" in workflow
     assert "JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}" in workflow
-    assert "JAT_RELEASE_TAG: v0.1.21-jat-runtime" in workflow
+    assert "JAT_RELEASE_TAG: v0.1.22-jat-runtime" in workflow
     assert "reject-non-main-release-dispatch:" in workflow
     assert "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in workflow
     assert 'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' in workflow
@@ -265,6 +270,8 @@ def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():
     assert "env export" in workflow
     assert "--no-build" in workflow
     assert "jat-linux-runtime-evidence" in workflow
+    assert "runner: ubuntu-24.04-arm" in workflow
+    assert "jat-linux-arm64-runtime-evidence" in workflow
     assert "Run the JAT Python suite in the pinned RCC environment" in workflow
     assert 'python -m pip install --quiet pytest jsonschema' in workflow
     assert 'suite_root="$RUNNER_TEMP/jat-python-suite"' in workflow

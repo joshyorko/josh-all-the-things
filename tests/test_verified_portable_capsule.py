@@ -82,6 +82,19 @@ class PackageObservationTests(unittest.TestCase):
 
 
 class SpecificationIdentityTests(unittest.TestCase):
+    def test_windows_republish_observes_exact_producer_version(self):
+        spec = importlib.util.spec_from_file_location('verify_portable_capsule', SCRIPT)
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+        original = (b'{"builder":{"rccVersion":"v18.19.9"},"compatibility":{"os":{"family":"windows",'
+                    b'"minimumVersion":"10.0.26100.33674","kernelMinimum":"10.0.26100.33674"}},'
+                    b'"normalizedBlueprint":"10.0.26100.33674"}')
+        expected = (b'{"builder":{"rccVersion":"v18.19.11"},"compatibility":{"os":{"family":"windows",'
+                    b'"minimumVersion":"10.0.26100.33828","kernelMinimum":"10.0.26100.33828"}},'
+                    b'"normalizedBlueprint":"10.0.26100.33674"}')
+        self.assertEqual(driver.republished_specification_digest(original, 'v18.19.11', '10.0.26100.33828'),
+                         'sha256:' + hashlib.sha256(expected).hexdigest())
+
     def test_republish_changes_only_the_builder_version_in_the_specification_bytes(self):
         spec = importlib.util.spec_from_file_location('verify_portable_capsule', SCRIPT)
         driver = importlib.util.module_from_spec(spec)

@@ -9,7 +9,7 @@ on:
         type: string
       release_tag:
         description: Existing immutable runtime release to verify, never publish
-        default: v0.1.21-jat-runtime
+        default: v0.1.22-jat-runtime
         required: true
         type: string
   workflow_call:
@@ -32,6 +32,8 @@ env:
 jobs:
   validate-release:
     runs-on: ubuntu-24.04
+    outputs:
+      linux-runners: ${{ steps.runtime-platforms.outputs.linux-runners }}
     steps:
       - name: Validate immutable release identity before executing its source
         env:
@@ -58,9 +60,77 @@ jobs:
             echo "This workflow only reads an existing immutable release."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Checkout the exact merged runtime source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Verify immutable asset bytes and resolve native runners
+        id: runtime-platforms
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pin_has_arm64=$(jq -er '.platforms | has("linux_arm64") | tostring' runtime/rcc.json)
+          runners='[{"runner":"ubuntu-24.04","platform":"linux_amd64","arch":"amd64"}]'
+          if [[ "$pin_has_arm64" == true ]]; then
+            dir="$RUNNER_TEMP/jat-immutable-assets"
+            mkdir -p "$dir"
+            gh release download "$JAT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$dir"
+            (
+              cd "$dir"
+              sha256sum --check --strict SHA256SUMS
+              python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          provenance = json.loads(Path("jat-runtime-provenance.json").read_text())
+          assert provenance["release_tag"] == os.environ["JAT_RELEASE_TAG"]
+          assert provenance["jat_git_sha"] == os.environ["JAT_RELEASE_SOURCE_SHA"]
+          platforms = ("linux_amd64", "linux_arm64", "windows_amd64")
+          assert set(provenance["platforms"]) == set(platforms)
+          expected = {"jat-runtime-provenance.json"}
+          for platform in platforms:
+              lane = platform.replace("_", "-")
+              freeze = f"environment_{platform}_freeze.yaml"
+              receipt_name = f"jat-runtime-{lane}.json"
+              archive = f"jat-runtime-{lane}.rcca"
+              expected.update((freeze, receipt_name, archive))
+              receipt = json.loads(Path(receipt_name).read_text(encoding="utf-8-sig"))
+              entry = provenance["platforms"][platform]
+              assert entry["freeze"] == freeze and entry["receipt"] == receipt_name
+              assert entry["archive"] == {"asset": archive, "sha256": receipt["archive"]["sha256"], "size": receipt["archive"]["size"]}
+              for key in ("artifact_digest", "specification_digest", "rcc_source"):
+                  assert entry[key] == receipt[key], (platform, key)
+
+          sums = Path("SHA256SUMS").read_text().splitlines()
+          checksums = {name: digest for digest, name in (line.split("  ", 1) for line in sums)}
+          assert len(sums) == len(expected) and set(checksums) == expected
+          assets = json.loads((Path(os.environ["RUNNER_TEMP"]) / "release.json").read_text())["assets"]
+          assert {asset["name"] for asset in assets} == expected | {"SHA256SUMS"}
+          for asset in assets:
+              name = asset["name"]
+              digest = hashlib.sha256(Path(name).read_bytes()).hexdigest() if name == "SHA256SUMS" else checksums[name]
+              assert asset["digest"] == f"sha256:{digest}" and asset["size"] == Path(name).stat().st_size, name
+          PY
+            )
+            runners=$(jq -c '. + [{"runner":"ubuntu-24.04-arm","platform":"linux_arm64","arch":"arm64"}]' <<<"$runners")
+          fi
+          printf 'linux-runners=%s\n' "$runners" >> "$GITHUB_OUTPUT"
+
   verify-published-linux:
     needs: validate-release
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.validate-release.outputs.linux-runners) }}
+    runs-on: ${{ matrix.runner }}
+    env:
+      JAT_PLATFORM: ${{ matrix.platform }}
+      JAT_ARCH: ${{ matrix.arch }}
     steps:
       - name: Checkout trusted verifier code
         uses: actions/checkout@v4
@@ -90,8 +160,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/jat-runtime-linux"
           gh release download "$JAT_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern jat-runtime-linux-amd64.rcca \
-            --pattern jat-runtime-linux-amd64.json \
+            --pattern "jat-runtime-linux-$JAT_ARCH.rcca" \
+            --pattern "jat-runtime-linux-$JAT_ARCH.json" \
             --dir "$RUNNER_TEMP/jat-runtime-linux"
 
       - name: Validate the complete Linux producer receipt
@@ -100,16 +170,19 @@ jobs:
         run: |
           set -euo pipefail
           python "$RUNNER_TEMP/validate_runtime_receipt.py" \
-            --source-root "$GITHUB_WORKSPACE" --source-sha "$JAT_RELEASE_SOURCE_SHA" --platform linux_amd64 \
-            --archive "$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.rcca" \
-            --receipt "$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.json"
+            --source-root "$GITHUB_WORKSPACE" --source-sha "$JAT_RELEASE_SOURCE_SHA" --platform "$JAT_PLATFORM" \
+            --archive "$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-$JAT_ARCH.rcca" \
+            --receipt "$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-$JAT_ARCH.json"
 
       - name: Verify fresh Linux acquire, no-build, Hauler, and real JAT tasks
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.rcca"
-          receipt="$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-amd64.json"
-          mapfile -t pin < <(python3 -c 'import json; p=json.load(open("runtime/rcc.json")); x=p["platforms"]["linux_amd64"]; print(p["version"]); print(x["url"]); print(x["sha256"])')
+          archive="$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-$JAT_ARCH.rcca"
+          receipt="$RUNNER_TEMP/jat-runtime-linux/jat-runtime-linux-$JAT_ARCH.json"
+          mapfile -t pin < <(python3 -c 'import json, sys; m=json.load(open("runtime/rcc.json")); p=m["platforms"][sys.argv[1]]; print(m["version"]); print(p["url"]); print(p["sha256"])' "$JAT_PLATFORM")
+          if [[ "$JAT_ARCH" == arm64 ]]; then
+            test "$(uname -m)" = aarch64
+          fi
           rcc="$RUNNER_TEMP/rcc"
           curl --fail --location --silent --show-error --retry 3 "${pin[1]}" --output "$rcc"
           printf '%s  %s\n' "${pin[2]}" "$rcc" | sha256sum --check --status -
@@ -161,7 +234,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jat-published-linux-verification
+          name: ${{ matrix.arch == 'amd64' && 'jat-published-linux-verification' || 'jat-published-linux-arm64-verification' }}
           path: |
             ${{ runner.temp }}/linux-release-*.json
             ${{ runner.temp }}/linux-release-*.log

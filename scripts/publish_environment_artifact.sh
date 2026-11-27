@@ -30,7 +30,7 @@ rcc_sha256=$(jq -er --arg platform "$platform" '.platforms[$platform].sha256' "$
 expected_hauler_version=$(jq -er '.hauler.version' "$root/runtime/hauler.json")
 jat_source_sha=$(git -C "$root" rev-parse HEAD)
 case "$platform" in
-  linux_amd64|windows_amd64) ;;
+  linux_amd64|linux_arm64|windows_amd64) ;;
   *) printf 'Unsupported JAT artifact platform: %s\n' "$platform" >&2; exit 2;;
 esac
 archive_filename=$(basename -- "$archive")

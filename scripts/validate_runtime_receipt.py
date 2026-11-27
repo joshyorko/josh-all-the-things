@@ -44,7 +44,7 @@ def main(argv=None) -> int:
     parser.add_argument('--archive', type=Path, required=True)
     parser.add_argument('--receipt', type=Path, required=True)
     parser.add_argument('--source-sha', required=True)
-    parser.add_argument('--platform', choices=('linux_amd64', 'windows_amd64'), required=True)
+    parser.add_argument('--platform', choices=('linux_amd64', 'linux_arm64', 'windows_amd64'), required=True)
     args = parser.parse_args(argv)
     try:
         receipt = validate_receipt(args.source_root, args.archive, args.receipt, args.source_sha, args.platform)
