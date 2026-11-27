@@ -190,7 +190,7 @@ def local_images(tmp_path):
             assert existing.returncode != 0, f"fixture reference already exists: {image}"
         owned.append(images[0])
         subprocess.run(
-            [DOCKER, "import", "--platform=linux/amd64", str(archive), images[0]],
+            [DOCKER, "import", str(archive), images[0]],
             check=True, capture_output=True, timeout=30,
         )
         owned.append(images[1])

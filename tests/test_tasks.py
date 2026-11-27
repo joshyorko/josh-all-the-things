@@ -246,7 +246,7 @@ def test_runtime_release_dispatch_binds_publication_to_exact_current_main_sha():
     assert "source_sha:" in workflow
     assert "Exact current main commit whose JAT runtimes should be qualified and published" in workflow
     assert "JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}" in workflow
-    assert "JAT_RELEASE_TAG: v0.1.21-jat-runtime" in workflow
+    assert "JAT_RELEASE_TAG: v0.1.22-jat-runtime" in workflow
     assert "reject-non-main-release-dispatch:" in workflow
     assert "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in workflow
     assert 'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' in workflow
@@ -270,6 +270,8 @@ def test_workflow_has_native_linux_producer_and_reuses_canonical_receipt_flow():
     assert "env export" in workflow
     assert "--no-build" in workflow
     assert "jat-linux-runtime-evidence" in workflow
+    assert "runner: ubuntu-24.04-arm" in workflow
+    assert "jat-linux-arm64-runtime-evidence" in workflow
     assert "Run the JAT Python suite in the pinned RCC environment" in workflow
     assert 'python -m pip install --quiet pytest jsonschema' in workflow
     assert 'suite_root="$RUNNER_TEMP/jat-python-suite"' in workflow

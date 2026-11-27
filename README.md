@@ -69,9 +69,10 @@ Linux ARM64 resolves the native dependencies in `conda.yaml` and selects the
 [upstream Linux ARM64 Hauler archive](https://github.com/hauler-dev/hauler/releases/tag/v2.2.0-dev.5).
 
 The checksum-pinned RCC runtime and filtered candidate builders select native
-RCC binaries for all three platforms. Linux ARM64 uses the `conda.yaml`
-descriptor. The hosted release and post-publication verification workflows
-currently cover Linux x86-64 and Windows x64.
+RCC binaries for all three platforms. The hosted ARM64 lane generates a native
+freeze from `conda.yaml` and builds the release artifact from that freeze.
+The release verifier reads the immutable assets and runs the Linux ARM64
+artifact on a native runner.
 
 ## Build a verified RCC Environment Artifact
 
@@ -91,7 +92,8 @@ The Actions workflow builds candidate runtimes on relevant pushes and pull
 requests without publishing them. Publication requires a manual dispatch from
 `main` with the exact current `source_sha`; the workflow checks that both the
 checkout and `origin/main` match that SHA before it publishes. The next runtime
-targets `v0.1.21-jat-runtime` with OCI image identity mappings.
+targets `v0.1.22-jat-runtime` with Linux x86-64, Linux ARM64, and Windows x64
+freeze, archive, receipt, provenance, and checksum assets.
 
 ```bash
 scripts/build_environment_artifact.sh \

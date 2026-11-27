@@ -28,6 +28,7 @@ on:
       - "tests/**"
       - ".github/workflows/windows-runtime.yml"
       - ".github/workflows/verify-published-runtime.yml"
+      - "environment_linux_amd64_freeze.yaml"
 
 permissions:
   contents: read
@@ -35,7 +36,7 @@ permissions:
 # Dispatch from main with the exact source SHA; candidate runs on pushes never publish.
 env:
   JAT_RELEASE_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
-  JAT_RELEASE_TAG: v0.1.21-jat-runtime
+  JAT_RELEASE_TAG: v0.1.22-jat-runtime
 
 jobs:
   reject-non-main-release-dispatch:
@@ -328,7 +329,19 @@ jobs:
             ${{ runner.temp }}/windows-serve.*
 
   linux-runtime:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux_amd64
+            evidence: jat-linux-runtime-evidence
+          - runner: ubuntu-24.04-arm
+            platform: linux_arm64
+            evidence: jat-linux-arm64-runtime-evidence
+    runs-on: ${{ matrix.runner }}
+    env:
+      JAT_PLATFORM: ${{ matrix.platform }}
     defaults:
       run:
         shell: bash
@@ -341,7 +354,7 @@ jobs:
       - name: Acquire and verify pinned RCC
         run: |
           set -euo pipefail
-          mapfile -t pin < <(python3 -c 'import json; p=json.load(open("runtime/rcc.json"))["platforms"]["linux_amd64"]; print(json.load(open("runtime/rcc.json"))["version"]); print(p["url"]); print(p["sha256"])')
+          mapfile -t pin < <(python3 -c 'import json, sys; m=json.load(open("runtime/rcc.json")); p=m["platforms"][sys.argv[1]]; print(m["version"]); print(p["url"]); print(p["sha256"])' "$JAT_PLATFORM")
           rcc_version="${pin[0]}"
           rcc_url="${pin[1]}"
           rcc_sha256="${pin[2]}"
@@ -356,13 +369,24 @@ jobs:
             echo "RCC_VERSION=$rcc_version"
           } >> "$GITHUB_ENV"
 
-      - name: Prove the tracked Linux freeze is selected
+      - name: Generate the native Linux ARM64 freeze
+        if: matrix.platform == 'linux_arm64'
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-arm64-initial"
+          "$RCC_PATH" task run --robot "$PWD/robot.yaml" --task JAT -- --help
+          freeze=output/environment_linux_arm64_freeze.yaml
+          grep -Fq 'python scripts/install_hauler.py' "$freeze"
+          cp -- "$freeze" environment_linux_arm64_freeze.yaml
+
+      - name: Prove the Linux freeze is selected
         run: |
           set -euo pipefail
           export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-freeze-selection"
           mkdir -p "$ROBOCORP_HOME"
           "$RCC_PATH" ht vars --robot "$PWD/robot.yaml" 2>&1 | tee "$RUNNER_TEMP/linux-freeze-selection.log"
-          grep -Fq 'environment_linux_amd64_freeze.yaml' "$RUNNER_TEMP/linux-freeze-selection.log"
+          grep -Fq "environment_${JAT_PLATFORM}_freeze.yaml" "$RUNNER_TEMP/linux-freeze-selection.log"
 
       - name: Publish, export, and internally verify the Linux JAT artifact
         run: |
@@ -376,10 +400,11 @@ jobs:
             --timeout 1800 | tee "$RUNNER_TEMP/linux-artifact-builder.json"
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           receipt = json.loads(Path("dist/jat-runtime.json").read_text())
-          assert receipt["platform"] == "linux_amd64"
+          assert receipt["platform"] == os.environ["JAT_PLATFORM"]
           manifest = json.loads(Path("runtime/rcc.json").read_text())
           assert receipt["rcc_version"] == manifest["version"]
           assert receipt["rcc_source"]["commit"] == manifest["source"]["commit"]
@@ -423,7 +448,6 @@ jobs:
         run: |
           set -euo pipefail
           export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"
-          artifact=$(python3 -c 'import json; print(json.load(open("dist/jat-runtime.json"))["artifact_digest"])')
           "$RCC_PATH" --no-build task run --robot "$PWD/robot.yaml" --task Doctor --dev --silent
           source="$PWD/devdata/synthetic-source"
           haul="$RUNNER_TEMP/linux-jat.tar.zst"
@@ -470,7 +494,7 @@ jobs:
           trap cleanup EXIT
           served="$RUNNER_TEMP/linux-served-workspace.tar.zst"
           ready=false
-          for attempt in $(seq 1 30); do
+          for ((attempt=0; attempt<30; attempt++)); do
             if ! kill -0 "$serve_pid" 2>/dev/null; then
               cat "$serve_log"
               echo "JAT Serve exited before fileserver readiness" >&2
@@ -496,8 +520,9 @@ jobs:
           docker info >/dev/null
           docker pull registry:2
           artifact=$(python3 -c 'import json; print(json.load(open("dist/jat-runtime.json"))["artifact_digest"])')
-          export JAT_TEST_DOCKER="$(command -v docker)"
-          export JAT_TEST_HTPASSWD="$(command -v htpasswd)"
+          JAT_TEST_DOCKER=$(command -v docker)
+          JAT_TEST_HTPASSWD=$(command -v htpasswd)
+          export JAT_TEST_DOCKER JAT_TEST_HTPASSWD
           export ROBOCORP_HOME="$RUNNER_TEMP/jat-linux-verifier"
           PIP_CACHE_DIR="$RUNNER_TEMP/pip-cache" "$RCC_PATH" --no-build env exec --artifact "$artifact" --permissive-local --json -- python -m pip install --quiet pytest jsonschema
           test_receipt="$RUNNER_TEMP/registry-first-manifest-receipt.json"
@@ -542,18 +567,120 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jat-linux-runtime-evidence
+          name: ${{ matrix.evidence }}
           if-no-files-found: warn
           path: |
             dist/jat-runtime.rcca
             dist/jat-runtime.json
-            output/environment_linux_amd64_freeze.yaml
+            output/environment_${{ matrix.platform }}_freeze.yaml
+            environment_${{ matrix.platform }}_freeze.yaml
             ${{ runner.temp }}/*.log
             ${{ runner.temp }}/*.json
 
+  stage-jat-runtime:
+    needs: [windows-runtime, linux-runtime]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.JAT_RELEASE_SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Download the exact-source Linux x64 runtime evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: jat-linux-runtime-evidence
+          path: ${{ runner.temp }}/jat-linux-runtime-evidence
+
+      - name: Download the exact-source Windows runtime evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: jat-windows-runtime-evidence
+          path: ${{ runner.temp }}/jat-windows-runtime-evidence
+
+      - name: Download the exact-source Linux ARM64 runtime evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: jat-linux-arm64-runtime-evidence
+          path: ${{ runner.temp }}/jat-linux-arm64-runtime-evidence
+
+      - name: Stage exact-source release inputs without publication
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-assets
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          source_sha = os.environ["JAT_RELEASE_SOURCE_SHA"]
+          rcc_manifest = json.loads(Path("runtime/rcc.json").read_text(encoding="utf-8"))
+          inputs = {
+              "linux": (Path("${{ runner.temp }}/jat-linux-runtime-evidence"), "jat-runtime.rcca", "jat-runtime.json", "linux_amd64"),
+              "linux-arm64": (Path("${{ runner.temp }}/jat-linux-arm64-runtime-evidence"), "jat-runtime.rcca", "jat-runtime.json", "linux_arm64"),
+              "windows": (Path("${{ runner.temp }}/jat-windows-runtime-evidence"), "jat-runtime-windows.rcca", "jat-runtime-windows.json", "windows_amd64"),
+          }
+          release = Path("dist/release-assets")
+          receipt_names = {"linux": "jat-runtime-linux-amd64.json", "linux-arm64": "jat-runtime-linux-arm64.json", "windows": "jat-runtime-windows-amd64.json"}
+          archive_names = {"linux": "jat-runtime-linux-amd64.rcca", "linux-arm64": "jat-runtime-linux-arm64.rcca", "windows": "jat-runtime-windows-amd64.rcca"}
+          for name, (root, archive_file, receipt_file, platform) in inputs.items():
+              archives = list(root.rglob(archive_file))
+              receipts = list(root.rglob(receipt_file))
+              if len(archives) != 1 or len(receipts) != 1:
+                  raise SystemExit(f"expected one {archive_file} and one {receipt_file} under {root}")
+              receipt = json.loads(receipts[0].read_text(encoding="utf-8-sig"))
+              archive = archives[0]
+              with archive.open("rb") as stream:
+                  actual_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+              if receipt["jat_git_sha"] != source_sha:
+                  raise SystemExit(f"{name} receipt source SHA mismatch: {receipt['jat_git_sha']}")
+              if receipt["platform"] != platform or receipt["rcc_version"] != rcc_manifest["version"] or receipt["rcc_source"] != {**rcc_manifest["source"], **{key: rcc_manifest["platforms"][platform][key] for key in ("asset", "sha256")}} or receipt["hauler_version"] != "v2.2.0-dev.5":
+                  raise SystemExit(f"{name} receipt runtime identity mismatch")
+              if receipt["archive"]["filename"] != archive_file:
+                  raise SystemExit(f"{name} receipt archive filename mismatch")
+              if receipt["archive"]["sha256"] != actual_sha or receipt["archive"]["size"] != archive.stat().st_size:
+                  raise SystemExit(f"{name} archive does not match its receipt")
+              if receipt["verified_acquire"] != {"fresh_home": True, "no_build": True}:
+                  raise SystemExit(f"{name} fresh acquire proof is incomplete")
+              if receipt["verified_no_build"] != {"fresh_home": True, "no_build": True}:
+                  raise SystemExit(f"{name} no-build proof is incomplete")
+              if not receipt["verified_hauler"]["resolved_under_conda_prefix"]:
+                  raise SystemExit(f"{name} Hauler was not verified inside the acquired runtime")
+              shutil.copy2(archive, release / archive_names[name])
+              # Preserve producer receipt bytes and the original archive filename therein.
+              shutil.copy2(receipts[0], release / receipt_names[name])
+          linux_freeze = Path("environment_linux_amd64_freeze.yaml")
+          if not linux_freeze.is_file():
+              raise SystemExit("tracked Linux freeze is missing")
+          shutil.copy2(linux_freeze, release / linux_freeze.name)
+          arm_freeze = "environment_linux_arm64_freeze.yaml"
+          arm_freezes = list(inputs["linux-arm64"][0].rglob(arm_freeze))
+          if not arm_freezes or any(item.read_bytes() != arm_freezes[0].read_bytes() for item in arm_freezes):
+              raise SystemExit("Linux ARM64 freeze is missing or copies disagree")
+          shutil.copy2(arm_freezes[0], release / arm_freeze)
+          windows_root = Path("${{ runner.temp }}/jat-windows-runtime-evidence")
+          windows_freezes = list(windows_root.rglob("environment_windows_amd64_freeze.yaml"))
+          if not windows_freezes:
+              raise SystemExit("generated Windows freeze is missing")
+          freeze_bytes = windows_freezes[0].read_bytes()
+          if any(item.read_bytes() != freeze_bytes for item in windows_freezes[1:]):
+              raise SystemExit("Windows freeze copies disagree")
+          shutil.copy2(windows_freezes[0], release / "environment_windows_amd64_freeze.yaml")
+          PY
+          (cd dist/release-assets && sha256sum environment_*_freeze.yaml jat-runtime-*.json jat-runtime-*.rcca | sort -k2 > SHA256SUMS)
+
+      - name: Upload staged release inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: jat-staged-release-inputs
+          path: dist/release-assets/
+          if-no-files-found: error
+
   publish-jat-runtime:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    needs: [windows-runtime, linux-runtime]
+    needs: stage-jat-runtime
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -585,19 +712,7 @@ jobs:
             exit 1
           fi
 
-      - name: Download the exact-source Linux and Windows runtime evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: jat-linux-runtime-evidence
-          path: ${{ runner.temp }}/jat-linux-runtime-evidence
-
-      - name: Download the exact-source Windows runtime evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: jat-windows-runtime-evidence
-          path: ${{ runner.temp }}/jat-windows-runtime-evidence
-
-      - name: Check release sequence and assemble verified inputs
+      - name: Check release sequence
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -608,64 +723,15 @@ jobs:
             existing_immutable=$(gh api "repos/$GITHUB_REPOSITORY/releases/$existing_id" --jq .immutable)
             [[ "$existing_immutable" == true ]] || { echo "Release tag already exists but is not immutable" >&2; exit 1; }
           fi
-          mkdir -p dist/publish/linux dist/publish/windows dist/release-assets
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import shutil
-          from pathlib import Path
+      - name: Download the verified staged release inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: jat-staged-release-inputs
+          path: dist/release-assets
 
-          source_sha = os.environ["JAT_RELEASE_SOURCE_SHA"]
-          rcc_manifest = json.loads(Path("runtime/rcc.json").read_text(encoding="utf-8"))
-          inputs = {
-              "linux": (Path("${{ runner.temp }}/jat-linux-runtime-evidence"), "jat-runtime.rcca", "jat-runtime.json", "linux_amd64"),
-              "windows": (Path("${{ runner.temp }}/jat-windows-runtime-evidence"), "jat-runtime-windows.rcca", "jat-runtime-windows.json", "windows_amd64"),
-          }
-          release = Path("dist/release-assets")
-          receipt_names = {"linux": "jat-runtime-linux-amd64.json", "windows": "jat-runtime-windows-amd64.json"}
-          archive_names = {"linux": "jat-runtime-linux-amd64.rcca", "windows": "jat-runtime-windows-amd64.rcca"}
-          for name, (root, archive_file, receipt_file, platform) in inputs.items():
-              archives = list(root.rglob(archive_file))
-              receipts = list(root.rglob(receipt_file))
-              if len(archives) != 1 or len(receipts) != 1:
-                  raise SystemExit(f"expected one {archive_file} and one {receipt_file} under {root}")
-              receipt = json.loads(receipts[0].read_text(encoding="utf-8-sig"))
-              archive = archives[0]
-              actual_sha = hashlib.sha256(archive.read_bytes()).hexdigest()
-              if receipt["jat_git_sha"] != source_sha:
-                  raise SystemExit(f"{name} receipt source SHA mismatch: {receipt['jat_git_sha']}")
-              if receipt["platform"] != platform or receipt["rcc_version"] != rcc_manifest["version"] or receipt["rcc_source"]["commit"] != rcc_manifest["source"]["commit"] or receipt["hauler_version"] != "v2.2.0-dev.5":
-                  raise SystemExit(f"{name} receipt runtime identity mismatch")
-              if receipt["archive"]["filename"] != archive_file:
-                  raise SystemExit(f"{name} receipt archive filename mismatch")
-              if receipt["archive"]["sha256"] != actual_sha or receipt["archive"]["size"] != archive.stat().st_size:
-                  raise SystemExit(f"{name} archive does not match its receipt")
-              if receipt["verified_acquire"] != {"fresh_home": True, "no_build": True}:
-                  raise SystemExit(f"{name} fresh acquire proof is incomplete")
-              if receipt["verified_no_build"] != {"fresh_home": True, "no_build": True}:
-                  raise SystemExit(f"{name} no-build proof is incomplete")
-              if not receipt["verified_hauler"]["resolved_under_conda_prefix"]:
-                  raise SystemExit(f"{name} Hauler was not verified inside the acquired runtime")
-              publish_dir = Path("dist/publish") / name
-              publish_dir.mkdir(parents=True, exist_ok=True)
-              shutil.copy2(archive, publish_dir / archive_file)
-              shutil.copy2(receipts[0], publish_dir / receipt_file)
-              shutil.copy2(archive, release / archive_names[name])
-              shutil.copy2(receipts[0], release / receipt_names[name])
-          linux_freeze = Path("environment_linux_amd64_freeze.yaml")
-          if not linux_freeze.is_file():
-              raise SystemExit("tracked Linux freeze is missing")
-          shutil.copy2(linux_freeze, release / linux_freeze.name)
-          windows_root = Path("${{ runner.temp }}/jat-windows-runtime-evidence")
-          windows_freezes = list(windows_root.rglob("environment_windows_amd64_freeze.yaml"))
-          if not windows_freezes:
-              raise SystemExit("generated Windows freeze is missing")
-          freeze_bytes = windows_freezes[0].read_bytes()
-          if any(item.read_bytes() != freeze_bytes for item in windows_freezes[1:]):
-              raise SystemExit("Windows freeze copies disagree")
-          shutil.copy2(windows_freezes[0], release / "environment_windows_amd64_freeze.yaml")
-          PY
+      - name: Verify staged release bytes
+        working-directory: dist/release-assets
+        run: sha256sum --check --strict SHA256SUMS
 
       - name: Install checksum-pinned ORAS
         run: |
@@ -686,12 +752,16 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x scripts/publish_environment_artifact.sh
-          scripts/publish_environment_artifacts.sh \
-            --linux-archive dist/publish/linux/jat-runtime.rcca \
-            --linux-receipt dist/publish/linux/jat-runtime.json \
-            --windows-archive dist/publish/windows/jat-runtime-windows.rcca \
-            --windows-receipt dist/publish/windows/jat-runtime-windows.json \
-            | tee dist/carriers.txt
+          for lane in linux-amd64 windows-amd64 linux-arm64; do
+            dir="dist/publish/$lane"
+            mkdir -p "$dir"
+            receipt="dist/release-assets/jat-runtime-$lane.json"
+            archive_name=$(jq -er '.archive.filename | select(. == "jat-runtime.rcca" or . == "jat-runtime-windows.rcca")' "$receipt")
+            receipt_name="${archive_name%.rcca}.json"
+            cp -- "dist/release-assets/jat-runtime-$lane.rcca" "$dir/$archive_name"
+            cp -- "$receipt" "$dir/$receipt_name"
+            bash scripts/publish_environment_artifact.sh --archive "$dir/$archive_name" --receipt "$dir/$receipt_name"
+          done | tee dist/carriers.txt
 
       - name: Create provenance and release checksums
         run: |
@@ -706,21 +776,25 @@ jobs:
               line for line in Path("dist/carriers.txt").read_text().splitlines()
               if line.startswith("ghcr.io/joshyorko/josh-all-the-things-jat-runtime@sha256:")
           ]
-          if len(carrier_lines) != 2 or any(
+          if len(carrier_lines) != 3 or any(
               len(line.rsplit("@sha256:", 1)[-1]) != 64
               or any(char not in "0123456789abcdef" for char in line.rsplit("@sha256:", 1)[-1])
               for line in carrier_lines
           ):
-              raise SystemExit("expected two immutable GHCR repository@sha256 references")
-          # publish_environment_artifacts.sh processes Linux, then Windows.
-          carriers = {"linux_amd64": carrier_lines[0], "windows_amd64": carrier_lines[1]}
+              raise SystemExit("expected three immutable GHCR repository@sha256 references")
+          # Keep this order aligned with the carrier loop above.
+          carriers = {"linux_amd64": carrier_lines[0], "windows_amd64": carrier_lines[1], "linux_arm64": carrier_lines[2]}
           platforms = {}
           for platform, receipt_name, archive_name in (
               ("linux_amd64", "jat-runtime-linux-amd64.json", "jat-runtime-linux-amd64.rcca"),
               ("windows_amd64", "jat-runtime-windows-amd64.json", "jat-runtime-windows-amd64.rcca"),
+              ("linux_arm64", "jat-runtime-linux-arm64.json", "jat-runtime-linux-arm64.rcca"),
           ):
               receipt = json.loads((assets / receipt_name).read_text(encoding="utf-8-sig"))
+              freeze = f"environment_{platform}_freeze.yaml"
               platforms[platform] = {
+                  "freeze": freeze,
+                  "rcc_source": receipt["rcc_source"],
                   "receipt": receipt_name,
                   "artifact_digest": receipt["artifact_digest"],
                   "specification_digest": receipt["specification_digest"],
@@ -745,7 +819,7 @@ jobs:
           }
           (assets / "jat-runtime-provenance.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
           PY
-          (cd dist/release-assets && sha256sum environment_linux_amd64_freeze.yaml environment_windows_amd64_freeze.yaml jat-runtime-linux-amd64.json jat-runtime-linux-amd64.rcca jat-runtime-windows-amd64.json jat-runtime-windows-amd64.rcca jat-runtime-provenance.json | sort -k2 > SHA256SUMS)
+          (cd dist/release-assets && sha256sum environment_*_freeze.yaml jat-runtime-*.json jat-runtime-*.rcca | sort -k2 > SHA256SUMS)
 
       - name: Create and publish the immutable JAT runtime release
         env:
@@ -767,9 +841,9 @@ jobs:
           rcc_version = json.loads(pathlib.Path("runtime/rcc.json").read_text(encoding="utf-8"))["version"]
           body = (
               f"## JAT {jat_version} runtime artifacts\n\n"
-              f"Linux amd64 and Windows amd64 RCC Environment Artifacts built and verified from merged-main source {tick}{source_sha}{tick} using Josh RCC {rcc_version} and Hauler v2.2.0-dev.5.\n\n"
+              f"Linux amd64, Linux ARM64, and Windows amd64 RCC Environment Artifacts built and verified from merged-main source {tick}{source_sha}{tick} using Josh RCC {rcc_version} and Hauler v2.2.0-dev.5.\n\n"
               f"Workflow proof: https://github.com/{repository}/actions/runs/{run_id}\n\n"
-              "Both receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. "
+              "The receipts bind the JAT source SHA, RCC release source and binary checksum, Hauler version, artifact/specification identities, archive SHA-256/size, fresh acquire, no-build, environment-owned Hauler, and warm provider-unavailable proof. "
               + tick + "SHA256SUMS" + tick + " covers every attached runtime asset other than itself.\n\n"
               "GHCR carriers:\n\n"
               + tick * 3 + "\n" + carriers + "\n" + tick * 3 + "\n"
@@ -786,6 +860,9 @@ jobs:
               --draft --prerelease \
               --title "JAT ${JAT_RELEASE_TAG%-jat-runtime} Linux and Windows runtime artifacts" \
               --notes-file "$notes" \
+              dist/release-assets/environment_linux_arm64_freeze.yaml \
+              dist/release-assets/jat-runtime-linux-arm64.json \
+              dist/release-assets/jat-runtime-linux-arm64.rcca \
               dist/release-assets/environment_linux_amd64_freeze.yaml \
               dist/release-assets/environment_windows_amd64_freeze.yaml \
               dist/release-assets/jat-runtime-linux-amd64.json \
@@ -806,6 +883,8 @@ jobs:
           release_tag = sys.argv[3]
           expected = {
               "environment_linux_amd64_freeze.yaml", "environment_windows_amd64_freeze.yaml",
+              "environment_linux_arm64_freeze.yaml",
+              "jat-runtime-linux-arm64.json", "jat-runtime-linux-arm64.rcca",
               "jat-runtime-linux-amd64.json", "jat-runtime-linux-amd64.rcca",
               "jat-runtime-windows-amd64.json", "jat-runtime-windows-amd64.rcca",
               "jat-runtime-provenance.json", "SHA256SUMS",
@@ -814,7 +893,7 @@ jobs:
               raise SystemExit("draft release tag or source commit does not match the JAT release")
           assets = {asset["name"] for asset in release["assets"]}
           if assets != expected:
-              raise SystemExit(f"release assets do not match the eight expected files: {sorted(assets)}")
+              raise SystemExit(f"release assets do not match the expected files: {sorted(assets)}")
           if not release["draft"] and not release.get("immutable", False):
               raise SystemExit("an existing published release is not immutable")
           PY
@@ -836,4 +915,4 @@ jobs:
     uses: ./.github/workflows/verify-published-runtime.yml
     with:
       source_sha: ${{ inputs.source_sha }}
-      release_tag: v0.1.21-jat-runtime
+      release_tag: v0.1.22-jat-runtime

@@ -7,3 +7,4 @@ dist/
 hololib.zip
 jat-runtime.rcca
 .venv/
+/environment_linux_arm64_freeze.yaml
